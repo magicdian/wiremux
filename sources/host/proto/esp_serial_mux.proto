@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package esp_serial_mux.v1;
+
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  DIRECTION_INPUT = 1;
+  DIRECTION_OUTPUT = 2;
+}
+
+enum PayloadKind {
+  PAYLOAD_KIND_UNSPECIFIED = 0;
+  PAYLOAD_KIND_TEXT = 1;
+  PAYLOAD_KIND_BINARY = 2;
+  PAYLOAD_KIND_PROTOBUF = 3;
+  PAYLOAD_KIND_CONTROL = 4;
+  PAYLOAD_KIND_EVENT = 5;
+}
+
+message MuxEnvelope {
+  uint32 channel_id = 1;
+  Direction direction = 2;
+  uint32 sequence = 3;
+  uint64 timestamp_us = 4;
+  PayloadKind kind = 5;
+  string payload_type = 6;
+  bytes payload = 7;
+  uint32 flags = 8;
+}
+
+message ChannelDescriptor {
+  uint32 channel_id = 1;
+  string name = 2;
+  string description = 3;
+  repeated Direction directions = 4;
+  repeated PayloadKind payload_kinds = 5;
+  repeated string payload_types = 6;
+  uint32 flags = 7;
+}
+
+message DeviceManifest {
+  string device_name = 1;
+  string firmware_version = 2;
+  uint32 protocol_version = 3;
+  uint32 max_channels = 4;
+  repeated ChannelDescriptor channels = 5;
+}

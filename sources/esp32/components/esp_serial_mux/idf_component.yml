@@ -1,0 +1,4 @@
+version: "0.1.0"
+description: "Software serial multiplexer for ESP-IDF projects"
+dependencies:
+  idf: ">=5.4"

@@ -1,0 +1,13 @@
+{
+    "idf.currentSetup": "/Users/magicdian/esp/v5.4.1/esp-idf",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ],
+    "idf.customExtraVars": {
+        "OPENOCD_SCRIPTS": "/Users/magicdian/.espressif/tools/openocd-esp32/v0.12.0-esp32-20240318/openocd-esp32/share/openocd/scripts",
+        "ESP_ROM_ELF_DIR": "/Users/magicdian/.espressif/tools/esp-rom-elfs/20230320/",
+        "IDF_TARGET": "esp32s3",
+        "OPENOCD_USB_ADAPTER_LOCATION": "2-1"
+    },
+    "idf.port": "/dev/tty.usbmodem2101"
+}

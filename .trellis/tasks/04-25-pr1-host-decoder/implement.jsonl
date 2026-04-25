@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "parser and CLI error propagation"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "host Rust crate layout and source-root decisions"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "unit testing and code quality expectations"}

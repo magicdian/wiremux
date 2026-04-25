@@ -6,46 +6,51 @@
 
 ## Overview
 
-<!--
-Document your project's logging conventions here.
+ESP log integration is provided through `esp_log_set_vprintf()`. The adapter forwards formatted log text into a mux channel while optionally teeing to the previous ESP log backend.
 
-Questions to answer:
-- What logging library do you use?
-- What are the log levels and when to use each?
-- What should be logged?
-- What should NOT be logged (PII, secrets)?
--->
+## ESP Log Adapter Contract
 
-(To be filled by the team)
+Public API:
 
----
+```c
+void esp_serial_mux_log_config_init(esp_serial_mux_log_config_t *config);
+esp_err_t esp_serial_mux_bind_esp_log(const esp_serial_mux_log_config_t *config);
+esp_err_t esp_serial_mux_unbind_esp_log(void);
+```
 
-## Log Levels
+Default config:
 
-<!-- When to use each level: debug, info, warn, error -->
+- `channel_id = 2`
+- `max_line_len = 256`
+- `write_timeout_ms = 0`
+- `tee_to_previous = true`
 
-(To be filled by the team)
+## Required Behavior
 
----
+- The vprintf callback must be re-entrant enough for ESP-IDF logging contexts.
+- Use `va_copy()` before formatting or forwarding `va_list`.
+- Do not call `ESP_LOGx` inside mux logging code.
+- If line formatting exceeds `max_line_len`, truncate and send the bounded line.
+- Queue failures must not crash the logging caller.
 
-## Structured Logging
+## Wrong vs Correct
 
-<!-- Log format, required fields -->
+Wrong:
 
-(To be filled by the team)
+```c
+static int mux_log_vprintf(const char *fmt, va_list args)
+{
+    ESP_LOGI("mux", "forwarding log"); // recursive
+    return vprintf(fmt, args);
+}
+```
 
----
+Correct:
 
-## What to Log
-
-<!-- Important events to log -->
-
-(To be filled by the team)
-
----
-
-## What NOT to Log
-
-<!-- Sensitive data, PII, secrets -->
-
-(To be filled by the team)
+```c
+va_list copy;
+va_copy(copy, args);
+int len = vsnprintf(buffer, sizeof(buffer), fmt, copy);
+va_end(copy);
+(void)esp_serial_mux_write(...);
+```
