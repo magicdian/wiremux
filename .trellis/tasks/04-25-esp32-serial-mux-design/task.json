@@ -46,7 +46,6 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "04-25-pr2-esp32-component",
     "04-25-pr4-docs-polish",
     "04-25-pr5-host-transmit",
     "04-25-pr6-esp32-inbound-dispatch",
