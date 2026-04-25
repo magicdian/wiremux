@@ -8,6 +8,8 @@
 
 This project is split into a host-side Rust tool and an ESP-IDF component. Source code lives under `sources/`, not repository root `src/`.
 
+The current committed milestone is a one-way decoder/demo milestone. The complete MVP boundary is bidirectional: the host must be able to send mux input to an ESP channel and operate an ESP console through the mux.
+
 ## Directory Layout
 
 ```text
@@ -40,6 +42,8 @@ Keep protocol parsing in the library crate and CLI behavior in `src/main.rs`.
 - `proto/esp_serial_mux.proto`: stable envelope and manifest schema.
 
 Do not put parser state machines directly in `main.rs`; they must stay unit-testable without a serial device.
+
+The host CLI may start with a `listen` command, but transmit support must be added as commands or modes under the same crate. Do not create a second host executable for sending channel input.
 
 ### ESP-IDF
 
@@ -121,13 +125,34 @@ Frame payload must be `esp_serial_mux.v1.MuxEnvelope` bytes with these required 
 - `payload` field 7
 - `flags` field 8
 
+For host-to-device input frames, `channel_id`, `direction`, `sequence`, `kind`, and `payload` are required. `direction` must be input, and ESP dispatch must reject frames for unregistered channels or channels without input direction enabled.
+
+### Host CLI Contract
+
+Current listener:
+
+```bash
+esp-serial-mux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]
+```
+
+Required behavior:
+
+- Without `--channel`, print ordinary terminal bytes and all decoded mux frames.
+- With `--channel <id>`, suppress ordinary terminal bytes and print only decoded mux frames for that channel.
+- On macOS, prefer `/dev/cu.*` over the paired `/dev/tty.*` device when the user passes a USB serial/JTAG path.
+- Configure serial paths in raw mode before reading so binary mux frames are not transformed by the terminal driver.
+
+Future MVP transmit commands must reuse the same frame/envelope implementation rather than duplicating protocol constants in `main.rs`.
+
 ### Good/Base/Bad Cases
 
 - Good: ordinary text, then valid `ESMX` frame, then ordinary text. Host emits terminal, frame, terminal.
 - Base: frame arrives one byte at a time. Host emits no partial frame until length and CRC are complete.
-- Bad: ordinary text contains `ESMX` but version/length/CRC is invalid. Host must resynchronize and preserve bytes as terminal output.
+- Bad: ordinary text contains `ESMX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
+- Bad: a candidate frame has valid magic/version/length but bad CRC. Host emits a `crc_error` diagnostic event, drains the invalid candidate, and continues scanning.
 
 ### Tests Required
 
 - Rust tests must cover valid frames, partial frames, false magic, bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
 - ESP frame encoder changes must be validated against Rust scanner output before release.
+- Bidirectional MVP changes must add host frame-building tests and ESP inbound dispatch tests or demo-level manual verification steps.

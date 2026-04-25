@@ -28,6 +28,7 @@ Default config:
 ## Required Behavior
 
 - The vprintf callback must be re-entrant enough for ESP-IDF logging contexts.
+- The adapter must guard against recursive entry after `esp_log_set_vprintf()` is installed. If mux transport or queue code indirectly triggers ESP logging, the callback must return without trying to enqueue another mux log frame.
 - Use `va_copy()` before formatting or forwarding `va_list`.
 - Do not call `ESP_LOGx` inside mux logging code.
 - If line formatting exceeds `max_line_len`, truncate and send the bounded line.
@@ -54,3 +55,29 @@ int len = vsnprintf(buffer, sizeof(buffer), fmt, copy);
 va_end(copy);
 (void)esp_serial_mux_write(...);
 ```
+
+Correct recursion guard:
+
+```c
+static volatile bool s_in_mux_log_vprintf;
+
+static int mux_log_vprintf(const char *fmt, va_list args)
+{
+    if (s_in_mux_log_vprintf) {
+        return 0;
+    }
+
+    s_in_mux_log_vprintf = true;
+    /* format and enqueue bounded log text */
+    s_in_mux_log_vprintf = false;
+    return formatted_len;
+}
+```
+
+## Demo Expectations
+
+The console demo should emit both telemetry and ESP log messages periodically. This keeps host-side filtering testable:
+
+- `--channel 2` should show log adapter output.
+- `--channel 3` should show telemetry output.
+- No filter should show ordinary terminal output plus decoded mux frames.

@@ -16,6 +16,16 @@ Rust:
 pub enum BuildFrameError {
     PayloadTooLarge { len: usize, max: usize },
 }
+
+pub enum FrameError {
+    CrcMismatch {
+        version: u8,
+        flags: u8,
+        payload_len: usize,
+        expected_crc: u32,
+        actual_crc: u32,
+    },
+}
 ```
 
 ESP-IDF:
@@ -42,8 +52,14 @@ The scanner must not fail the whole stream on invalid mux candidates.
 | incomplete header/frame | buffer until more bytes arrive |
 | unsupported version | emit one byte as terminal and rescan |
 | payload length exceeds max | emit one byte as terminal and rescan |
-| CRC mismatch | emit one byte as terminal and rescan |
+| CRC mismatch | drain the full candidate frame and emit `StreamEvent::FrameError(FrameError::CrcMismatch)` |
 | valid frame | emit `StreamEvent::Frame` |
+
+CLI reporting rules:
+
+- Without a channel filter, `FrameError::CrcMismatch` must print a visible `crc_error` line with version, flags, payload length, expected CRC, and actual CRC.
+- With `--channel <id>`, CRC errors cannot be attributed to a channel because the envelope is untrusted; suppress them to keep filtered channel output clean.
+- Envelope decode failures for CRC-valid frames are printed only in unfiltered mode unless a future decoder can safely extract a channel ID from a partially decoded envelope.
 
 ### ESP Producer APIs
 
@@ -62,6 +78,22 @@ Queue-full behavior follows channel backpressure policy:
 - `DROP_OLDEST`: remove one queued item, enqueue the new item if possible.
 - `BLOCK_WITH_TIMEOUT`: wait up to caller timeout.
 
+### ESP Inbound APIs
+
+Bidirectional MVP must add an inbound parser/dispatch path before claiming console operation over mux.
+
+Required validation:
+
+| Condition | Result |
+|-----------|--------|
+| frame magic/version invalid | resynchronize, do not dispatch |
+| CRC mismatch | drop candidate frame, increment/drop-report later, do not dispatch |
+| envelope direction is not input | reject with no channel callback |
+| channel is unregistered | reject with no channel callback |
+| channel does not allow input | reject with no channel callback |
+| input payload exceeds configured max | reject before invoking callback |
+| callback returns error | report through system/control channel when implemented |
+
 ## Common Mistakes
 
 ### Logging from mux internals
@@ -71,3 +103,7 @@ Do not call `ESP_LOGx` from mux service, transport, or log adapter internals. Th
 ### Treating false magic as fatal
 
 The host runs on mixed terminal streams. A bad frame candidate must not terminate the listener.
+
+### Claiming MVP before bidirectional console works
+
+The listener-only milestone is useful, but it is not the complete MVP. Do not mark MVP complete until a host command or stdin-forwarding mode can send channel input and the ESP console channel can execute commands through mux.

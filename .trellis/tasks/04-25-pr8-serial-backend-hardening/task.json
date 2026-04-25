@@ -1,8 +1,8 @@
 {
-  "id": "esp32-serial-mux-design",
-  "name": "esp32-serial-mux-design",
-  "title": "brainstorm: ESP32 serial mux library and host tool",
-  "description": "",
+  "id": "pr8-serial-backend-hardening",
+  "name": "pr8-serial-backend-hardening",
+  "title": "PR8 serial backend hardening and release packaging",
+  "description": "Replace raw stty/file handling with a robust serial backend and document single-binary host releases.",
   "status": "planning",
   "dev_type": null,
   "scope": null,
@@ -45,15 +45,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "04-25-pr2-esp32-component",
-    "04-25-pr4-docs-polish",
-    "04-25-pr5-host-transmit",
-    "04-25-pr6-esp32-inbound-dispatch",
-    "04-25-pr7-console-line-mode-e2e",
-    "04-25-pr8-serial-backend-hardening"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "04-25-esp32-serial-mux-design",
   "relatedFiles": [],
   "notes": "",
   "meta": {}
