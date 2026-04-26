@@ -16,12 +16,47 @@ wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
 - 从 mixed stream 中扫描 `WMUX` magic。
 - 校验 version、length、CRC32。
 - C core 侧也提供同等的单帧 decode/validate API，ESP 入站路径复用该公共规则。
-- 有效 mux frame 输出摘要。
-- frame 摘要包含 `payload_type`；manifest 会以 `wiremux.v1.DeviceManifest` 标识。
+- 默认终端输出保持简洁：有 `--channel` 时只显示该 channel 的原始 payload；无
+  `--channel` 时普通终端字节原样保留，mux record 以 `chN> ` 标识来源。
+- 完整 mux frame 诊断写入系统临时目录下的 `wiremux` 日志文件；启动时 host 会打印
+  一行 `wiremux> diagnostics: <path>` 指出文件位置。
+- 诊断日志包含 frame metadata 和 `payload_type`；manifest 会以
+  `wiremux.v1.DeviceManifest` 标识。
 - batch frame 会以 `wiremux.v1.MuxBatch` 标识；host 会根据 compression metadata
-  解压并逐条显示其中的 channel record。
+  解压并逐条显示其中的 channel record，batch summary 和完整 record metadata 写入
+  diagnostics 日志。
 - 非 mux 字节按普通终端输出保留。
 - 构造 host-to-device input `MuxEnvelope`，并通过同一个 `WMUX` frame 格式发送到指定 channel。
+
+## 输出格式
+
+过滤单个 channel 时，host 不会给 payload 额外添加前缀或换行：
+
+```bash
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
+```
+
+这类模式适合 console channel，因为 payload 中的 `CRLF`、`CR`、`LF` 会按实际换行显示，
+不会被打印成 `\r` 或 `\n` 字符串。
+
+不指定 `--channel` 时，host 会保留普通 terminal bytes，并用 `chN> ` 标识 decoded mux
+record 的 channel：
+
+```text
+ch3> mock stress seq=090 component=wiremux
+```
+
+如果一个 channel 的可见行尚未结束就切换到另一个 channel，host 会为可读性插入一个独占
+一行的提示：
+
+```text
+ch1> booting subsystem
+wiremux> continued after partial ch1 line
+ch2> sensor ready
+```
+
+这行由 host 生成，只表示 display 为避免跨 channel 混行而补了一次展示换行，不代表设备
+payload 或协议 decode 错误。
 
 ## 端口选择
 

@@ -333,8 +333,24 @@ wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-p
 
 Required behavior:
 
-- Without `--channel`, print ordinary terminal bytes and all decoded mux frames.
-- With `--channel <id>`, suppress ordinary terminal bytes and print only decoded mux frames for that channel.
+- At listen startup, create a diagnostics file under
+  `std::env::temp_dir()/wiremux/` and print one stdout marker:
+  `wiremux> diagnostics: <path>`.
+- The diagnostics filename must include a timestamp and sanitized requested port,
+  for example `wiremux-1777220326-422658-dev_cu.usbmodem2101.log`.
+- Without `--channel`, print ordinary terminal bytes and decoded mux record
+  payloads. Each decoded mux record is displayed as `chN> ` followed by raw
+  payload bytes; batch summaries and full record metadata go to diagnostics.
+- With `--channel <id>`, suppress ordinary terminal bytes and print only raw
+  payload bytes for decoded mux records from that channel. Do not add a channel
+  prefix or force a trailing newline in filtered mode.
+- Payload bytes containing `CRLF`, `CR`, or `LF` must render as real terminal
+  line breaks on stdout, not as escaped `\r` or `\n` text. Escaped payload
+  summaries belong in diagnostics.
+- If unfiltered output switches from one decoded channel to another while the
+  previous channel has a partial visible line, the host may end that display
+  line and must print a dedicated marker line:
+  `wiremux> continued after partial chN line`.
 - `listen --line <text>` must write one host-to-device input frame after each successful serial connection, then keep listening on the same serial handle. This is the preferred single-process hardware verification path because most serial devices are exclusively opened.
 - `listen --line <text>` defaults to input channel 1. `--send-channel <id>` overrides the input target while `--channel <id>` keeps its output-filter meaning.
 - `send --channel <id> --line <text>` is a non-interactive one-shot path for scripts and tests, but it should not be used concurrently with a listener on the same serial device.
@@ -344,10 +360,17 @@ Required behavior:
 
 ### Good/Base/Bad Cases
 
-- Good: ordinary text, then valid `WMUX` frame, then ordinary text. Host emits terminal, frame, terminal.
+- Good: ordinary text, then valid channel-3 `WMUX` frame, then ordinary text.
+  Host emits terminal bytes, `ch3> <payload>` bytes, then terminal bytes in
+  unfiltered mode.
+- Good: `listen --channel 1 --line help` emits channel-1 payload bytes directly,
+  preserving console newlines and adding no `ch1> ` prefix.
 - Base: frame arrives one byte at a time. Host emits no partial frame until length and CRC are complete.
 - Bad: ordinary text contains `WMUX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
-- Bad: a candidate frame has valid magic/version/length but bad CRC. Host emits a `crc_error` diagnostic event, drains the invalid candidate, and continues scanning.
+- Bad: a candidate frame has valid magic/version/length but bad CRC. Host writes
+  a full `crc_error` diagnostic event to the diagnostics file, emits only a
+  concise stdout marker in unfiltered mode, drains the invalid candidate, and
+  continues scanning.
 
 ### Tests Required
 
@@ -358,6 +381,9 @@ Required behavior:
 - Bidirectional changes must keep the existing host frame-building and CLI parser
   tests current, and should add ESP inbound dispatch tests or demo-level manual
   verification steps when ESP behavior changes.
+- Host display changes must test filtered raw payload output, unfiltered `chN> `
+  display, CRLF/CR/LF preservation, partial-line channel switch markers, and
+  batch summary routing to diagnostics.
 
 ## Scenario: Single-Process Console Verification
 
@@ -386,7 +412,7 @@ wiremux listen --port <path> --send-channel 1 --channel 3 --line mux_hello
 |------|-------------------|
 | `listen --channel 1 --line help` | send input to channel 1 and print console output channel 1 |
 | `listen --send-channel 1 --channel 2 --line mux_log` | send console command to channel 1 and print log output channel 2 |
-| `listen --line mux_log` | send input to channel 1 and print all decoded mux frames plus ordinary terminal bytes |
+| `listen --line mux_log` | send input to channel 1 and print ordinary terminal bytes plus concise `chN> ` decoded record payloads |
 | invalid channel value | return a clear CLI parse error before opening serial |
 | payload exceeds max payload | return a clear input-frame size error |
 

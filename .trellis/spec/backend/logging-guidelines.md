@@ -80,4 +80,6 @@ The console demo should emit both telemetry and ESP log messages periodically. T
 
 - `--channel 2` should show log adapter output.
 - `--channel 3` should show telemetry output.
-- No filter should show ordinary terminal output plus decoded mux frames.
+- No filter should show ordinary terminal output plus concise `chN> ` decoded
+  mux record payloads; full frame metadata and batch summaries belong in the
+  host diagnostics file.
