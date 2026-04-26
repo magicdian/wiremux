@@ -48,8 +48,15 @@ typedef esp_err_t (*esp_serial_mux_transport_write_fn)(const uint8_t *data,
                                                        uint32_t timeout_ms,
                                                        void *user_ctx);
 
+typedef esp_err_t (*esp_serial_mux_transport_read_fn)(uint8_t *data,
+                                                      size_t capacity,
+                                                      size_t *read_len,
+                                                      uint32_t timeout_ms,
+                                                      void *user_ctx);
+
 typedef struct {
     esp_serial_mux_transport_write_fn write;
+    esp_serial_mux_transport_read_fn read;
     void *user_ctx;
 } esp_serial_mux_transport_t;
 
@@ -73,6 +80,11 @@ typedef struct {
     esp_serial_mux_backpressure_policy_t backpressure_policy;
 } esp_serial_mux_channel_config_t;
 
+typedef esp_err_t (*esp_serial_mux_input_handler_t)(uint8_t channel_id,
+                                                    const uint8_t *payload,
+                                                    size_t payload_len,
+                                                    void *user_ctx);
+
 void esp_serial_mux_config_init(esp_serial_mux_config_t *config);
 
 esp_err_t esp_serial_mux_init(const esp_serial_mux_config_t *config);
@@ -80,6 +92,12 @@ esp_err_t esp_serial_mux_start(void);
 esp_err_t esp_serial_mux_stop(void);
 
 esp_err_t esp_serial_mux_register_channel(const esp_serial_mux_channel_config_t *config);
+
+esp_err_t esp_serial_mux_register_input_handler(uint8_t channel_id,
+                                                esp_serial_mux_input_handler_t handler,
+                                                void *user_ctx);
+
+esp_err_t esp_serial_mux_receive_bytes(const uint8_t *data, size_t len);
 
 esp_err_t esp_serial_mux_write(uint8_t channel_id,
                                uint32_t direction,

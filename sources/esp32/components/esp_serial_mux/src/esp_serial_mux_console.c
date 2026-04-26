@@ -1,6 +1,7 @@
 #include "esp_serial_mux_console.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_console.h"
@@ -8,6 +9,11 @@
 
 static esp_serial_mux_console_config_t s_console_config;
 static bool s_console_bound;
+
+static esp_err_t esp_serial_mux_console_input_handler(uint8_t channel_id,
+                                                      const uint8_t *payload,
+                                                      size_t payload_len,
+                                                      void *user_ctx);
 
 void esp_serial_mux_console_config_init(esp_serial_mux_console_config_t *config)
 {
@@ -54,6 +60,14 @@ esp_err_t esp_serial_mux_bind_console(const esp_serial_mux_console_config_t *con
     }
 
     s_console_config = *config;
+    err = esp_serial_mux_register_input_handler(config->channel_id,
+                                                esp_serial_mux_console_input_handler,
+                                                NULL);
+    if (err != ESP_OK) {
+        s_console_bound = false;
+        return err;
+    }
+
     s_console_bound = true;
     return ESP_OK;
 }
@@ -80,5 +94,46 @@ esp_err_t esp_serial_mux_console_run_line(const char *line, int *command_ret)
                                         s_console_config.write_timeout_ms);
     }
 
+    return err;
+}
+
+static esp_err_t esp_serial_mux_console_input_handler(uint8_t channel_id,
+                                                      const uint8_t *payload,
+                                                      size_t payload_len,
+                                                      void *user_ctx)
+{
+    (void)channel_id;
+    (void)user_ctx;
+
+    if (payload_len == 0 || payload == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_console_config.mode != ESP_SERIAL_MUX_CONSOLE_MODE_LINE) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    char line[256];
+    if (payload_len >= sizeof(line)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    size_t copy_len = payload_len < sizeof(line) - 1 ? payload_len : sizeof(line) - 1;
+    memcpy(line, payload, copy_len);
+    line[copy_len] = '\0';
+
+    while (copy_len > 0 && (line[copy_len - 1] == '\n' || line[copy_len - 1] == '\r')) {
+        line[copy_len - 1] = '\0';
+        copy_len--;
+    }
+
+    int command_ret = 0;
+    esp_err_t err = esp_serial_mux_console_run_line(line, &command_ret);
+    if (err == ESP_OK && command_ret != 0) {
+        char status[48];
+        snprintf(status, sizeof(status), "command returned %d\n", command_ret);
+        (void)esp_serial_mux_write_text(s_console_config.channel_id,
+                                        ESP_SERIAL_MUX_DIRECTION_OUTPUT,
+                                        status,
+                                        s_console_config.write_timeout_ms);
+    }
     return err;
 }
