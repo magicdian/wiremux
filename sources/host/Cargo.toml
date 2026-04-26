@@ -11,3 +11,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "esp-serial-mux"
 path = "src/main.rs"
+
+[dependencies]
+serialport = "4"

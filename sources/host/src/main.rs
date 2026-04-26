@@ -1,22 +1,41 @@
-use esp_serial_mux::envelope::decode_envelope;
-use esp_serial_mux::frame::{FrameError, FrameScanner, StreamEvent, DEFAULT_MAX_PAYLOAD_LEN};
+use esp_serial_mux::envelope::{
+    decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT,
+};
+use esp_serial_mux::frame::{
+    build_frame_payload_with_max, BuildFrameError, FrameError, FrameScanner, StreamEvent,
+    DEFAULT_MAX_PAYLOAD_LEN,
+};
 use std::env;
 use std::fs;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
-struct Args {
+enum CliCommand {
+    Listen(ListenArgs),
+    Send(SendArgs),
+}
+
+#[derive(Debug)]
+struct ListenArgs {
     port: PathBuf,
     baud: u32,
     max_payload_len: usize,
     reconnect_delay_ms: u64,
     channel: Option<u32>,
+    send_channel: Option<u8>,
+    line: Option<String>,
+}
+
+#[derive(Debug)]
+struct SendArgs {
+    port: PathBuf,
+    baud: u32,
+    max_payload_len: usize,
+    channel: u8,
+    line: String,
 }
 
 fn main() {
@@ -27,14 +46,17 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let Some(args) = parse_args(env::args().skip(1))? else {
+    let Some(command) = parse_args(env::args().skip(1))? else {
         println!("{}", usage());
         return Ok(());
     };
-    listen(args).map_err(|err| err.to_string())
+    match command {
+        CliCommand::Listen(args) => listen(args).map_err(|err| err.to_string()),
+        CliCommand::Send(args) => send(args).map_err(|err| err.to_string()),
+    }
 }
 
-fn listen(args: Args) -> io::Result<()> {
+fn listen(args: ListenArgs) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     let reconnect_delay = Duration::from_millis(args.reconnect_delay_ms);
 
@@ -66,6 +88,20 @@ fn listen(args: Args) -> io::Result<()> {
             }
         };
 
+        if let (Some(channel), Some(line)) = (args.send_channel, args.line.as_deref()) {
+            let frame = build_input_frame(channel, line.as_bytes(), args.max_payload_len)
+                .map_err(build_frame_error_to_io)?;
+            input.write_all(&frame)?;
+            input.flush()?;
+            writeln!(
+                stdout,
+                "[esp-serial-mux] sent {} bytes to channel {}",
+                line.len(),
+                channel
+            )?;
+            stdout.flush()?;
+        }
+
         let mut scanner = FrameScanner::new(args.max_payload_len);
         let mut buf = [0u8; 4096];
 
@@ -81,6 +117,7 @@ fn listen(args: Args) -> io::Result<()> {
                     }
                     stdout.flush()?;
                 }
+                Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
                 Err(err) => {
                     writeln!(
                         stdout,
@@ -101,13 +138,32 @@ fn listen(args: Args) -> io::Result<()> {
     }
 }
 
-fn open_available_port(requested: &Path, baud: u32) -> io::Result<(PathBuf, File)> {
+fn send(args: SendArgs) -> io::Result<()> {
+    let (connected_port, mut output) = open_available_port(&args.port, args.baud)?;
+    let frame = build_input_frame(args.channel, args.line.as_bytes(), args.max_payload_len)
+        .map_err(build_frame_error_to_io)?;
+    output.write_all(&frame)?;
+    output.flush()?;
+    let mut stdout = io::stdout().lock();
+    writeln!(
+        stdout,
+        "[esp-serial-mux] sent {} bytes to channel {} on {}",
+        args.line.len(),
+        args.channel,
+        connected_port.display()
+    )?;
+    Ok(())
+}
+
+fn open_available_port(
+    requested: &Path,
+    baud: u32,
+) -> io::Result<(PathBuf, Box<dyn serialport::SerialPort>)> {
     let mut last_err = None;
 
     for candidate in port_candidates(requested) {
-        let _ = configure_tty_raw(&candidate, baud);
-        match OpenOptions::new().read(true).write(true).open(&candidate) {
-            Ok(file) => return Ok((candidate, file)),
+        match open_serial_port(&candidate, baud) {
+            Ok(port) => return Ok((candidate, port)),
             Err(err) => last_err = Some(err),
         }
     }
@@ -118,6 +174,16 @@ fn open_available_port(requested: &Path, baud: u32) -> io::Result<(PathBuf, File
             format!("no candidate ports found for {}", requested.display()),
         )
     }))
+}
+
+fn open_serial_port(path: &Path, baud: u32) -> io::Result<Box<dyn serialport::SerialPort>> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "serial path is not UTF-8"))?;
+    serialport::new(path, baud)
+        .timeout(Duration::from_millis(100))
+        .open()
+        .map_err(|err| io::Error::other(err.to_string()))
 }
 
 fn port_candidates(requested: &Path) -> Vec<PathBuf> {
@@ -164,31 +230,6 @@ fn port_candidates(requested: &Path) -> Vec<PathBuf> {
     }
 
     candidates
-}
-
-fn configure_tty_raw(path: &Path, baud: u32) -> io::Result<()> {
-    let mut command = Command::new("stty");
-
-    if cfg!(target_os = "macos") || cfg!(target_os = "ios") || cfg!(target_os = "freebsd") {
-        command.arg("-f");
-    } else {
-        command.arg("-F");
-    }
-
-    let status = command
-        .arg(path)
-        .arg(baud.to_string())
-        .args(["raw", "-echo", "min", "1", "time", "0"])
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "stty failed for {} with status {status}",
-            path.display()
-        )))
-    }
 }
 
 fn paired_tty_cu_path(path: &Path) -> Option<PathBuf> {
@@ -283,6 +324,41 @@ fn write_event<W: Write>(
     }
 }
 
+fn build_input_frame(
+    channel: u8,
+    payload: &[u8],
+    max_payload_len: usize,
+) -> Result<Vec<u8>, BuildFrameError> {
+    let envelope = MuxEnvelope {
+        channel_id: u32::from(channel),
+        direction: DIRECTION_INPUT,
+        sequence: 1,
+        timestamp_us: now_micros(),
+        kind: PAYLOAD_KIND_TEXT,
+        payload_type: String::new(),
+        payload: payload.to_vec(),
+        flags: 0,
+    };
+    let payload = encode_envelope(&envelope);
+    build_frame_payload_with_max(0, &payload, max_payload_len)
+}
+
+fn now_micros() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64
+}
+
+fn build_frame_error_to_io(err: BuildFrameError) -> io::Error {
+    match err {
+        BuildFrameError::PayloadTooLarge { len, max } => io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("input frame payload is too large: {len} bytes > {max} bytes"),
+        ),
+    }
+}
+
 fn printable_payload(payload: &[u8]) -> String {
     match std::str::from_utf8(payload) {
         Ok(text) => text.escape_default().to_string(),
@@ -294,20 +370,31 @@ fn printable_payload(payload: &[u8]) -> String {
     }
 }
 
-fn parse_args<I>(args: I) -> Result<Option<Args>, String>
+fn parse_args<I>(args: I) -> Result<Option<CliCommand>, String>
 where
     I: IntoIterator<Item = String>,
 {
     let mut args = args.into_iter().peekable();
-    if matches!(args.peek().map(String::as_str), Some("listen")) {
-        args.next();
-    }
+    let command = match args.peek().map(String::as_str) {
+        Some("listen") => {
+            args.next();
+            "listen"
+        }
+        Some("send") => {
+            args.next();
+            "send"
+        }
+        Some("-h" | "--help") => return Ok(None),
+        _ => "listen",
+    };
 
     let mut port = None;
     let mut baud = 115_200;
     let mut max_payload_len = DEFAULT_MAX_PAYLOAD_LEN;
     let mut reconnect_delay_ms = 500;
     let mut channel = None;
+    let mut send_channel = None;
+    let mut line = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -345,10 +432,18 @@ where
                 let value = args
                     .next()
                     .ok_or_else(|| "--channel requires a value".to_string())?;
-                channel = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("invalid --channel value: {value}"))?,
+                channel = Some(parse_channel(&value)?);
+            }
+            "--send-channel" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--send-channel requires a value".to_string())?;
+                send_channel = Some(parse_channel(&value)?);
+            }
+            "--line" => {
+                line = Some(
+                    args.next()
+                        .ok_or_else(|| "--line requires a value".to_string())?,
                 );
             }
             "-h" | "--help" => return Ok(None),
@@ -356,30 +451,58 @@ where
         }
     }
 
-    Ok(Some(Args {
-        port: port.ok_or_else(usage)?,
-        baud,
-        max_payload_len,
-        reconnect_delay_ms,
-        channel,
-    }))
+    let port = port.ok_or_else(usage)?;
+    match command {
+        "listen" => Ok(Some(CliCommand::Listen(ListenArgs {
+            port,
+            baud,
+            max_payload_len,
+            reconnect_delay_ms,
+            channel: channel.map(u32::from),
+            send_channel: line.as_ref().map(|_| send_channel.or(channel).unwrap_or(1)),
+            line,
+        }))),
+        "send" => Ok(Some(CliCommand::Send(SendArgs {
+            port,
+            baud,
+            max_payload_len,
+            channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
+            line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
+        }))),
+        _ => unreachable!("command is normalized before parsing"),
+    }
+}
+
+fn parse_channel(value: &str) -> Result<u8, String> {
+    let channel: u16 = value
+        .parse()
+        .map_err(|_| format!("invalid --channel value: {value}"))?;
+    u8::try_from(channel).map_err(|_| format!("invalid --channel value: {value}; must be 0..255"))
 }
 
 fn usage() -> String {
-    "usage: esp-serial-mux [listen] --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]".to_string()
+    "usage:\n  esp-serial-mux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  esp-serial-mux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]".to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{paired_tty_cu_path, parse_args, printable_payload, usbmodem_fragment};
+    use super::{
+        build_input_frame, paired_tty_cu_path, parse_args, printable_payload, usbmodem_fragment,
+        CliCommand,
+    };
     use super::{port_candidates, requested_file_name_starts_with};
+    use esp_serial_mux::envelope::{decode_envelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT};
+    use esp_serial_mux::frame::{FrameScanner, StreamEvent};
     use std::path::PathBuf;
 
     #[test]
     fn parses_required_port_with_defaults() {
-        let args = parse_args(["--port", "/dev/tty.usbmodem2101"].map(String::from))
+        let command = parse_args(["--port", "/dev/tty.usbmodem2101"].map(String::from))
             .expect("args parse")
             .expect("valid args");
+        let CliCommand::Listen(args) = command else {
+            panic!("expected listen command");
+        };
 
         assert_eq!(args.port, PathBuf::from("/dev/tty.usbmodem2101"));
         assert_eq!(args.baud, 115_200);
@@ -389,11 +512,13 @@ mod tests {
         );
         assert_eq!(args.reconnect_delay_ms, 500);
         assert_eq!(args.channel, None);
+        assert_eq!(args.send_channel, None);
+        assert_eq!(args.line, None);
     }
 
     #[test]
     fn parses_listen_subcommand_and_overrides() {
-        let args = parse_args(
+        let command = parse_args(
             [
                 "listen",
                 "--port",
@@ -406,24 +531,106 @@ mod tests {
                 "100",
                 "--channel",
                 "3",
+                "--line",
+                "help",
             ]
             .map(String::from),
         )
         .expect("args parse")
         .expect("valid args");
+        let CliCommand::Listen(args) = command else {
+            panic!("expected listen command");
+        };
 
         assert_eq!(args.port, PathBuf::from("/tmp/capture.bin"));
         assert_eq!(args.baud, 921_600);
         assert_eq!(args.max_payload_len, 4096);
         assert_eq!(args.reconnect_delay_ms, 100);
         assert_eq!(args.channel, Some(3));
+        assert_eq!(args.send_channel, Some(3));
+        assert_eq!(args.line, Some("help".to_string()));
+    }
+
+    #[test]
+    fn parses_listen_line_without_filter_as_console_input() {
+        let command = parse_args(
+            [
+                "listen",
+                "--port",
+                "/dev/cu.usbmodem2101",
+                "--line",
+                "mux_log",
+            ]
+            .map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Listen(args) = command else {
+            panic!("expected listen command");
+        };
+
+        assert_eq!(args.channel, None);
+        assert_eq!(args.send_channel, Some(1));
+        assert_eq!(args.line, Some("mux_log".to_string()));
+    }
+
+    #[test]
+    fn parses_listen_line_with_explicit_send_channel() {
+        let command = parse_args(
+            [
+                "listen",
+                "--port",
+                "/dev/cu.usbmodem2101",
+                "--channel",
+                "2",
+                "--send-channel",
+                "1",
+                "--line",
+                "mux_log",
+            ]
+            .map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Listen(args) = command else {
+            panic!("expected listen command");
+        };
+
+        assert_eq!(args.channel, Some(2));
+        assert_eq!(args.send_channel, Some(1));
+        assert_eq!(args.line, Some("mux_log".to_string()));
+    }
+
+    #[test]
+    fn parses_send_subcommand() {
+        let command = parse_args(
+            [
+                "send",
+                "--port",
+                "/dev/cu.usbmodem2101",
+                "--channel",
+                "1",
+                "--line",
+                "help",
+            ]
+            .map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Send(args) = command else {
+            panic!("expected send command");
+        };
+
+        assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(args.channel, 1);
+        assert_eq!(args.line, "help");
     }
 
     #[test]
     fn requires_port() {
         let err = parse_args(["--baud", "115200"].map(String::from)).expect_err("missing port");
 
-        assert!(err.contains("usage: esp-serial-mux"));
+        assert!(err.contains("usage:"));
     }
 
     #[test]
@@ -432,6 +639,33 @@ mod tests {
             .expect_err("invalid baud");
 
         assert!(err.contains("invalid --baud value"));
+    }
+
+    #[test]
+    fn rejects_invalid_channel() {
+        let err = parse_args(
+            [
+                "send",
+                "--port",
+                "/tmp/fake",
+                "--channel",
+                "300",
+                "--line",
+                "help",
+            ]
+            .map(String::from),
+        )
+        .expect_err("invalid channel");
+
+        assert!(err.contains("invalid --channel value"));
+    }
+
+    #[test]
+    fn rejects_missing_send_line() {
+        let err = parse_args(["send", "--port", "/tmp/fake", "--channel", "1"].map(String::from))
+            .expect_err("missing line");
+
+        assert!(err.contains("send requires --line"));
     }
 
     #[test]
@@ -501,5 +735,23 @@ mod tests {
             Some("usbserial")
         );
         assert_eq!(usbmodem_fragment(&PathBuf::from("/tmp/file")), None);
+    }
+
+    #[test]
+    fn builds_input_frame_that_round_trips_through_scanner() {
+        let frame = build_input_frame(1, b"help", esp_serial_mux::frame::DEFAULT_MAX_PAYLOAD_LEN)
+            .expect("valid input frame");
+        let mut scanner = FrameScanner::default();
+        let events = scanner.push(&frame);
+        assert_eq!(events.len(), 1);
+
+        let StreamEvent::Frame(frame) = &events[0] else {
+            panic!("expected frame event");
+        };
+        let envelope = decode_envelope(&frame.payload).expect("valid envelope");
+        assert_eq!(envelope.channel_id, 1);
+        assert_eq!(envelope.direction, DIRECTION_INPUT);
+        assert_eq!(envelope.kind, PAYLOAD_KIND_TEXT);
+        assert_eq!(envelope.payload, b"help");
     }
 }
