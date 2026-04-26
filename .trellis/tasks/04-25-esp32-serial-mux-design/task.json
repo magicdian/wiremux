@@ -46,7 +46,6 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "04-25-pr7-console-line-mode-e2e",
     "04-25-pr8-serial-backend-hardening"
   ],
   "parent": null,
