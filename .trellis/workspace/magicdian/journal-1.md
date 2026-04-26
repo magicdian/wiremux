@@ -43,3 +43,43 @@ Implemented the first ESP serial mux milestone: Rust host listener/decoder with 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Complete bidirectional mux MVP
+
+**Date**: 2026-04-26
+**Task**: Complete bidirectional mux MVP
+**Branch**: `main`
+
+### Summary
+
+Implemented PR5-PR8: host serialport send/listen input framing, ESP32 inbound frame parser and channel dispatch, console line-mode MVP, serial backend hardening, docs/spec sync, hardware verification of console/log/telemetry channels, and task archival.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `addb794` | (see git log) |
+| `1f57e59` | (see git log) |
+| `0369f00` | (see git log) |
+| `7e5fcb3` | (see git log) |
+| `3186cc0` | (see git log) |
+| `c585e34` | (see git log) |
+| `471fbe9` | (see git log) |
+| `8aa8d09` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
