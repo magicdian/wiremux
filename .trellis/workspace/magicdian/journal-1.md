@@ -235,3 +235,53 @@ Implemented generic Wiremux batch records and compression support across core C,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Optimize host listen output
+
+**Date**: 2026-04-27
+**Task**: Optimize host listen output
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Host CLI | Split listen stdout display from diagnostics logging. Filtered channel output now writes raw payload bytes without prefixes or forced newlines; unfiltered output uses concise `chN> ` record prefixes. |
+| Diagnostics | Added per-run temp diagnostics files under `std::env::temp_dir()/wiremux/`, with startup marker `wiremux> diagnostics: <path>`. Full frame metadata, batch summaries, CRC errors, and decode errors are written there. |
+| Display UX | Preserves CRLF/CR/LF as real terminal line breaks and inserts an own-line `wiremux> continued after partial chN line` marker when switching channels from a partial visible line. |
+| Tests/Docs/Specs | Added host display and batch diagnostics tests; updated Chinese host docs and backend specs to match the new output contract. |
+
+**Verification**:
+- `python3 ./.trellis/scripts/task.py validate .trellis/tasks/04-26-host-output-ux`
+- `cargo test`
+- `cargo check`
+- `cargo fmt --check`
+
+**Commits**:
+- `378842d feat(host): simplify listen output`
+- `fe1af9f chore(task): archive 04-26-host-output-ux`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `378842d` | (see git log) |
+| `fe1af9f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
