@@ -22,6 +22,7 @@ typedef enum {
     WIREMUX_PAYLOAD_KIND_PROTOBUF = 3,
     WIREMUX_PAYLOAD_KIND_CONTROL = 4,
     WIREMUX_PAYLOAD_KIND_EVENT = 5,
+    WIREMUX_PAYLOAD_KIND_BATCH = 6,
 } wiremux_payload_kind_t;
 
 typedef struct {

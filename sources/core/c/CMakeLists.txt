@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(wiremux_core_c STATIC
+    src/wiremux_batch.c
+    src/wiremux_compression.c
     src/wiremux_envelope.c
     src/wiremux_frame.c
     src/wiremux_manifest.c

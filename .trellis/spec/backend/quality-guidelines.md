@@ -77,6 +77,9 @@ Rules:
   `sources/core/c/tests/wiremux_core_test.cpp`.
 - Every portable core behavior change must update tests for both the successful
   path and the relevant `wiremux_status_t` error branch.
+- Portable batch/compression changes must test uncompressed batch records,
+  batch metadata, heatshrink round-trip, LZ4 round-trip, unsupported codec, and
+  small output errors.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.

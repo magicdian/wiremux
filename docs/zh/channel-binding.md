@@ -18,6 +18,12 @@ const esp_wiremux_channel_config_t telemetry_channel = {
     .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_TEXT,
     .flush_policy = ESP_WIREMUX_FLUSH_PERIODIC,
     .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_DROP_OLDEST,
+    .output_policy = {
+        .send_mode = ESP_WIREMUX_SEND_BATCHED,
+        .compression = ESP_WIREMUX_COMPRESSION_LZ4,
+        .batch_interval_ms = 100,
+        .batch_max_bytes = 384,
+    },
 };
 ESP_ERROR_CHECK(esp_wiremux_register_channel(&telemetry_channel));
 ```
@@ -54,9 +60,24 @@ ESP_ERROR_CHECK(esp_wiremux_bind_console(&console_config));
 首期建议：
 
 - console/control 使用短超时或 immediate flush。
-- log 使用 drop oldest，并通过后续统计字段暴露 dropped counter。
-- telemetry 根据业务语义选择 drop newest 或 drop oldest。
+- log 使用 drop oldest，可配置为 batched + heatshrink/LZ4 压缩。
+- telemetry 根据业务语义选择 drop newest 或 drop oldest，并可按 channel
+  direction 配置 batch 周期、batch 大小和压缩算法。
 - ISR 场景首期不承诺完整支持。
+
+## Batch 与压缩
+
+`esp_wiremux_channel_config_t` 可以分别配置 input/output policy：
+
+- `send_mode = ESP_WIREMUX_SEND_IMMEDIATE`：每次 write 直接发一帧。
+- `send_mode = ESP_WIREMUX_SEND_BATCHED`：buffer 满或周期到时发送 batch。
+- `compression = ESP_WIREMUX_COMPRESSION_NONE`：不压缩。
+- `compression = ESP_WIREMUX_COMPRESSION_HEATSHRINK`：使用内置 heatshrink-style codec。
+- `compression = ESP_WIREMUX_COMPRESSION_LZ4`：使用 LZ4 block codec。
+
+batch 是通用 Wiremux 能力，不关心 payload 是否是 log、telemetry 或业务二进制。
+host 会根据 `payload_type = "wiremux.v1.MuxBatch"` 解 batch，并按每条 record 的
+原始 channel 显示或过滤。
 
 ## Manifest
 

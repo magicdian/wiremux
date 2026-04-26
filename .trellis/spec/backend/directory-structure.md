@@ -26,8 +26,12 @@ sources/
 │       │   ├── wiremux_envelope.h
 │       │   ├── wiremux_frame.h
 │       │   ├── wiremux_manifest.h
+│       │   ├── wiremux_batch.h
+│       │   ├── wiremux_compression.h
 │       │   └── wiremux_status.h
 │       ├── src/
+│           ├── wiremux_batch.c
+│           ├── wiremux_compression.c
 │           ├── wiremux_proto_internal.h
 │           ├── wiremux_envelope.c
 │           ├── wiremux_frame.c
@@ -79,6 +83,10 @@ The portable C core lives under `sources/core/c`.
 - `include/wiremux_manifest.h`: shared `wiremux.v1.DeviceManifest` and
   `ChannelDescriptor` encoder contract, including native endianness and device
   capability fields.
+- `include/wiremux_batch.h`: shared `wiremux.v1.MuxBatch` and record container
+  contract.
+- `include/wiremux_compression.h`: shared compression/decompression contract for
+  Wiremux batch payloads.
 - `include/wiremux_status.h`: portable status codes used by core APIs before
   platform adapters map them to runtime-specific error types.
 - `src/wiremux_frame.c`: platform-independent frame encode/decode
@@ -87,6 +95,10 @@ The portable C core lives under `sources/core/c`.
   encode/decode implementation.
 - `src/wiremux_manifest.c`: platform-independent protobuf-compatible manifest
   encoder, including repeated payload kind/type descriptor fields.
+- `src/wiremux_batch.c`: platform-independent protobuf-compatible batch and
+  batch-record encode/decode implementation.
+- `src/wiremux_compression.c`: platform-independent heatshrink-style and LZ4
+  codec implementation used by ESP and host-compatible tests.
 - `CMakeLists.txt`: host-side GoogleTest/GoogleMock test project for the
   portable core.
 - `tests/wiremux_core_test.cpp`: host-side GoogleTest coverage for CRC, frame,
@@ -195,6 +207,102 @@ Frame payload must be `wiremux.v1.MuxEnvelope` bytes with these required fields 
 - `kind` field 5
 - `payload` field 7
 - `flags` field 8
+
+Batched output remains wrapped in a `MuxEnvelope`. The outer envelope uses:
+
+- `channel_id = 0`
+- `direction = output`
+- `kind = batch`
+- `payload_type = "wiremux.v1.MuxBatch"`
+- `payload = wiremux.v1.MuxBatch` bytes
+
+`MuxBatch.records` contains encoded `MuxBatchRecords` bytes. If
+`MuxBatch.compression` is not `none`, `records` contains compressed
+`MuxBatchRecords` bytes and `uncompressed_len` must be the decoded record byte
+length. Host tools must decode the batch and apply channel filtering to the
+inner records, not to the system-channel wrapper.
+
+### Batch and Compression Signatures
+
+C core:
+
+```c
+#define WIREMUX_BATCH_PAYLOAD_TYPE "wiremux.v1.MuxBatch"
+
+typedef enum {
+    WIREMUX_COMPRESSION_NONE = 0,
+    WIREMUX_COMPRESSION_HEATSHRINK = 1,
+    WIREMUX_COMPRESSION_LZ4 = 2,
+} wiremux_compression_algorithm_t;
+
+size_t wiremux_batch_records_encoded_len(const wiremux_record_t *records,
+                                         size_t record_count);
+
+wiremux_status_t wiremux_batch_records_encode(const wiremux_record_t *records,
+                                              size_t record_count,
+                                              uint8_t *out,
+                                              size_t out_capacity,
+                                              size_t *written);
+
+wiremux_status_t wiremux_batch_records_decode(const uint8_t *data,
+                                              size_t len,
+                                              wiremux_record_t *records,
+                                              size_t record_capacity,
+                                              size_t *record_count);
+
+wiremux_status_t wiremux_compress(uint32_t algorithm,
+                                  const uint8_t *input,
+                                  size_t input_len,
+                                  uint8_t *out,
+                                  size_t out_capacity,
+                                  size_t *written);
+
+wiremux_status_t wiremux_decompress(uint32_t algorithm,
+                                    const uint8_t *input,
+                                    size_t input_len,
+                                    uint8_t *out,
+                                    size_t out_capacity,
+                                    size_t *written);
+```
+
+ESP policy:
+
+```c
+typedef struct {
+    esp_wiremux_send_mode_t send_mode;
+    esp_wiremux_compression_algorithm_t compression;
+    uint32_t batch_interval_ms;
+    size_t batch_max_bytes;
+    bool force_compression;
+} esp_wiremux_direction_policy_t;
+
+typedef struct {
+    esp_wiremux_codec_stats_t compression[3];
+} esp_wiremux_diagnostics_t;
+
+esp_err_t esp_wiremux_get_diagnostics(esp_wiremux_diagnostics_t *diagnostics);
+```
+
+Validation matrix:
+
+| Case | Required behavior |
+|------|-------------------|
+| immediate policy | one `esp_wiremux_write*()` emits one single-record `MuxEnvelope` frame |
+| batched policy, buffer reaches `batch_max_bytes` | flush one `wiremux.v1.MuxBatch` wrapper frame |
+| batched policy, interval expires with buffered data | flush one `wiremux.v1.MuxBatch` wrapper frame |
+| batched policy, interval expires with no buffered data | emit no frame |
+| compression result is larger and `force_compression = false` | fall back to `WIREMUX_COMPRESSION_NONE` and increment fallback count |
+| unsupported compression ID | normalize or reject deterministically before decode/dispatch |
+| host channel filter with batch wrapper | apply filter to inner records, not channel 0 wrapper |
+
+Good/Base/Bad cases:
+
+- Good: two log records on channel 2 with heatshrink compression decode as two
+  channel-2 records on host.
+- Base: console channel remains immediate and uncompressed while log/telemetry
+  output batches.
+- Bad: compressed batch with unsupported codec produces a visible host decode
+  error in unfiltered mode and does not display corrupted payload as text.
 
 For host-to-device input frames, `channel_id`, `direction`, `sequence`, `kind`, and `payload` are required. `direction` must be input, and ESP dispatch must reject frames for unregistered channels or channels without input direction enabled.
 

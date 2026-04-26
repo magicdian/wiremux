@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 
 extern "C" {
+#include "wiremux_batch.h"
+#include "wiremux_compression.h"
 #include "wiremux_envelope.h"
 #include "wiremux_frame.h"
 #include "wiremux_manifest.h"
@@ -334,6 +336,177 @@ TEST(WiremuxEnvelopeTest, RejectsTruncatedVarintAndLengthDelimitedFields)
     EXPECT_EQ(wiremux_envelope_decode(truncated_length_delimited,
                                       sizeof(truncated_length_delimited),
                                       &decoded),
+              WIREMUX_STATUS_INVALID_SIZE);
+}
+
+TEST(WiremuxBatchTest, EncodesAndDecodesRecords)
+{
+    const uint8_t payload1[] = "log line one";
+    const uint8_t payload2[] = {0x01, 0x02, 0x03, 0x04};
+    const wiremux_record_t records[] = {
+        {
+            2,
+            WIREMUX_DIRECTION_OUTPUT,
+            10,
+            1000,
+            WIREMUX_PAYLOAD_KIND_TEXT,
+            nullptr,
+            0,
+            payload1,
+            sizeof(payload1) - 1,
+            0,
+        },
+        {
+            3,
+            WIREMUX_DIRECTION_OUTPUT,
+            11,
+            1100,
+            WIREMUX_PAYLOAD_KIND_BINARY,
+            "wiremux.test.Binary",
+            std::strlen("wiremux.test.Binary"),
+            payload2,
+            sizeof(payload2),
+            7,
+        },
+    };
+
+    std::vector<uint8_t> encoded(wiremux_batch_records_encoded_len(records, 2));
+    size_t written = 0;
+    ASSERT_EQ(wiremux_batch_records_encode(records, 2, encoded.data(), encoded.size(), &written),
+              WIREMUX_STATUS_OK);
+    EXPECT_EQ(written, encoded.size());
+
+    wiremux_record_t decoded[2] = {};
+    size_t decoded_count = 0;
+    ASSERT_EQ(wiremux_batch_records_decode(encoded.data(),
+                                           encoded.size(),
+                                           decoded,
+                                           2,
+                                           &decoded_count),
+              WIREMUX_STATUS_OK);
+    ASSERT_EQ(decoded_count, 2u);
+    EXPECT_EQ(decoded[0].channel_id, 2u);
+    EXPECT_EQ(decoded[0].sequence, 10u);
+    EXPECT_EQ(decoded[0].payload_len, sizeof(payload1) - 1);
+    EXPECT_EQ(std::memcmp(decoded[0].payload, payload1, decoded[0].payload_len), 0);
+    EXPECT_EQ(decoded[1].channel_id, 3u);
+    EXPECT_EQ(decoded[1].payload_type_len, std::strlen("wiremux.test.Binary"));
+    EXPECT_EQ(std::memcmp(decoded[1].payload_type, "wiremux.test.Binary", decoded[1].payload_type_len), 0);
+    EXPECT_EQ(std::memcmp(decoded[1].payload, payload2, decoded[1].payload_len), 0);
+}
+
+TEST(WiremuxBatchTest, EncodesAndDecodesBatchMetadata)
+{
+    const uint8_t records[] = {0x0a, 0x03, 0x08, 0x01, 0x10};
+    const wiremux_batch_t batch = {
+        WIREMUX_COMPRESSION_HEATSHRINK,
+        records,
+        sizeof(records),
+        128,
+    };
+    std::vector<uint8_t> encoded(wiremux_batch_encoded_len(&batch));
+    size_t written = 0;
+
+    ASSERT_EQ(wiremux_batch_encode(&batch, encoded.data(), encoded.size(), &written),
+              WIREMUX_STATUS_OK);
+
+    wiremux_batch_t decoded = {};
+    ASSERT_EQ(wiremux_batch_decode(encoded.data(), written, &decoded), WIREMUX_STATUS_OK);
+    EXPECT_EQ(decoded.compression, WIREMUX_COMPRESSION_HEATSHRINK);
+    EXPECT_EQ(decoded.records_len, sizeof(records));
+    EXPECT_EQ(decoded.uncompressed_len, 128u);
+    EXPECT_EQ(std::memcmp(decoded.records, records, decoded.records_len), 0);
+}
+
+TEST(WiremuxBatchTest, RejectsInvalidArgumentsAndCapacity)
+{
+    const uint8_t records[] = {0x01, 0x02};
+    const wiremux_batch_t batch = {
+        WIREMUX_COMPRESSION_NONE,
+        records,
+        sizeof(records),
+        sizeof(records),
+    };
+    uint8_t out[8] = {};
+    size_t written = 0;
+    size_t record_count = 0;
+
+    EXPECT_EQ(wiremux_batch_encode(nullptr, out, sizeof(out), &written), WIREMUX_STATUS_INVALID_ARG);
+    EXPECT_EQ(wiremux_batch_encode(&batch, nullptr, sizeof(out), &written), WIREMUX_STATUS_INVALID_ARG);
+    EXPECT_EQ(wiremux_batch_encode(&batch, out, sizeof(out), nullptr), WIREMUX_STATUS_INVALID_ARG);
+    EXPECT_EQ(wiremux_batch_encode(&batch, out, 1, &written), WIREMUX_STATUS_INVALID_SIZE);
+    EXPECT_EQ(wiremux_batch_records_decode(records, sizeof(records), nullptr, 1, &record_count),
+              WIREMUX_STATUS_INVALID_ARG);
+}
+
+TEST(WiremuxCompressionTest, HeatshrinkRoundTripsRepeatedPayload)
+{
+    const uint8_t input[] = "ESP_LOGI demo demo demo demo demo telemetry telemetry telemetry";
+    std::vector<uint8_t> compressed(sizeof(input) * 2);
+    std::vector<uint8_t> decoded(sizeof(input));
+    size_t compressed_len = 0;
+    size_t decoded_len = 0;
+
+    ASSERT_EQ(wiremux_compress(WIREMUX_COMPRESSION_HEATSHRINK,
+                               input,
+                               sizeof(input) - 1,
+                               compressed.data(),
+                               compressed.size(),
+                               &compressed_len),
+              WIREMUX_STATUS_OK);
+    ASSERT_EQ(wiremux_decompress(WIREMUX_COMPRESSION_HEATSHRINK,
+                                 compressed.data(),
+                                 compressed_len,
+                                 decoded.data(),
+                                 decoded.size(),
+                                 &decoded_len),
+              WIREMUX_STATUS_OK);
+    EXPECT_EQ(decoded_len, sizeof(input) - 1);
+    EXPECT_EQ(std::memcmp(decoded.data(), input, decoded_len), 0);
+}
+
+TEST(WiremuxCompressionTest, Lz4RoundTripsRepeatedPayload)
+{
+    const uint8_t input[] = "channel=2 level=info value=42 channel=2 level=info value=43 channel=2 level=info value=44";
+    std::vector<uint8_t> compressed(sizeof(input) * 2);
+    std::vector<uint8_t> decoded(sizeof(input));
+    size_t compressed_len = 0;
+    size_t decoded_len = 0;
+
+    ASSERT_EQ(wiremux_compress(WIREMUX_COMPRESSION_LZ4,
+                               input,
+                               sizeof(input) - 1,
+                               compressed.data(),
+                               compressed.size(),
+                               &compressed_len),
+              WIREMUX_STATUS_OK);
+    ASSERT_EQ(wiremux_decompress(WIREMUX_COMPRESSION_LZ4,
+                                 compressed.data(),
+                                 compressed_len,
+                                 decoded.data(),
+                                 decoded.size(),
+                                 &decoded_len),
+              WIREMUX_STATUS_OK);
+    EXPECT_EQ(decoded_len, sizeof(input) - 1);
+    EXPECT_EQ(std::memcmp(decoded.data(), input, decoded_len), 0);
+}
+
+TEST(WiremuxCompressionTest, RejectsUnsupportedAlgorithmAndSmallOutput)
+{
+    const uint8_t input[] = "abcabcabc";
+    uint8_t out[4] = {};
+    size_t written = 0;
+
+    EXPECT_EQ(wiremux_compress(99, input, sizeof(input) - 1, out, sizeof(out), &written),
+              WIREMUX_STATUS_NOT_SUPPORTED);
+    EXPECT_EQ(wiremux_decompress(99, input, sizeof(input) - 1, out, sizeof(out), &written),
+              WIREMUX_STATUS_NOT_SUPPORTED);
+    EXPECT_EQ(wiremux_decompress(WIREMUX_COMPRESSION_NONE,
+                                 input,
+                                 sizeof(input) - 1,
+                                 out,
+                                 sizeof(out),
+                                 &written),
               WIREMUX_STATUS_INVALID_SIZE);
 }
 

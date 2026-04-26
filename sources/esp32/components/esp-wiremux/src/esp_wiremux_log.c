@@ -88,6 +88,12 @@ esp_err_t esp_wiremux_bind_esp_log(const esp_wiremux_log_config_t *config)
         .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_TEXT,
         .flush_policy = ESP_WIREMUX_FLUSH_HIGH_WATERMARK,
         .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_DROP_OLDEST,
+        .output_policy = {
+            .send_mode = ESP_WIREMUX_SEND_BATCHED,
+            .compression = ESP_WIREMUX_COMPRESSION_HEATSHRINK,
+            .batch_interval_ms = 100,
+            .batch_max_bytes = 384,
+        },
     };
 
     esp_err_t err = esp_wiremux_register_channel(&channel);

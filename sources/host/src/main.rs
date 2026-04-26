@@ -4,6 +4,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use wiremux::batch::{decode_batch, decode_batch_records, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE};
+use wiremux::codec::decompress;
 use wiremux::envelope::{
     decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT,
 };
@@ -281,21 +283,13 @@ fn write_event<W: Write>(
         }
         StreamEvent::Frame(frame) => match decode_envelope(&frame.payload) {
             Ok(envelope) => {
+                if envelope.payload_type == BATCH_PAYLOAD_TYPE {
+                    return write_batch_event(out, &envelope, channel_filter);
+                }
                 if channel_filter.is_some_and(|channel| channel != envelope.channel_id) {
                     return Ok(());
                 }
-                writeln!(
-                    out,
-                    "\n[wiremux] ch={} dir={} seq={} ts={} kind={} type={} flags={} payload={}",
-                    envelope.channel_id,
-                    envelope.direction,
-                    envelope.sequence,
-                    envelope.timestamp_us,
-                    envelope.kind,
-                    printable_payload_type(&envelope.payload_type),
-                    envelope.flags,
-                    printable_payload(&envelope.payload)
-                )
+                write_envelope_line(out, &envelope)
             }
             Err(err) => writeln!(
                 out,
@@ -323,6 +317,81 @@ fn write_event<W: Write>(
             Ok(())
         }
     }
+}
+
+fn write_batch_event<W: Write>(
+    out: &mut W,
+    envelope: &MuxEnvelope,
+    channel_filter: Option<u32>,
+) -> io::Result<()> {
+    let batch = match decode_batch(&envelope.payload) {
+        Ok(batch) => batch,
+        Err(err) => {
+            if channel_filter.is_none() {
+                writeln!(out, "\n[wiremux] batch_decode_error={err:?}")?;
+            }
+            return Ok(());
+        }
+    };
+    let uncompressed_len = if batch.compression == COMPRESSION_NONE {
+        batch.records.len()
+    } else {
+        batch.uncompressed_len as usize
+    };
+    let records_payload = match decompress(batch.compression, &batch.records, uncompressed_len) {
+        Ok(records_payload) => records_payload,
+        Err(err) => {
+            if channel_filter.is_none() {
+                writeln!(
+                    out,
+                    "\n[wiremux] batch compression={} raw_len={} decode_error={err:?}",
+                    batch.compression, batch.uncompressed_len
+                )?;
+            }
+            return Ok(());
+        }
+    };
+    let records = match decode_batch_records(&records_payload) {
+        Ok(records) => records,
+        Err(err) => {
+            if channel_filter.is_none() {
+                writeln!(out, "\n[wiremux] batch_records_decode_error={err:?}")?;
+            }
+            return Ok(());
+        }
+    };
+    if channel_filter.is_none() {
+        writeln!(
+            out,
+            "\n[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
+            records.len(),
+            batch.compression,
+            batch.records.len(),
+            records_payload.len()
+        )?;
+    }
+    for record in records {
+        if channel_filter.is_some_and(|channel| channel != record.channel_id) {
+            continue;
+        }
+        write_envelope_line(out, &record)?;
+    }
+    Ok(())
+}
+
+fn write_envelope_line<W: Write>(out: &mut W, envelope: &MuxEnvelope) -> io::Result<()> {
+    writeln!(
+        out,
+        "\n[wiremux] ch={} dir={} seq={} ts={} kind={} type={} flags={} payload={}",
+        envelope.channel_id,
+        envelope.direction,
+        envelope.sequence,
+        envelope.timestamp_us,
+        envelope.kind,
+        printable_payload_type(&envelope.payload_type),
+        envelope.flags,
+        printable_payload(&envelope.payload)
+    )
 }
 
 fn build_input_frame(

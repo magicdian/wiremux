@@ -6,6 +6,7 @@
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
+#include "wiremux_batch.h"
 #include "wiremux_envelope.h"
 
 #ifdef __cplusplus
@@ -30,6 +31,7 @@ typedef enum {
     ESP_WIREMUX_PAYLOAD_KIND_PROTOBUF = WIREMUX_PAYLOAD_KIND_PROTOBUF,
     ESP_WIREMUX_PAYLOAD_KIND_CONTROL = WIREMUX_PAYLOAD_KIND_CONTROL,
     ESP_WIREMUX_PAYLOAD_KIND_EVENT = WIREMUX_PAYLOAD_KIND_EVENT,
+    ESP_WIREMUX_PAYLOAD_KIND_BATCH = WIREMUX_PAYLOAD_KIND_BATCH,
 } esp_wiremux_payload_kind_t;
 
 typedef enum {
@@ -37,6 +39,17 @@ typedef enum {
     ESP_WIREMUX_FLUSH_PERIODIC = 1,
     ESP_WIREMUX_FLUSH_HIGH_WATERMARK = 2,
 } esp_wiremux_flush_policy_t;
+
+typedef enum {
+    ESP_WIREMUX_SEND_IMMEDIATE = 0,
+    ESP_WIREMUX_SEND_BATCHED = 1,
+} esp_wiremux_send_mode_t;
+
+typedef enum {
+    ESP_WIREMUX_COMPRESSION_NONE = WIREMUX_COMPRESSION_NONE,
+    ESP_WIREMUX_COMPRESSION_HEATSHRINK = WIREMUX_COMPRESSION_HEATSHRINK,
+    ESP_WIREMUX_COMPRESSION_LZ4 = WIREMUX_COMPRESSION_LZ4,
+} esp_wiremux_compression_algorithm_t;
 
 typedef enum {
     ESP_WIREMUX_BACKPRESSURE_DROP_NEWEST = 0,
@@ -62,6 +75,14 @@ typedef struct {
 } esp_wiremux_transport_t;
 
 typedef struct {
+    esp_wiremux_send_mode_t send_mode;
+    esp_wiremux_compression_algorithm_t compression;
+    uint32_t batch_interval_ms;
+    size_t batch_max_bytes;
+    bool force_compression;
+} esp_wiremux_direction_policy_t;
+
+typedef struct {
     size_t queue_depth;
     size_t max_payload_len;
     uint32_t default_write_timeout_ms;
@@ -79,7 +100,22 @@ typedef struct {
     esp_wiremux_payload_kind_t default_payload_kind;
     esp_wiremux_flush_policy_t flush_policy;
     esp_wiremux_backpressure_policy_t backpressure_policy;
+    esp_wiremux_direction_policy_t input_policy;
+    esp_wiremux_direction_policy_t output_policy;
 } esp_wiremux_channel_config_t;
+
+typedef struct {
+    uint64_t raw_bytes;
+    uint64_t encoded_bytes;
+    uint64_t encode_us;
+    uint32_t decode_ok;
+    uint32_t fallback_count;
+    size_t heap_peak;
+} esp_wiremux_codec_stats_t;
+
+typedef struct {
+    esp_wiremux_codec_stats_t compression[3];
+} esp_wiremux_diagnostics_t;
 
 typedef esp_err_t (*esp_wiremux_input_handler_t)(uint8_t channel_id,
                                                  const uint8_t *payload,
@@ -114,6 +150,8 @@ esp_err_t esp_wiremux_write_text(uint8_t channel_id,
                                  uint32_t timeout_ms);
 
 esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms);
+
+esp_err_t esp_wiremux_get_diagnostics(esp_wiremux_diagnostics_t *diagnostics);
 
 #ifdef __cplusplus
 }

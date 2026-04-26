@@ -17,6 +17,7 @@ pub const PAYLOAD_KIND_BINARY: u32 = 2;
 pub const PAYLOAD_KIND_PROTOBUF: u32 = 3;
 pub const PAYLOAD_KIND_CONTROL: u32 = 4;
 pub const PAYLOAD_KIND_EVENT: u32 = 5;
+pub const PAYLOAD_KIND_BATCH: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
@@ -98,7 +99,7 @@ fn encoded_len(envelope: &MuxEnvelope) -> usize {
         + varint_field_len(8, u64::from(envelope.flags))
 }
 
-fn varint_len(mut value: u64) -> usize {
+pub(crate) fn varint_len(mut value: u64) -> usize {
     let mut len = 1;
     while value >= 0x80 {
         value >>= 7;
@@ -107,15 +108,15 @@ fn varint_len(mut value: u64) -> usize {
     len
 }
 
-fn varint_field_len(field_number: u32, value: u64) -> usize {
+pub(crate) fn varint_field_len(field_number: u32, value: u64) -> usize {
     varint_len((u64::from(field_number) << 3) | 0) + varint_len(value)
 }
 
-fn bytes_field_len(field_number: u32, len: usize) -> usize {
+pub(crate) fn bytes_field_len(field_number: u32, len: usize) -> usize {
     varint_len((u64::from(field_number) << 3) | 2) + varint_len(len as u64) + len
 }
 
-fn write_varint(out: &mut Vec<u8>, mut value: u64) {
+pub(crate) fn write_varint(out: &mut Vec<u8>, mut value: u64) {
     while value >= 0x80 {
         out.push((value as u8) | 0x80);
         value >>= 7;
@@ -123,18 +124,18 @@ fn write_varint(out: &mut Vec<u8>, mut value: u64) {
     out.push(value as u8);
 }
 
-fn write_varint_field(out: &mut Vec<u8>, field_number: u32, value: u64) {
+pub(crate) fn write_varint_field(out: &mut Vec<u8>, field_number: u32, value: u64) {
     write_varint(out, (u64::from(field_number) << 3) | 0);
     write_varint(out, value);
 }
 
-fn write_bytes_field(out: &mut Vec<u8>, field_number: u32, value: &[u8]) {
+pub(crate) fn write_bytes_field(out: &mut Vec<u8>, field_number: u32, value: &[u8]) {
     write_varint(out, (u64::from(field_number) << 3) | 2);
     write_varint(out, value.len() as u64);
     out.extend_from_slice(value);
 }
 
-fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, DecodeError> {
+pub(crate) fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, DecodeError> {
     let mut result = 0u64;
 
     for shift in (0..64).step_by(7) {
@@ -150,7 +151,7 @@ fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, DecodeError> {
     Err(DecodeError::Truncated)
 }
 
-fn read_len_delimited(bytes: &[u8], cursor: &mut usize) -> Result<Vec<u8>, DecodeError> {
+pub(crate) fn read_len_delimited(bytes: &[u8], cursor: &mut usize) -> Result<Vec<u8>, DecodeError> {
     let len = read_varint(bytes, cursor)? as usize;
     let end = cursor.checked_add(len).ok_or(DecodeError::Truncated)?;
     if end > bytes.len() {

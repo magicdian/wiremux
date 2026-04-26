@@ -13,6 +13,9 @@ extern "C" {
 #define WIREMUX_MANIFEST_PAYLOAD_TYPE "wiremux.v1.DeviceManifest"
 #define WIREMUX_SDK_NAME_ESP "esp-wiremux"
 #define WIREMUX_FEATURE_MANIFEST_PROTOBUF (1u << 0)
+#define WIREMUX_FEATURE_BATCH (1u << 1)
+#define WIREMUX_FEATURE_COMPRESSION_HEATSHRINK (1u << 2)
+#define WIREMUX_FEATURE_COMPRESSION_LZ4 (1u << 3)
 
 typedef enum {
     WIREMUX_ENDIANNESS_UNSPECIFIED = 0,

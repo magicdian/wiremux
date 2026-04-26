@@ -18,6 +18,8 @@ wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
 - C core 侧也提供同等的单帧 decode/validate API，ESP 入站路径复用该公共规则。
 - 有效 mux frame 输出摘要。
 - frame 摘要包含 `payload_type`；manifest 会以 `wiremux.v1.DeviceManifest` 标识。
+- batch frame 会以 `wiremux.v1.MuxBatch` 标识；host 会根据 compression metadata
+  解压并逐条显示其中的 channel record。
 - 非 mux 字节按普通终端输出保留。
 - 构造 host-to-device input `MuxEnvelope`，并通过同一个 `WMUX` frame 格式发送到指定 channel。
 
@@ -45,6 +47,8 @@ cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_manifest
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_hello
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_log
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_stress
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_diag
 ```
 
 观察其他 channel：
@@ -57,6 +61,10 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 
 `--channel 2` 应看到 log adapter 输出，`--channel 3` 应看到 telemetry 输出。
 `mux_manifest` 会触发 channel 0 的 protobuf manifest 输出；当前 CLI 会显示
 `payload_type` 和 payload 摘要，后续可增加结构化 manifest decode。
+`mux_diag` 会输出 batch/compression 统计，包含 raw bytes、encoded bytes、
+ratio、encode_us、decode_ok、fallback_count 和 heap_peak。
+`mux_stress` 会向 channel 2 和 channel 3 发送相同的高重复 mock payload，便于在
+115200 等实际波特率下比较 heatshrink 与 LZ4。
 
 如果想在一次运行中看到所有 channel，不要传 `--channel`：
 

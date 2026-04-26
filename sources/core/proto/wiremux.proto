@@ -15,6 +15,13 @@ enum PayloadKind {
   PAYLOAD_KIND_PROTOBUF = 3;
   PAYLOAD_KIND_CONTROL = 4;
   PAYLOAD_KIND_EVENT = 5;
+  PAYLOAD_KIND_BATCH = 6;
+}
+
+enum CompressionAlgorithm {
+  COMPRESSION_ALGORITHM_NONE = 0;
+  COMPRESSION_ALGORITHM_HEATSHRINK = 1;
+  COMPRESSION_ALGORITHM_LZ4 = 2;
 }
 
 enum Endianness {
@@ -33,6 +40,27 @@ message MuxEnvelope {
   string payload_type = 6;
   bytes payload = 7;
   uint32 flags = 8;
+}
+
+message MuxRecord {
+  uint32 channel_id = 1;
+  Direction direction = 2;
+  uint32 sequence = 3;
+  uint64 timestamp_us = 4;
+  PayloadKind kind = 5;
+  string payload_type = 6;
+  bytes payload = 7;
+  uint32 flags = 8;
+}
+
+message MuxBatchRecords {
+  repeated MuxRecord records = 1;
+}
+
+message MuxBatch {
+  CompressionAlgorithm compression = 1;
+  bytes records = 2;
+  uint32 uncompressed_len = 3;
 }
 
 message ChannelDescriptor {

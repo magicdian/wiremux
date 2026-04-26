@@ -11,6 +11,7 @@
 #include "sdkconfig.h"
 
 static const char *TAG = "esp_wiremux_console_demo";
+static const size_t STRESS_SAMPLE_COUNT = 96;
 
 static int help_command(int argc, char **argv)
 {
@@ -18,7 +19,7 @@ static int help_command(int argc, char **argv)
     (void)argv;
     return esp_wiremux_write_text(1,
                                   ESP_WIREMUX_DIRECTION_OUTPUT,
-                                  "available commands: help hello mux_manifest mux_hello mux_log\n",
+                                  "available commands: help hello mux_manifest mux_hello mux_log mux_stress mux_diag\n",
                                   20);
 }
 
@@ -74,6 +75,98 @@ static int mux_log_command(int argc, char **argv)
                                   20);
 }
 
+static int mux_diag_command(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    esp_wiremux_diagnostics_t diagnostics;
+    esp_err_t err = esp_wiremux_get_diagnostics(&diagnostics);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (size_t codec = 0; codec < 3; ++codec) {
+        const esp_wiremux_codec_stats_t *stats = &diagnostics.compression[codec];
+        char line[192];
+        uint64_t ratio_milli = 0;
+        if (stats->raw_bytes > 0) {
+            ratio_milli = (stats->encoded_bytes * 1000u) / stats->raw_bytes;
+        }
+        snprintf(line,
+                 sizeof(line),
+                 "codec=%u raw_bytes=%llu encoded_bytes=%llu ratio_milli=%llu encode_us=%llu decode_ok=%lu fallback_count=%lu heap_peak=%u\n",
+                 (unsigned)codec,
+                 (unsigned long long)stats->raw_bytes,
+                 (unsigned long long)stats->encoded_bytes,
+                 (unsigned long long)ratio_milli,
+                 (unsigned long long)stats->encode_us,
+                 (unsigned long)stats->decode_ok,
+                 (unsigned long)stats->fallback_count,
+                 (unsigned)stats->heap_peak);
+        err = esp_wiremux_write_text(1, ESP_WIREMUX_DIRECTION_OUTPUT, line, 20);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
+static int mux_stress_command(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    esp_err_t err = esp_wiremux_write_text(1,
+                                           ESP_WIREMUX_DIRECTION_OUTPUT,
+                                           "starting matched batch compression stress\n",
+                                           20);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (size_t i = 0; i < STRESS_SAMPLE_COUNT; ++i) {
+        char line[160];
+        snprintf(line,
+                 sizeof(line),
+                 "mock stress seq=%03u component=wiremux phase=batch codec=probe sensor=temp value=24.%02u status=stable pattern=ABCABCABCABC",
+                 (unsigned)i,
+                 (unsigned)(i % 100));
+
+        err = esp_wiremux_write_text(2, ESP_WIREMUX_DIRECTION_OUTPUT, line, 20);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if ((i % 8) == 7) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+
+    for (size_t i = 0; i < STRESS_SAMPLE_COUNT; ++i) {
+        char line[160];
+        snprintf(line,
+                 sizeof(line),
+                 "mock stress seq=%03u component=wiremux phase=batch codec=probe sensor=temp value=24.%02u status=stable pattern=ABCABCABCABC",
+                 (unsigned)i,
+                 (unsigned)(i % 100));
+
+        err = esp_wiremux_write_text(3, ESP_WIREMUX_DIRECTION_OUTPUT, line, 20);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if ((i % 8) == 7) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+
+    return esp_wiremux_write_text(1,
+                                  ESP_WIREMUX_DIRECTION_OUTPUT,
+                                  "completed matched batch compression stress\n",
+                                  20);
+}
+
 static void register_demo_commands(void)
 {
     const esp_console_cmd_t help_cmd = {
@@ -115,6 +208,22 @@ static void register_demo_commands(void)
         .func = mux_log_command,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&mux_log_cmd));
+
+    const esp_console_cmd_t mux_stress_cmd = {
+        .command = "mux_stress",
+        .help = "Emit matched high-volume channel 2 and 3 records for codec comparison",
+        .hint = NULL,
+        .func = mux_stress_command,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&mux_stress_cmd));
+
+    const esp_console_cmd_t mux_diag_cmd = {
+        .command = "mux_diag",
+        .help = "Emit mux batch/compression diagnostic counters",
+        .hint = NULL,
+        .func = mux_diag_command,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&mux_diag_cmd));
 }
 
 static void init_console_dispatcher(void)
@@ -164,6 +273,12 @@ static void init_mux(void)
         .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_TEXT,
         .flush_policy = ESP_WIREMUX_FLUSH_PERIODIC,
         .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_DROP_OLDEST,
+        .output_policy = {
+            .send_mode = ESP_WIREMUX_SEND_BATCHED,
+            .compression = ESP_WIREMUX_COMPRESSION_LZ4,
+            .batch_interval_ms = 100,
+            .batch_max_bytes = 384,
+        },
     };
     ESP_ERROR_CHECK(esp_wiremux_register_channel(&telemetry_channel));
 

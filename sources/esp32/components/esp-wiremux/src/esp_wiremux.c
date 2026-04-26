@@ -8,7 +8,10 @@
 
 #include "esp_timer.h"
 #include "esp_wiremux_frame.h"
+#include "esp_heap_caps.h"
 #include "sdkconfig.h"
+#include "wiremux_batch.h"
+#include "wiremux_compression.h"
 #include "wiremux_manifest.h"
 
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
@@ -19,7 +22,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-typedef struct {
+typedef struct pending_item {
     uint32_t channel_id;
     uint32_t direction;
     esp_wiremux_payload_kind_t kind;
@@ -29,6 +32,8 @@ typedef struct {
     const char *payload_type;
     size_t payload_type_len;
     size_t payload_len;
+    esp_wiremux_direction_policy_t policy;
+    struct pending_item *next;
     uint8_t payload[];
 } pending_item_t;
 
@@ -52,6 +57,7 @@ typedef struct {
     uint8_t *rx_buffer;
     size_t rx_len;
     size_t rx_capacity;
+    esp_wiremux_diagnostics_t diagnostics;
     channel_state_t channels[ESP_WIREMUX_MAX_CHANNELS];
 } mux_context_t;
 
@@ -70,8 +76,13 @@ static esp_err_t prepare_default_transport(const esp_wiremux_config_t *config);
 static void mux_task(void *arg);
 static void mux_input_task(void *arg);
 static void free_pending_item(pending_item_t *item);
+static void free_pending_list(pending_item_t *item);
 static esp_err_t wiremux_status_to_esp(wiremux_status_t status);
 static void item_to_envelope(const pending_item_t *item, wiremux_envelope_t *envelope);
+static void item_to_record(const pending_item_t *item, wiremux_record_t *record);
+static esp_err_t send_single_item(pending_item_t *item);
+static esp_err_t send_batch_list(pending_item_t *head, size_t item_count, uint32_t compression);
+static esp_err_t send_envelope(const wiremux_envelope_t *envelope, uint32_t flags);
 static esp_err_t write_typed(uint8_t channel_id,
                              uint32_t direction,
                              esp_wiremux_payload_kind_t kind,
@@ -85,10 +96,22 @@ static esp_err_t enqueue_item(pending_item_t *item,
                               uint32_t timeout_ms);
 static void parse_rx_buffer_locked(void);
 static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelope);
+static esp_err_t dispatch_input_record_locked(const wiremux_record_t *record);
 static uint32_t native_endianness(void);
 static const char *default_transport_name(void);
 static bool is_valid_direction(uint32_t direction);
 static bool are_valid_channel_directions(uint32_t directions);
+static esp_wiremux_direction_policy_t default_direction_policy(void);
+static esp_wiremux_direction_policy_t resolve_direction_policy(const esp_wiremux_channel_config_t *channel,
+                                                               uint32_t direction);
+static uint32_t normalize_compression(uint32_t compression);
+static uint32_t policy_interval_ms(const esp_wiremux_direction_policy_t *policy);
+static size_t policy_batch_max_bytes(const esp_wiremux_direction_policy_t *policy);
+static void update_codec_stats(uint32_t compression,
+                               size_t raw_bytes,
+                               size_t encoded_bytes,
+                               uint64_t encode_us,
+                               bool fallback);
 
 void esp_wiremux_config_init(esp_wiremux_config_t *config)
 {
@@ -223,6 +246,10 @@ esp_err_t esp_wiremux_register_channel(const esp_wiremux_channel_config_t *confi
     xSemaphoreTake(s_mux.lock, portMAX_DELAY);
     s_mux.channels[config->channel_id].registered = true;
     s_mux.channels[config->channel_id].config = *config;
+    s_mux.channels[config->channel_id].config.input_policy.compression =
+        normalize_compression(s_mux.channels[config->channel_id].config.input_policy.compression);
+    s_mux.channels[config->channel_id].config.output_policy.compression =
+        normalize_compression(s_mux.channels[config->channel_id].config.output_policy.compression);
     xSemaphoreGive(s_mux.lock);
 
     return ESP_OK;
@@ -336,6 +363,7 @@ static esp_err_t write_typed(uint8_t channel_id,
     item->payload_type = payload_type;
     item->payload_type_len = payload_type != NULL ? strlen(payload_type) : 0;
     item->payload_len = payload_len;
+    item->policy = resolve_direction_policy(&channel_state.config, direction);
     if (payload_len > 0) {
         memcpy(item->payload, payload, payload_len);
     }
@@ -396,7 +424,10 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
         .native_endianness = native_endianness(),
         .max_payload_len = (uint32_t)max_payload_len,
         .transport = default_transport_name(),
-        .feature_flags = WIREMUX_FEATURE_MANIFEST_PROTOBUF,
+        .feature_flags = WIREMUX_FEATURE_MANIFEST_PROTOBUF |
+                         WIREMUX_FEATURE_BATCH |
+                         WIREMUX_FEATURE_COMPRESSION_HEATSHRINK |
+                         WIREMUX_FEATURE_COMPRESSION_LZ4,
         .sdk_name = WIREMUX_SDK_NAME_ESP,
         .sdk_version = "0.1.0",
     };
@@ -425,6 +456,18 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
 
     free(payload);
     return err;
+}
+
+esp_err_t esp_wiremux_get_diagnostics(esp_wiremux_diagnostics_t *diagnostics)
+{
+    if (!s_mux.initialized || diagnostics == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    *diagnostics = s_mux.diagnostics;
+    xSemaphoreGive(s_mux.lock);
+    return ESP_OK;
 }
 
 static esp_err_t enqueue_item(pending_item_t *item,
@@ -464,57 +507,66 @@ static esp_err_t enqueue_item(pending_item_t *item,
 static void mux_task(void *arg)
 {
     (void)arg;
+    pending_item_t *deferred = NULL;
 
     while (true) {
-        pending_item_t *item = NULL;
-        if (xQueueReceive(s_mux.queue, &item, portMAX_DELAY) != pdTRUE) {
+        pending_item_t *item = deferred;
+        deferred = NULL;
+        if (item == NULL && xQueueReceive(s_mux.queue, &item, portMAX_DELAY) != pdTRUE) {
             continue;
         }
         if (item == NULL) {
             break;
         }
 
-        wiremux_envelope_t mux_envelope;
-        item_to_envelope(item, &mux_envelope);
-
-        const size_t envelope_len = wiremux_envelope_encoded_len(&mux_envelope);
-        uint8_t *envelope = malloc(envelope_len);
-        if (envelope == NULL) {
+        if (item->policy.send_mode != ESP_WIREMUX_SEND_BATCHED) {
+            (void)send_single_item(item);
             free_pending_item(item);
             continue;
         }
 
-        size_t envelope_written = 0;
-        if (wiremux_envelope_encode(&mux_envelope, envelope, envelope_len, &envelope_written) !=
-            WIREMUX_STATUS_OK) {
-            free(envelope);
-            free_pending_item(item);
-            continue;
-        }
+        pending_item_t *head = item;
+        pending_item_t *tail = item;
+        size_t item_count = 1;
+        wiremux_record_t first_record = {0};
+        item_to_record(item, &first_record);
+        size_t batch_bytes = wiremux_record_encoded_len(&first_record);
+        const uint32_t compression = normalize_compression(item->policy.compression);
+        const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(policy_interval_ms(&item->policy));
+        const size_t max_batch_bytes = policy_batch_max_bytes(&item->policy);
 
-        const size_t frame_len = esp_wiremux_frame_encoded_len(envelope_written);
-        uint8_t *frame = malloc(frame_len);
-        if (frame != NULL) {
-            size_t written = 0;
-            const esp_wiremux_frame_header_t header = {
-                .version = ESP_WIREMUX_FRAME_VERSION,
-                .flags = (uint8_t)(item->flags & 0xffu),
-            };
-            if (esp_wiremux_frame_encode(&header,
-                                         envelope,
-                                         envelope_written,
-                                         frame,
-                                         frame_len,
-                                         &written) == ESP_OK) {
-                (void)s_mux.config.transport.write(frame,
-                                                   written,
-                                                   s_mux.config.default_write_timeout_ms,
-                                                   s_mux.config.transport.user_ctx);
+        while (batch_bytes < max_batch_bytes) {
+            const TickType_t now = xTaskGetTickCount();
+            const TickType_t wait_ticks = now >= deadline ? 0 : deadline - now;
+            pending_item_t *next = NULL;
+            if (xQueueReceive(s_mux.queue, &next, wait_ticks) != pdTRUE) {
+                break;
             }
-            free(frame);
+            if (next == NULL) {
+                (void)send_batch_list(head, item_count, compression);
+                free_pending_list(head);
+                deferred = NULL;
+                vTaskDelete(NULL);
+                return;
+            }
+            if (next->policy.send_mode != ESP_WIREMUX_SEND_BATCHED ||
+                normalize_compression(next->policy.compression) != compression) {
+                deferred = next;
+                break;
+            }
+            wiremux_record_t record = {0};
+            item_to_record(next, &record);
+            batch_bytes += wiremux_record_encoded_len(&record);
+            tail->next = next;
+            tail = next;
+            item_count++;
+            if (batch_bytes >= max_batch_bytes) {
+                break;
+            }
         }
-        free(envelope);
-        free_pending_item(item);
+
+        (void)send_batch_list(head, item_count, compression);
+        free_pending_list(head);
     }
 
     vTaskDelete(NULL);
@@ -629,8 +681,64 @@ static void parse_rx_buffer_locked(void)
 
 static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelope)
 {
-    if (envelope == NULL ||
-        envelope->direction != ESP_WIREMUX_DIRECTION_INPUT ||
+    if (envelope == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (envelope->kind == ESP_WIREMUX_PAYLOAD_KIND_BATCH ||
+        (envelope->payload_type_len == strlen(WIREMUX_BATCH_PAYLOAD_TYPE) &&
+         memcmp(envelope->payload_type, WIREMUX_BATCH_PAYLOAD_TYPE, envelope->payload_type_len) == 0)) {
+        if (envelope->payload == NULL || envelope->payload_len == 0) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        wiremux_batch_t batch = {0};
+        esp_err_t err = wiremux_status_to_esp(wiremux_batch_decode(envelope->payload,
+                                                                   envelope->payload_len,
+                                                                   &batch));
+        if (err != ESP_OK) {
+            return err;
+        }
+        const size_t records_capacity = batch.compression == WIREMUX_COMPRESSION_NONE
+                                            ? batch.records_len
+                                            : batch.uncompressed_len;
+        uint8_t *records_payload = malloc(records_capacity);
+        if (records_payload == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+        size_t records_len = 0;
+        err = wiremux_status_to_esp(wiremux_decompress(batch.compression,
+                                                       batch.records,
+                                                       batch.records_len,
+                                                       records_payload,
+                                                       records_capacity,
+                                                       &records_len));
+        if (err != ESP_OK) {
+            free(records_payload);
+            return err;
+        }
+        if (batch.compression <= WIREMUX_COMPRESSION_LZ4) {
+            s_mux.diagnostics.compression[batch.compression].decode_ok++;
+        }
+        wiremux_record_t records[ESP_WIREMUX_MAX_CHANNELS] = {0};
+        size_t record_count = 0;
+        err = wiremux_status_to_esp(wiremux_batch_records_decode(records_payload,
+                                                                 records_len,
+                                                                 records,
+                                                                 ESP_WIREMUX_MAX_CHANNELS,
+                                                                 &record_count));
+        if (err == ESP_OK) {
+            for (size_t i = 0; i < record_count; ++i) {
+                err = dispatch_input_record_locked(&records[i]);
+                if (err != ESP_OK) {
+                    break;
+                }
+            }
+        }
+        free(records_payload);
+        return err;
+    }
+
+    if (envelope->direction != ESP_WIREMUX_DIRECTION_INPUT ||
         envelope->channel_id >= ESP_WIREMUX_MAX_CHANNELS ||
         envelope->payload_len > s_mux.config.max_payload_len) {
         return ESP_ERR_INVALID_ARG;
@@ -663,9 +771,38 @@ static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelo
     return err;
 }
 
+static esp_err_t dispatch_input_record_locked(const wiremux_record_t *record)
+{
+    if (record == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const wiremux_envelope_t envelope = {
+        .channel_id = record->channel_id,
+        .direction = record->direction,
+        .sequence = record->sequence,
+        .timestamp_us = record->timestamp_us,
+        .kind = record->kind,
+        .payload_type = record->payload_type,
+        .payload_type_len = record->payload_type_len,
+        .payload = record->payload,
+        .payload_len = record->payload_len,
+        .flags = record->flags,
+    };
+    return dispatch_input_envelope_locked(&envelope);
+}
+
 static void free_pending_item(pending_item_t *item)
 {
     free(item);
+}
+
+static void free_pending_list(pending_item_t *item)
+{
+    while (item != NULL) {
+        pending_item_t *next = item->next;
+        free_pending_item(item);
+        item = next;
+    }
 }
 
 static void item_to_envelope(const pending_item_t *item, wiremux_envelope_t *envelope)
@@ -681,6 +818,185 @@ static void item_to_envelope(const pending_item_t *item, wiremux_envelope_t *env
     envelope->payload = item->payload;
     envelope->payload_len = item->payload_len;
     envelope->flags = item->flags;
+}
+
+static void item_to_record(const pending_item_t *item, wiremux_record_t *record)
+{
+    memset(record, 0, sizeof(*record));
+    record->channel_id = item->channel_id;
+    record->direction = item->direction;
+    record->sequence = item->sequence;
+    record->timestamp_us = item->timestamp_us;
+    record->kind = item->kind;
+    record->payload_type = item->payload_type;
+    record->payload_type_len = item->payload_type_len;
+    record->payload = item->payload;
+    record->payload_len = item->payload_len;
+    record->flags = item->flags;
+}
+
+static esp_err_t send_single_item(pending_item_t *item)
+{
+    wiremux_envelope_t envelope;
+    item_to_envelope(item, &envelope);
+    return send_envelope(&envelope, item->flags);
+}
+
+static esp_err_t send_batch_list(pending_item_t *head, size_t item_count, uint32_t compression)
+{
+    if (head == NULL || item_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    wiremux_record_t *records = calloc(item_count, sizeof(*records));
+    if (records == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t index = 0;
+    for (pending_item_t *item = head; item != NULL && index < item_count; item = item->next) {
+        item_to_record(item, &records[index++]);
+    }
+
+    const size_t records_len = wiremux_batch_records_encoded_len(records, item_count);
+    uint8_t *records_payload = malloc(records_len);
+    if (records_payload == NULL) {
+        free(records);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t records_written = 0;
+    esp_err_t err = wiremux_status_to_esp(wiremux_batch_records_encode(records,
+                                                                       item_count,
+                                                                       records_payload,
+                                                                       records_len,
+                                                                       &records_written));
+    free(records);
+    if (err != ESP_OK) {
+        free(records_payload);
+        return err;
+    }
+
+    const uint32_t requested_compression = normalize_compression(compression);
+    uint32_t selected_compression = requested_compression;
+    const uint64_t encode_started_us = (uint64_t)esp_timer_get_time();
+    size_t encoded_records_len = records_written;
+    uint8_t *encoded_records = records_payload;
+    uint8_t *compressed_records = NULL;
+    bool fallback = false;
+
+    if (selected_compression != WIREMUX_COMPRESSION_NONE) {
+        compressed_records = malloc(records_written + 16);
+        if (compressed_records != NULL) {
+            size_t compressed_written = 0;
+            if (wiremux_compress(selected_compression,
+                                 records_payload,
+                                 records_written,
+                                 compressed_records,
+                                 records_written + 16,
+                                 &compressed_written) == WIREMUX_STATUS_OK &&
+                (compressed_written < records_written || head->policy.force_compression)) {
+                encoded_records = compressed_records;
+                encoded_records_len = compressed_written;
+            } else {
+                selected_compression = WIREMUX_COMPRESSION_NONE;
+                fallback = true;
+            }
+        } else {
+            selected_compression = WIREMUX_COMPRESSION_NONE;
+            fallback = true;
+        }
+    }
+    const uint64_t encode_us = (uint64_t)esp_timer_get_time() - encode_started_us;
+
+    const wiremux_batch_t batch = {
+        .compression = selected_compression,
+        .records = encoded_records,
+        .records_len = encoded_records_len,
+        .uncompressed_len = (uint32_t)records_written,
+    };
+    const size_t batch_len = wiremux_batch_encoded_len(&batch);
+    uint8_t *batch_payload = malloc(batch_len);
+    if (batch_payload == NULL) {
+        free(compressed_records);
+        free(records_payload);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t batch_written = 0;
+    err = wiremux_status_to_esp(wiremux_batch_encode(&batch,
+                                                     batch_payload,
+                                                     batch_len,
+                                                     &batch_written));
+    if (err == ESP_OK) {
+        const wiremux_envelope_t envelope = {
+            .channel_id = ESP_WIREMUX_CHANNEL_SYSTEM,
+            .direction = ESP_WIREMUX_DIRECTION_OUTPUT,
+            .sequence = 0,
+            .timestamp_us = (uint64_t)esp_timer_get_time(),
+            .kind = ESP_WIREMUX_PAYLOAD_KIND_BATCH,
+            .payload_type = WIREMUX_BATCH_PAYLOAD_TYPE,
+            .payload_type_len = strlen(WIREMUX_BATCH_PAYLOAD_TYPE),
+            .payload = batch_payload,
+            .payload_len = batch_written,
+            .flags = 0,
+        };
+        err = send_envelope(&envelope, 0);
+    }
+
+    update_codec_stats(requested_compression, records_written, encoded_records_len, encode_us, fallback);
+    free(batch_payload);
+    free(compressed_records);
+    free(records_payload);
+    return err;
+}
+
+static esp_err_t send_envelope(const wiremux_envelope_t *envelope, uint32_t flags)
+{
+    const size_t envelope_len = wiremux_envelope_encoded_len(envelope);
+    uint8_t *encoded_envelope = malloc(envelope_len);
+    if (encoded_envelope == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t envelope_written = 0;
+    esp_err_t err = wiremux_status_to_esp(wiremux_envelope_encode(envelope,
+                                                                  encoded_envelope,
+                                                                  envelope_len,
+                                                                  &envelope_written));
+    if (err != ESP_OK) {
+        free(encoded_envelope);
+        return err;
+    }
+
+    const size_t frame_len = esp_wiremux_frame_encoded_len(envelope_written);
+    uint8_t *frame = malloc(frame_len);
+    if (frame == NULL) {
+        free(encoded_envelope);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t written = 0;
+    const esp_wiremux_frame_header_t header = {
+        .version = ESP_WIREMUX_FRAME_VERSION,
+        .flags = (uint8_t)(flags & 0xffu),
+    };
+    err = esp_wiremux_frame_encode(&header,
+                                   encoded_envelope,
+                                   envelope_written,
+                                   frame,
+                                   frame_len,
+                                   &written);
+    if (err == ESP_OK) {
+        err = s_mux.config.transport.write(frame,
+                                           written,
+                                           s_mux.config.default_write_timeout_ms,
+                                           s_mux.config.transport.user_ctx);
+    }
+
+    free(frame);
+    free(encoded_envelope);
+    return err;
 }
 
 static esp_err_t wiremux_status_to_esp(wiremux_status_t status)
@@ -730,6 +1046,97 @@ static bool are_valid_channel_directions(uint32_t directions)
 {
     const uint32_t allowed = ESP_WIREMUX_DIRECTION_INPUT | ESP_WIREMUX_DIRECTION_OUTPUT;
     return directions != 0 && (directions & ~allowed) == 0;
+}
+
+static esp_wiremux_direction_policy_t default_direction_policy(void)
+{
+    return (esp_wiremux_direction_policy_t) {
+        .send_mode = ESP_WIREMUX_SEND_IMMEDIATE,
+        .compression = ESP_WIREMUX_COMPRESSION_NONE,
+        .batch_interval_ms = 100,
+        .batch_max_bytes = 0,
+        .force_compression = false,
+    };
+}
+
+static esp_wiremux_direction_policy_t resolve_direction_policy(const esp_wiremux_channel_config_t *channel,
+                                                               uint32_t direction)
+{
+    esp_wiremux_direction_policy_t policy = default_direction_policy();
+    if (channel == NULL) {
+        return policy;
+    }
+
+    const esp_wiremux_direction_policy_t configured =
+        direction == ESP_WIREMUX_DIRECTION_INPUT ? channel->input_policy : channel->output_policy;
+    if (configured.send_mode == ESP_WIREMUX_SEND_BATCHED) {
+        policy.send_mode = ESP_WIREMUX_SEND_BATCHED;
+    } else if (channel->flush_policy == ESP_WIREMUX_FLUSH_PERIODIC ||
+               channel->flush_policy == ESP_WIREMUX_FLUSH_HIGH_WATERMARK) {
+        policy.send_mode = ESP_WIREMUX_SEND_BATCHED;
+    }
+    policy.compression = normalize_compression(configured.compression);
+    policy.batch_interval_ms = configured.batch_interval_ms != 0 ? configured.batch_interval_ms : 100;
+    policy.batch_max_bytes = configured.batch_max_bytes;
+    policy.force_compression = configured.force_compression;
+    return policy;
+}
+
+static uint32_t normalize_compression(uint32_t compression)
+{
+    switch (compression) {
+    case WIREMUX_COMPRESSION_NONE:
+    case WIREMUX_COMPRESSION_HEATSHRINK:
+    case WIREMUX_COMPRESSION_LZ4:
+        return compression;
+    default:
+        return WIREMUX_COMPRESSION_NONE;
+    }
+}
+
+static uint32_t policy_interval_ms(const esp_wiremux_direction_policy_t *policy)
+{
+    if (policy == NULL || policy->batch_interval_ms == 0) {
+        return 100;
+    }
+    return policy->batch_interval_ms;
+}
+
+static size_t policy_batch_max_bytes(const esp_wiremux_direction_policy_t *policy)
+{
+    if (policy == NULL || policy->batch_max_bytes == 0) {
+        return s_mux.config.max_payload_len > 64 ? s_mux.config.max_payload_len - 64
+                                                 : s_mux.config.max_payload_len;
+    }
+    if (policy->batch_max_bytes > s_mux.config.max_payload_len) {
+        return s_mux.config.max_payload_len;
+    }
+    return policy->batch_max_bytes;
+}
+
+static void update_codec_stats(uint32_t compression,
+                               size_t raw_bytes,
+                               size_t encoded_bytes,
+                               uint64_t encode_us,
+                               bool fallback)
+{
+    if (compression > WIREMUX_COMPRESSION_LZ4) {
+        compression = WIREMUX_COMPRESSION_NONE;
+    }
+
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    esp_wiremux_codec_stats_t *stats = &s_mux.diagnostics.compression[compression];
+    stats->raw_bytes += raw_bytes;
+    stats->encoded_bytes += encoded_bytes;
+    stats->encode_us += encode_us;
+    if (fallback) {
+        stats->fallback_count++;
+    }
+    const size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    if (stats->heap_peak == 0 || free_heap < stats->heap_peak) {
+        stats->heap_peak = free_heap;
+    }
+    xSemaphoreGive(s_mux.lock);
 }
 
 static esp_err_t default_stdout_transport_write(const uint8_t *data,

@@ -1,5 +1,7 @@
 idf_component_register(
     SRCS
+        "../../../core/c/src/wiremux_batch.c"
+        "../../../core/c/src/wiremux_compression.c"
         "../../../core/c/src/wiremux_frame.c"
         "../../../core/c/src/wiremux_envelope.c"
         "../../../core/c/src/wiremux_manifest.c"

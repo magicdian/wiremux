@@ -17,9 +17,11 @@ hello
 mux_manifest
 mux_hello
 mux_log
+mux_stress
+mux_diag
 ```
 
-The app keeps running after boot and emits a telemetry mux frame every two seconds so the host listener has continuous data to observe after reset.
+The app keeps running after boot and emits telemetry every two seconds so the host listener has continuous data to observe after reset. Log and telemetry output are configured as batched channels; log output uses heatshrink compression by default and telemetry output uses LZ4 compression by default. `mux_stress` emits matched synthetic records to channel 2 and channel 3 so both codecs can be compared with similar payloads at the current serial baud rate.
 
 Build from this directory with ESP-IDF v5.4 or newer:
 
@@ -44,6 +46,8 @@ cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_manifest
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_hello
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_log
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_stress
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_diag
 ```
 
 Observe logs and telemetry on separate channels:
@@ -54,6 +58,9 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 
 ```
 
 To see every channel in one run, omit `--channel`; `--line` defaults to sending on channel 1.
+
+`mux_diag` prints per-codec counters: raw bytes, encoded bytes, ratio in milli-units,
+encode time, decode successes, fallback count, and observed heap low-water mark.
 
 For a corrupt inbound frame check, flip any payload byte in a captured `send` frame without updating the CRC and write it to the same serial port. The ESP32 inbound scanner drops the candidate frame before channel dispatch, so the channel 1 listener should show no command output and the app should keep emitting channel 2 logs and channel 3 telemetry.
 

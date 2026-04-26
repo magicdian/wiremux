@@ -16,6 +16,11 @@ Core-owned concepts:
   payload type, payload bytes, and flags.
 - Portable C envelope API: `c/include/wiremux_envelope.h` and
   `c/src/wiremux_envelope.c`.
+- Generic batch fields: repeated channel records, compression algorithm, encoded
+  records bytes, and uncompressed record payload length.
+- Portable C batch and codec APIs: `c/include/wiremux_batch.h`,
+  `c/include/wiremux_compression.h`, `c/src/wiremux_batch.c`, and
+  `c/src/wiremux_compression.c`.
 - Channel model: system channel, input/output direction validation, payload
   kind semantics, and manifest schema.
 - Portable C manifest API: `c/include/wiremux_manifest.h` and
@@ -47,6 +52,9 @@ Current ESP adapter integration:
   `wiremux_frame_decode()`, instead of owning private protocol helpers.
 - `esp_wiremux_emit_manifest()` emits a `wiremux.v1.DeviceManifest` protobuf
   payload with `payload_type = "wiremux.v1.DeviceManifest"`.
+- Batched device output uses a system-channel `MuxEnvelope` with
+  `kind = batch`, `payload_type = "wiremux.v1.MuxBatch"`, and payload bytes that
+  decode to `wiremux.v1.MuxBatch`.
 - ESP runtime code continues to own FreeRTOS tasks, transport setup, timers, and
   ESP console/log bindings.
 
