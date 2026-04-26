@@ -10,14 +10,15 @@
 
 ## Host 侧运行
 
-当前 host 工具是非 TUI CLI，首期用于验证协议解析和 mixed stream 行为。
+当前 host 工具是非 TUI CLI，用于验证 mixed stream 解析、channel 过滤和 console line-mode 输入。
 
 ```bash
 cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 ```
 
-`/dev/tty.usbmodem2101` 是当前开发设备名，实际使用时可以替换成自己的设备路径。
+`/dev/tty.usbmodem2101` 是当前开发设备名，实际使用时可以替换成自己的设备路径。macOS 上如果传入 `/dev/tty.usbmodem*`，host 工具会优先尝试配对的 `/dev/cu.usbmodem*`。
 
 ## ESP32 侧运行
 
@@ -40,11 +41,13 @@ idf.py build flash monitor
 
 如果本机没有 `idf.py`，只能先做源码检查，不能完成 ESP-IDF 构建验证。
 
-示例启动后不会立即退出。它会启动 ESP-IDF console REPL，并每 2 秒通过 mux telemetry channel 输出一条示例数据，方便 host 工具在设备 reset 后继续观察数据。
+示例启动后不会立即退出。它会注册 ESP-IDF console 命令，并每 2 秒通过 mux telemetry channel 输出一条示例数据，方便 host 工具在设备 reset 后继续观察数据。
+
+line-mode console 通过 mux channel 1 收发。烧录完成后，不要让 `idf.py monitor` 和 host 工具同时占用同一个串口；关闭 monitor 后运行 host listen/send。
 
 ## 当前限制
 
-- Host CLI 暂时只打开设备路径并读取字节流，尚未配置平台串口 termios 参数。
+- Host CLI 使用 `serialport` backend 打开 macOS/Linux/Windows 串口。
 - ESP32 侧首期实现 line-mode console adapter。
 - `ratatui` TUI 不在首期范围内。
 - panic、early boot、ROM log 捕获不在首期范围内。

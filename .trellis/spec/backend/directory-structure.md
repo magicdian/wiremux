@@ -133,16 +133,20 @@ Current listener:
 
 ```bash
 esp-serial-mux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]
+esp-serial-mux listen --port <path> [--channel output_id] [--send-channel input_id] [--line text]
+esp-serial-mux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]
 ```
 
 Required behavior:
 
 - Without `--channel`, print ordinary terminal bytes and all decoded mux frames.
 - With `--channel <id>`, suppress ordinary terminal bytes and print only decoded mux frames for that channel.
+- `listen --line <text>` must write one host-to-device input frame after each successful serial connection, then keep listening on the same serial handle. This is the preferred single-process hardware verification path because most serial devices are exclusively opened.
+- `listen --line <text>` defaults to input channel 1. `--send-channel <id>` overrides the input target while `--channel <id>` keeps its output-filter meaning.
+- `send --channel <id> --line <text>` is a non-interactive one-shot path for scripts and tests, but it should not be used concurrently with a listener on the same serial device.
 - On macOS, prefer `/dev/cu.*` over the paired `/dev/tty.*` device when the user passes a USB serial/JTAG path.
-- Configure serial paths in raw mode before reading so binary mux frames are not transformed by the terminal driver.
-
-Future MVP transmit commands must reuse the same frame/envelope implementation rather than duplicating protocol constants in `main.rs`.
+- Use the Rust `serialport` backend for macOS, Linux, and Windows. Do not shell out to `stty` for normal operation.
+- Host transmit commands must reuse `encode_envelope()` and `build_frame_payload_with_max()` rather than duplicating protocol constants in `main.rs`.
 
 ### Good/Base/Bad Cases
 
@@ -156,3 +160,63 @@ Future MVP transmit commands must reuse the same frame/envelope implementation r
 - Rust tests must cover valid frames, partial frames, false magic, bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
 - ESP frame encoder changes must be validated against Rust scanner output before release.
 - Bidirectional MVP changes must add host frame-building tests and ESP inbound dispatch tests or demo-level manual verification steps.
+
+## Scenario: Single-Process Console Verification
+
+### 1. Scope / Trigger
+
+Trigger: validating a command that needs both host input and decoded output on the same physical serial device.
+
+### 2. Signatures
+
+```bash
+esp-serial-mux listen --port <path> --channel 1 --line help
+esp-serial-mux listen --port <path> --send-channel 1 --channel 2 --line mux_log
+esp-serial-mux listen --port <path> --send-channel 1 --channel 3 --line mux_hello
+```
+
+### 3. Contracts
+
+- `--line` sends exactly one input frame per successful connection.
+- `--send-channel` selects the input channel. If omitted, `--channel` is reused as the input target; if both are omitted, input defaults to channel 1.
+- `--channel` filters decoded output only; it must not be required to send input.
+- The listener must continue decoding output after sending the input frame.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| `listen --channel 1 --line help` | send input to channel 1 and print console output channel 1 |
+| `listen --send-channel 1 --channel 2 --line mux_log` | send console command to channel 1 and print log output channel 2 |
+| `listen --line mux_log` | send input to channel 1 and print all decoded mux frames plus ordinary terminal bytes |
+| invalid channel value | return a clear CLI parse error before opening serial |
+| payload exceeds max payload | return a clear input-frame size error |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `listen --channel 1 --line help` prints a channel-1 command response.
+- Base: `listen --send-channel 1 --channel 3 --line mux_hello` prints telemetry output without a second serial process.
+- Bad: running `send` from a second process while `listen` owns the port may fail or starve output; use `listen --line` for hardware checks.
+
+### 6. Tests Required
+
+- Host parser test for `listen --line` defaulting to send channel 1.
+- Host parser test for `--send-channel` differing from output `--channel`.
+- Host frame round-trip test that builds an input frame and decodes it through `FrameScanner`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```bash
+esp-serial-mux listen --port /dev/cu.usbmodem2101 --channel 1
+esp-serial-mux send --port /dev/cu.usbmodem2101 --channel 1 --line help
+```
+
+This assumes two processes can reliably own the same serial port.
+
+#### Correct
+
+```bash
+esp-serial-mux listen --port /dev/cu.usbmodem2101 --channel 1 --line help
+```

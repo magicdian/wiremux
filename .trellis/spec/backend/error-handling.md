@@ -94,6 +94,21 @@ Required validation:
 | input payload exceeds configured max | reject before invoking callback |
 | callback returns error | report through system/control channel when implemented |
 
+### ESP Default USB Serial/JTAG Transport
+
+When `esp_serial_mux_config_init()` leaves the default USB Serial/JTAG transport installed, `esp_serial_mux_init()` must prepare the transport before `esp_serial_mux_start()` creates the RX task.
+
+Required behavior:
+
+| Condition | Result |
+|-----------|--------|
+| default USB Serial/JTAG read or write transport is used and driver is not installed | call `usb_serial_jtag_driver_install()` before mux start |
+| USB Serial/JTAG driver is already installed | reuse it, do not reinstall |
+| custom read and write transport are both provided | do not install USB Serial/JTAG driver |
+| driver install fails | return the install error from `esp_serial_mux_init()` and do not start tasks |
+
+Assertion point: no task may call `usb_serial_jtag_read_bytes()` unless `usb_serial_jtag_is_driver_installed()` was true or driver install just succeeded.
+
 ## Common Mistakes
 
 ### Logging from mux internals
@@ -107,3 +122,9 @@ The host runs on mixed terminal streams. A bad frame candidate must not terminat
 ### Claiming MVP before bidirectional console works
 
 The listener-only milestone is useful, but it is not the complete MVP. Do not mark MVP complete until a host command or stdin-forwarding mode can send channel input and the ESP console channel can execute commands through mux.
+
+### Calling USB Serial/JTAG read before driver install
+
+`usb_serial_jtag_read_bytes()` dereferences the driver object internally. If the mux RX task starts before `usb_serial_jtag_driver_install()`, ESP32 can panic with `LoadProhibited` at boot.
+
+Fix: keep driver preparation inside the default transport path in `sources/esp32/components/esp_serial_mux/src/esp_serial_mux.c`, before task creation. If an application supplies custom transport callbacks, that application owns its transport driver initialization.

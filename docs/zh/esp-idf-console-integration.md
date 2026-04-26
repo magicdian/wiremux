@@ -15,7 +15,7 @@ mux_log
 首期推荐使用 line-mode：
 
 - Host 侧发送完整命令行。
-- ESP32 侧调用 `esp_console_run()`。
+- ESP32 侧验证 `ESMX` frame、CRC、`MuxEnvelope direction=input` 和 channel 方向后调用 `esp_console_run()`。
 - 命令注册逻辑继续使用原来的 `esp_console_cmd_register()`。
 
 示例：
@@ -31,9 +31,11 @@ ESP_ERROR_CHECK(esp_serial_mux_bind_console(&console_config));
 执行一行命令：
 
 ```c
-int command_ret = 0;
-ESP_ERROR_CHECK(esp_serial_mux_console_run_line("help", &command_ret));
+// Host:
+// esp-serial-mux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
 ```
+
+`console_mux_demo` 中 channel 1 已注册为 console input/output。`help` 和 `hello` 命令会把输出写回 channel 1。`mux_manifest` 会在 channel 1 返回回执并在 system channel 0 输出 manifest，`mux_hello` 会在 channel 1 返回回执并在 telemetry channel 3 输出示例数据，`mux_log` 会在 channel 1 返回回执并触发 log channel 2 输出。
 
 ## 为什么 API 保留 mode
 

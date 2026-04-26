@@ -29,6 +29,26 @@ ESP_ERROR_CHECK(esp_serial_mux_register_channel(&telemetry_channel));
 - `2`: log
 - `3+`: 应用 telemetry 或自定义业务数据
 
+## 输入处理
+
+允许 host 输入的 channel 需要同时满足：
+
+- channel config 的 `directions` 包含 `ESP_SERIAL_MUX_DIRECTION_INPUT`。
+- 调用 `esp_serial_mux_register_input_handler()` 注册 handler。
+- host 发送的是 `direction = input` 的 `MuxEnvelope`。
+
+console line-mode adapter 会自动为 channel 1 注册 input handler：
+
+```c
+esp_serial_mux_console_config_t console_config;
+esp_serial_mux_console_config_init(&console_config);
+console_config.channel_id = 1;
+console_config.mode = ESP_SERIAL_MUX_CONSOLE_MODE_LINE;
+ESP_ERROR_CHECK(esp_serial_mux_bind_console(&console_config));
+```
+
+非法 direction、未注册 channel、output-only channel、CRC 错误和超长 payload 都不会调用 input handler。
+
 ## Backpressure
 
 首期建议：
