@@ -197,3 +197,41 @@ Added host-side GoogleTest/GoogleMock infrastructure for the portable C core, mi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Wiremux batched compression
+
+**Date**: 2026-04-26
+**Task**: Wiremux batched compression
+**Branch**: `main`
+
+### Summary
+
+Implemented generic Wiremux batch records and compression support across core C, ESP component, demo diagnostics, and Rust host decoding. Hardware validation showed batched heatshrink and LZ4 working at 115200 baud, with LZ4 giving better compression on matched mock payloads. Archived the completed task set after acceptance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b4d76b2` | (see git log) |
+| `b73749b` | (see git log) |
+| `d46b35a` | (see git log) |
+| `1b86705` | (see git log) |
+| `4596b51` | (see git log) |
+| `369d363` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
