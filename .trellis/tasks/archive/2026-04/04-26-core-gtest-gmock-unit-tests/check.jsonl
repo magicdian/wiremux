@@ -1,0 +1,6 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "verify portable core layout remains stable"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "check no duplicated protocol definitions drift"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "verify core test command and protocol coverage"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "verify tests cover expected status branches"}

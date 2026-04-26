@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "core status branches and deterministic parser errors"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "portable C core testing expectations"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "portable core layout and C test location"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "avoid duplicating protocol constants in tests"}
