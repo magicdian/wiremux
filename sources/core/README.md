@@ -53,11 +53,11 @@ Current ESP adapter integration:
 Portable validation:
 
 ```bash
-cc -std=c99 -Wall -Wextra -Werror -I sources/core/c/include \
-  sources/core/c/tests/wiremux_core_smoke_test.c \
-  sources/core/c/src/wiremux_frame.c \
-  sources/core/c/src/wiremux_envelope.c \
-  sources/core/c/src/wiremux_manifest.c \
-  -o /tmp/wiremux_core_smoke_test
-/tmp/wiremux_core_smoke_test
+cmake -S sources/core/c -B sources/core/c/build
+cmake --build sources/core/c/build
+ctest --test-dir sources/core/c/build --output-on-failure
 ```
+
+The host-side core tests use GoogleTest and GoogleMock through CMake
+`FetchContent`. Keep build output under `sources/core/c/build/` so fetched
+dependencies and generated files stay out of the repository.

@@ -1,4 +1,5 @@
 /sources/host/target/
+/sources/core/c/build/
 /sources/esp32/examples/*/build/
 /sources/esp32/examples/*/sdkconfig
 .DS_Store

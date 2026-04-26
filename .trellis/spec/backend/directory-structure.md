@@ -21,6 +21,7 @@ sources/
 │   ├── README.md
 │   ├── proto/wiremux.proto
 │   └── c/
+│       ├── CMakeLists.txt
 │       ├── include/
 │       │   ├── wiremux_envelope.h
 │       │   ├── wiremux_frame.h
@@ -32,7 +33,7 @@ sources/
 │           ├── wiremux_frame.c
 │           └── wiremux_manifest.c
 │       └── tests/
-│           └── wiremux_core_smoke_test.c
+│           └── wiremux_core_test.cpp
 ├── host/
 │   ├── Cargo.toml
 │   └── src/
@@ -86,8 +87,10 @@ The portable C core lives under `sources/core/c`.
   encode/decode implementation.
 - `src/wiremux_manifest.c`: platform-independent protobuf-compatible manifest
   encoder, including repeated payload kind/type descriptor fields.
-- `tests/wiremux_core_smoke_test.c`: portable C smoke coverage for CRC,
-  envelope round-trip, manifest encoding, and frame decode.
+- `CMakeLists.txt`: host-side GoogleTest/GoogleMock test project for the
+  portable core.
+- `tests/wiremux_core_test.cpp`: host-side GoogleTest coverage for CRC, frame,
+  envelope, manifest, and representative error/status branches.
 
 Platform adapters must prefer this core for shared protocol primitives instead
 of duplicating frame constants, length checks, CRC implementations, or
@@ -242,7 +245,8 @@ Required behavior:
 
 - Rust tests must cover valid frames, partial frames, false magic, bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
 - ESP frame encoder changes must be validated against Rust scanner output before release.
-- Portable C core changes must pass `sources/core/c/tests/wiremux_core_smoke_test.c`.
+- Portable C core changes must pass `ctest --test-dir sources/core/c/build
+  --output-on-failure` after configuring and building `sources/core/c`.
 - Bidirectional changes must keep the existing host frame-building and CLI parser
   tests current, and should add ESP inbound dispatch tests or demo-level manual
   verification steps when ESP behavior changes.

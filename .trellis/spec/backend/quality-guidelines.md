@@ -48,6 +48,53 @@ Minimum parser cases:
 - oversized payload
 - one-byte replay/chunking
 
+### Portable Core Tests
+
+Portable core C behavior must be protected by the host-side GoogleTest suite in
+`sources/core/c`.
+
+Required command after any `sources/core/c/include/`,
+`sources/core/c/src/`, or `sources/core/c/tests/` change:
+
+```bash
+cmake -S sources/core/c -B sources/core/c/build
+cmake --build sources/core/c/build
+ctest --test-dir sources/core/c/build --output-on-failure
+```
+
+Test target and dependency contract:
+
+```cmake
+add_library(wiremux_core_c STATIC ...)
+add_executable(wiremux_core_tests tests/wiremux_core_test.cpp)
+target_link_libraries(wiremux_core_tests PRIVATE wiremux_core_c GTest::gmock_main)
+gtest_discover_tests(wiremux_core_tests)
+```
+
+Rules:
+
+- Every new portable core feature must add or update related tests in
+  `sources/core/c/tests/wiremux_core_test.cpp`.
+- Every portable core behavior change must update tests for both the successful
+  path and the relevant `wiremux_status_t` error branch.
+- Do not add production-only abstractions solely to demonstrate GoogleMock.
+  Link `GTest::gmock_main` so real future collaboration boundaries can use
+  gmock when they exist.
+- Keep test fixtures C++-only and call the production C API through
+  `extern "C"` includes; do not change the portable core ABI to satisfy tests.
+
+Minimum portable core cases:
+
+- CRC32 known vector
+- frame encode/decode, empty payload, invalid args, undersized output, short
+  input, bad magic, bad version, max payload rejection, incomplete full frame,
+  and CRC mismatch
+- envelope encode/decode, zero-length optional fields, invalid args,
+  insufficient output, unknown varint fields ignored, unsupported wire type,
+  truncated varint, and truncated length-delimited field
+- manifest encoding, optional empty strings omitted, invalid args, insufficient
+  output, and invalid channel descriptor pointer/count combinations
+
 ### ESP API Stability
 
 Console integration must use mode-configurable config:
@@ -169,7 +216,13 @@ Host opens the serial port once, sends the input frame with `listen --line`, the
 ## Testing Requirements
 
 - Host Rust code must pass `cargo test`, `cargo check`, and `cargo fmt --check`.
-- Portable C core changes must compile and pass `sources/core/c/tests/wiremux_core_smoke_test.c`.
+- Portable C core changes must compile and pass the host-side GoogleTest suite:
+  `cmake -S sources/core/c -B sources/core/c/build`, `cmake --build
+  sources/core/c/build`, and `ctest --test-dir sources/core/c/build
+  --output-on-failure`.
+- New portable C core functionality must include related GoogleTest coverage in
+  `sources/core/c/tests/wiremux_core_test.cpp` before the change is considered
+  complete.
 - ESP-IDF code must be built with `idf.py build` in `sources/esp32/examples/esp_wiremux_console_demo` when ESP-IDF is available.
 - Any frame layout change must add or update a host parser test.
 - Any portable C frame validation change must keep ESP inbound dispatch using `wiremux_frame_decode()`.
