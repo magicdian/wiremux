@@ -1,0 +1,8 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "backend layout and cross-layer protocol contract"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "required protocol and core tests"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "deterministic parser and ESP API error behavior"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "log adapter recursion and queue behavior"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "protocol feature spans core ESP and host"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "shared helpers and constants changed across layers"}
