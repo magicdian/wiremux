@@ -45,9 +45,7 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "04-25-pr8-serial-backend-hardening"
-  ],
+  "children": [],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
