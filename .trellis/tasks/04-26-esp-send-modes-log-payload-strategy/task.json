@@ -45,9 +45,7 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "04-26-batch-compression-diagnostics-docs"
-  ],
+  "children": [],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
