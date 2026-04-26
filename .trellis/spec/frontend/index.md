@@ -6,7 +6,9 @@
 
 ## Overview
 
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
+There is no frontend application in the current repository. These guidelines
+document that boundary so future AI sessions do not invent React/Vite/TypeScript
+conventions before a UI exists.
 
 ---
 
@@ -14,25 +16,28 @@ This directory contains guidelines for frontend development. Fill in each file w
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
+| [Directory Structure](./directory-structure.md) | Current no-frontend boundary and future placement | Active |
+| [Component Guidelines](./component-guidelines.md) | No current components; future UI rules | Active |
+| [Hook Guidelines](./hook-guidelines.md) | No current hooks; future data boundary rules | Active |
+| [State Management](./state-management.md) | Current runtime state and future UI state rules | Active |
+| [Quality Guidelines](./quality-guidelines.md) | No current frontend pipeline; required future gates | Active |
+| [Type Safety](./type-safety.md) | Protocol type boundaries for future UI | Active |
 
 ---
 
-## How to Fill These Guidelines
+## Pre-Development Checklist
 
-For each guideline file:
+Before adding any frontend code, read all files in this directory and the backend
+protocol contract:
 
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
+- [Directory Structure](./directory-structure.md)
+- [Component Guidelines](./component-guidelines.md)
+- [Hook Guidelines](./hook-guidelines.md)
+- [State Management](./state-management.md)
+- [Quality Guidelines](./quality-guidelines.md)
+- [Type Safety](./type-safety.md)
+- `../backend/directory-structure.md`
+- `../backend/quality-guidelines.md`
 
 ---
 

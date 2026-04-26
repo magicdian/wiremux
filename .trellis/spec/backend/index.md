@@ -6,7 +6,9 @@
 
 ## Overview
 
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
+Backend work in this repository covers the ESP-IDF C component, the ESP-IDF demo
+application, and the Rust host CLI/library. There is no database layer and no web
+frontend in the current codebase.
 
 ---
 
@@ -15,23 +17,27 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Active |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
+| [Database Guidelines](./database-guidelines.md) | Persistence boundary; currently no database | Active |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Active |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Active |
 
 ---
 
-## How to Fill These Guidelines
+## Pre-Development Checklist
 
-For each guideline file:
+Before editing backend code, read:
 
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
+- [Directory Structure](./directory-structure.md)
+- [Error Handling](./error-handling.md)
+- [Quality Guidelines](./quality-guidelines.md)
+- [Logging Guidelines](./logging-guidelines.md) if touching ESP logging, mux
+  transport, or host diagnostics
+- [Database Guidelines](./database-guidelines.md) only if a task mentions
+  persistence, captures, storage, migrations, manifests, or configuration files
 
-The goal is to help AI assistants and new team members understand how YOUR project works.
+For cross-language protocol changes, also read
+`../guides/cross-layer-thinking-guide.md`.
 
 ---
 

@@ -6,9 +6,12 @@
 
 ## Overview
 
-This project is split into a host-side Rust tool and an ESP-IDF component. Source code lives under `sources/`, not repository root `src/`.
+This project is split into a host-side Rust tool and an ESP-IDF component.
+Source code lives under `sources/`, not repository root `src/`.
 
-The current committed milestone is a one-way decoder/demo milestone. The complete MVP boundary is bidirectional: the host must be able to send mux input to an ESP channel and operate an ESP console through the mux.
+The current framework is bidirectional: the host can decode ESP mux output and
+send input frames, while the ESP component can parse inbound mux frames and
+dispatch them to registered channel handlers.
 
 ## Directory Layout
 
@@ -41,19 +44,24 @@ Keep protocol parsing in the library crate and CLI behavior in `src/main.rs`.
 - `src/lib.rs`: public module exports for tests and later tools.
 - `proto/esp_serial_mux.proto`: stable envelope and manifest schema.
 
-Do not put parser state machines directly in `main.rs`; they must stay unit-testable without a serial device.
+Do not put parser state machines directly in `main.rs`; they must stay
+unit-testable without a serial device.
 
-The host CLI may start with a `listen` command, but transmit support must be added as commands or modes under the same crate. Do not create a second host executable for sending channel input.
+Host transmit support belongs in the same crate as the listener. Keep the
+existing `listen --line` single-handle path and `send` one-shot path in
+`src/main.rs`; do not create a second executable for channel input.
 
 ### ESP-IDF
 
 The reusable ESP component lives under `sources/esp32/components/esp_serial_mux`.
 
-- `include/esp_serial_mux.h`: core init, channel registration, write APIs.
+- `include/esp_serial_mux.h`: core init, channel registration, input handler,
+  receive, and write APIs.
 - `include/esp_serial_mux_frame.h`: magic/length/CRC frame encoder contract.
 - `include/esp_serial_mux_console.h`: mode-configurable console adapter API.
 - `include/esp_serial_mux_log.h`: ESP log adapter API.
-- `src/esp_serial_mux.c`: service task, queues, envelope encoding, transport writes.
+- `src/esp_serial_mux.c`: service tasks, queues, inbound parsing, envelope
+  encoding/decoding, transport reads/writes.
 - `src/esp_serial_mux_frame.c`: C frame encoder and CRC32.
 - `src/esp_serial_mux_console.c`: line-mode console adapter.
 - `src/esp_serial_mux_log.c`: `esp_log_set_vprintf()` adapter.
@@ -159,7 +167,9 @@ Required behavior:
 
 - Rust tests must cover valid frames, partial frames, false magic, bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
 - ESP frame encoder changes must be validated against Rust scanner output before release.
-- Bidirectional MVP changes must add host frame-building tests and ESP inbound dispatch tests or demo-level manual verification steps.
+- Bidirectional changes must keep the existing host frame-building and CLI parser
+  tests current, and should add ESP inbound dispatch tests or demo-level manual
+  verification steps when ESP behavior changes.
 
 ## Scenario: Single-Process Console Verification
 

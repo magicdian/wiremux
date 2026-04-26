@@ -80,7 +80,9 @@ Queue-full behavior follows channel backpressure policy:
 
 ### ESP Inbound APIs
 
-Bidirectional MVP must add an inbound parser/dispatch path before claiming console operation over mux.
+The ESP component has an inbound parser/dispatch path through
+`esp_serial_mux_receive_bytes()` and registered input handlers. Keep this path
+bounded and deterministic.
 
 Required validation:
 
@@ -92,7 +94,7 @@ Required validation:
 | channel is unregistered | reject with no channel callback |
 | channel does not allow input | reject with no channel callback |
 | input payload exceeds configured max | reject before invoking callback |
-| callback returns error | report through system/control channel when implemented |
+| callback returns error | propagate from the handler path when directly invoked; future system/control reporting must not run inside the lock |
 
 ### ESP Default USB Serial/JTAG Transport
 
@@ -119,9 +121,11 @@ Do not call `ESP_LOGx` from mux service, transport, or log adapter internals. Th
 
 The host runs on mixed terminal streams. A bad frame candidate must not terminate the listener.
 
-### Claiming MVP before bidirectional console works
+### Regressing bidirectional console flow
 
-The listener-only milestone is useful, but it is not the complete MVP. Do not mark MVP complete until a host command or stdin-forwarding mode can send channel input and the ESP console channel can execute commands through mux.
+Do not regress the current single-handle console path. `listen --line` must be
+able to send a channel input frame after connecting and then keep decoding output
+on the same serial handle.
 
 ### Calling USB Serial/JTAG read before driver install
 

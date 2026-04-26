@@ -6,9 +6,14 @@
 
 ## Overview
 
-This project has a cross-language protocol boundary between Rust host code and ESP-IDF C code. Protocol correctness must be protected with unit tests, explicit constants, and byte-level validation.
+This project has a cross-language protocol boundary between Rust host code and
+ESP-IDF C code. Protocol correctness must be protected with unit tests, explicit
+constants, and byte-level validation.
 
-Do not call the listener-only state an MVP. The current milestone proves framing, decoding, channel filtering, log capture, telemetry, and demo packaging. The MVP requires bidirectional channel input and a console that can be operated from the host through mux.
+The current framework includes framing, decoding, channel filtering, host
+transmit, ESP inbound dispatch, console line-mode integration, log capture,
+telemetry, and demo packaging. Future changes must preserve bidirectional console
+operation.
 
 ## Forbidden Patterns
 
@@ -57,11 +62,12 @@ typedef enum {
 
 `PASSTHROUGH` can return `ESP_ERR_NOT_SUPPORTED` until implemented, but the enum and config field must remain.
 
-## Scenario: Bidirectional Console MVP Boundary
+## Scenario: Bidirectional Console Boundary
 
 ### 1. Scope / Trigger
 
-Trigger: any change that claims MVP completeness, console operation, host input, or full-duplex mux behavior.
+Trigger: any change to console operation, host input, ESP inbound dispatch, or
+full-duplex mux behavior.
 
 ### 2. Signatures
 
@@ -94,7 +100,8 @@ esp_err_t esp_serial_mux_register_input_handler(uint8_t channel_id,
 esp_err_t esp_serial_mux_receive_bytes(const uint8_t *data, size_t len);
 ```
 
-Exact names may change during implementation, but the capability must exist: host builds an input envelope, ESP decodes it, and the registered channel handler receives bounded bytes.
+These names are the current public boundary. If they change, update this spec,
+the demo, and host verification commands in the same task.
 
 ### 3. Contracts
 
@@ -161,7 +168,8 @@ Host opens the serial port once, sends the input frame with `listen --line`, the
 - ESP-IDF code must be built with `idf.py build` in `sources/esp32/examples/console_mux_demo` when ESP-IDF is available.
 - Any frame layout change must add or update a host parser test.
 - Any ESP encoder change must be manually or automatically validated against the host scanner.
-- Any MVP-completeness claim must include at least one bidirectional console verification path.
+- Any console or full-duplex change must include at least one bidirectional
+  console verification path.
 
 ## Code Review Checklist
 
