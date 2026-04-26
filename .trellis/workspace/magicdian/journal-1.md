@@ -83,3 +83,37 @@ Implemented PR5-PR8: host serialport send/listen input framing, ESP32 inbound fr
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Bootstrap project guidelines
+
+**Date**: 2026-04-26
+**Task**: Bootstrap project guidelines
+**Branch**: `main`
+
+### Summary
+
+Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework: documented backend conventions, no-database boundary, current bidirectional mux contracts, no-frontend boundary, future UI guardrails, and archived the bootstrap task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8abad12` | (see git log) |
+| `9b3c7e9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
