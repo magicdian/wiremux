@@ -46,7 +46,6 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "04-26-esp-channel-batching-service-policies",
     "04-26-batch-compression-diagnostics-docs"
   ],
   "parent": null,
