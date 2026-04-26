@@ -13,8 +13,8 @@ Current interactive behavior is implemented as:
 
 - Rust CLI argument parsing and serial I/O in `sources/host/src/main.rs`.
 - ESP-IDF console commands in
-  `sources/esp32/examples/console_mux_demo/main/console_mux_demo_main.c`.
-- ESP mux adapters in `sources/esp32/components/esp_serial_mux/src/`.
+  `sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.
+- ESP mux adapters in `sources/esp32/components/esp-wiremux/src/`.
 
 ## Component Structure
 
@@ -65,13 +65,13 @@ text because this is a debugging/diagnostics tool.
 Current UI-like command surfaces:
 
 ```bash
-esp-serial-mux listen --port <path> [--channel id]
-esp-serial-mux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
-esp-serial-mux send --port <path> --channel <id> --line <text>
+wiremux listen --port <path> [--channel id]
+wiremux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
+wiremux send --port <path> --channel <id> --line <text>
 ```
 
 ESP console command examples live in
-`sources/esp32/examples/console_mux_demo/main/console_mux_demo_main.c`:
+`sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`:
 
 - `help`
 - `hello`

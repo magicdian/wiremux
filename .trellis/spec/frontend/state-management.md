@@ -11,7 +11,7 @@ There is no frontend state-management library in this project.
 Current state is managed explicitly in backend/runtime code:
 
 - ESP mux singleton state: `static mux_context_t s_mux` in
-  `sources/esp32/components/esp_serial_mux/src/esp_serial_mux.c`.
+  `sources/esp32/components/esp-wiremux/src/esp_wiremux.c`.
 - ESP adapter state: `s_console_config`, `s_console_bound`, `s_log_config`, and
   `s_log_bound` in component adapter files.
 - Host CLI command state: `CliCommand`, `ListenArgs`, and `SendArgs` in
@@ -77,6 +77,6 @@ separate authoritative values.
 ## Common Mistakes
 
 - Forgetting to clear or bound stream buffers on corrupt input.
-- Introducing state that survives `esp_serial_mux_stop()` without documenting
+- Introducing state that survives `esp_wiremux_stop()` without documenting
   restart behavior.
 - Treating formatted payload text as the original payload.

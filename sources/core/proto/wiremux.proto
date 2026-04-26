@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package esp_serial_mux.v1;
+package wiremux.v1;
 
 enum Direction {
   DIRECTION_UNSPECIFIED = 0;
@@ -15,6 +15,13 @@ enum PayloadKind {
   PAYLOAD_KIND_PROTOBUF = 3;
   PAYLOAD_KIND_CONTROL = 4;
   PAYLOAD_KIND_EVENT = 5;
+}
+
+enum Endianness {
+  ENDIANNESS_UNSPECIFIED = 0;
+  ENDIANNESS_LITTLE = 1;
+  ENDIANNESS_BIG = 2;
+  ENDIANNESS_MIXED = 3;
 }
 
 message MuxEnvelope {
@@ -36,6 +43,7 @@ message ChannelDescriptor {
   repeated PayloadKind payload_kinds = 5;
   repeated string payload_types = 6;
   uint32 flags = 7;
+  PayloadKind default_payload_kind = 8;
 }
 
 message DeviceManifest {
@@ -44,4 +52,10 @@ message DeviceManifest {
   uint32 protocol_version = 3;
   uint32 max_channels = 4;
   repeated ChannelDescriptor channels = 5;
+  Endianness native_endianness = 6;
+  uint32 max_payload_len = 7;
+  string transport = 8;
+  uint32 feature_flags = 9;
+  string sdk_name = 10;
+  string sdk_version = 11;
 }

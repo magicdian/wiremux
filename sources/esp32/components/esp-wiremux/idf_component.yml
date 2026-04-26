@@ -1,0 +1,4 @@
+version: "0.1.0"
+description: "Wiremux ESP-IDF adapter component"
+dependencies:
+  idf: ">=5.4"

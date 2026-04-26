@@ -1,16 +1,16 @@
-use esp_serial_mux::envelope::{
-    decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT,
-};
-use esp_serial_mux::frame::{
-    build_frame_payload_with_max, BuildFrameError, FrameError, FrameScanner, StreamEvent,
-    DEFAULT_MAX_PAYLOAD_LEN,
-};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use wiremux::envelope::{
+    decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT,
+};
+use wiremux::frame::{
+    build_frame_payload_with_max, BuildFrameError, FrameError, FrameScanner, StreamEvent,
+    DEFAULT_MAX_PAYLOAD_LEN,
+};
 
 #[derive(Debug)]
 enum CliCommand {
@@ -62,7 +62,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
 
     writeln!(
         stdout,
-        "[esp-serial-mux] listening on {} at {} baud; reconnect_delay={}ms",
+        "[wiremux] listening on {} at {} baud; reconnect_delay={}ms",
         args.port.display(),
         args.baud,
         args.reconnect_delay_ms
@@ -71,14 +71,14 @@ fn listen(args: ListenArgs) -> io::Result<()> {
     loop {
         let (connected_port, mut input) = match open_available_port(&args.port, args.baud) {
             Ok((path, file)) => {
-                writeln!(stdout, "[esp-serial-mux] connected: {}", path.display())?;
+                writeln!(stdout, "[wiremux] connected: {}", path.display())?;
                 stdout.flush()?;
                 (path, file)
             }
             Err(err) => {
                 writeln!(
                     stdout,
-                    "[esp-serial-mux] waiting for {}: {}",
+                    "[wiremux] waiting for {}: {}",
                     args.port.display(),
                     err
                 )?;
@@ -95,7 +95,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
             input.flush()?;
             writeln!(
                 stdout,
-                "[esp-serial-mux] sent {} bytes to channel {}",
+                "[wiremux] sent {} bytes to channel {}",
                 line.len(),
                 channel
             )?;
@@ -108,7 +108,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
         loop {
             match input.read(&mut buf) {
                 Ok(0) => {
-                    writeln!(stdout, "\n[esp-serial-mux] disconnected: EOF")?;
+                    writeln!(stdout, "\n[wiremux] disconnected: EOF")?;
                     break;
                 }
                 Ok(read_len) => {
@@ -121,7 +121,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
                 Err(err) => {
                     writeln!(
                         stdout,
-                        "\n[esp-serial-mux] disconnected {}: {err}",
+                        "\n[wiremux] disconnected {}: {err}",
                         connected_port.display()
                     )?;
                     break;
@@ -147,7 +147,7 @@ fn send(args: SendArgs) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     writeln!(
         stdout,
-        "[esp-serial-mux] sent {} bytes to channel {} on {}",
+        "[wiremux] sent {} bytes to channel {} on {}",
         args.line.len(),
         args.channel,
         connected_port.display()
@@ -286,19 +286,20 @@ fn write_event<W: Write>(
                 }
                 writeln!(
                     out,
-                    "\n[esp-serial-mux] ch={} dir={} seq={} ts={} kind={} flags={} payload={}",
+                    "\n[wiremux] ch={} dir={} seq={} ts={} kind={} type={} flags={} payload={}",
                     envelope.channel_id,
                     envelope.direction,
                     envelope.sequence,
                     envelope.timestamp_us,
                     envelope.kind,
+                    printable_payload_type(&envelope.payload_type),
                     envelope.flags,
                     printable_payload(&envelope.payload)
                 )
             }
             Err(err) => writeln!(
                 out,
-                "\n[esp-serial-mux] frame version={} flags={} payload_len={} envelope_decode_error={:?} payload={}",
+                "\n[wiremux] frame version={} flags={} payload_len={} envelope_decode_error={:?} payload={}",
                 frame.version,
                 frame.flags,
                 frame.payload.len(),
@@ -316,7 +317,7 @@ fn write_event<W: Write>(
             if channel_filter.is_none() {
                 writeln!(
                     out,
-                    "\n[esp-serial-mux] crc_error version={version} flags={flags} payload_len={payload_len} expected=0x{expected_crc:08x} actual=0x{actual_crc:08x}"
+                    "\n[wiremux] crc_error version={version} flags={flags} payload_len={payload_len} expected=0x{expected_crc:08x} actual=0x{actual_crc:08x}"
                 )?;
             }
             Ok(())
@@ -367,6 +368,14 @@ fn printable_payload(payload: &[u8]) -> String {
             .map(|byte| format!("{byte:02x}"))
             .collect::<Vec<_>>()
             .join(" "),
+    }
+}
+
+fn printable_payload_type(payload_type: &str) -> &str {
+    if payload_type.is_empty() {
+        "-"
+    } else {
+        payload_type
     }
 }
 
@@ -481,7 +490,7 @@ fn parse_channel(value: &str) -> Result<u8, String> {
 }
 
 fn usage() -> String {
-    "usage:\n  esp-serial-mux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  esp-serial-mux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]".to_string()
+    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]".to_string()
 }
 
 #[cfg(test)]
@@ -491,9 +500,9 @@ mod tests {
         CliCommand,
     };
     use super::{port_candidates, requested_file_name_starts_with};
-    use esp_serial_mux::envelope::{decode_envelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT};
-    use esp_serial_mux::frame::{FrameScanner, StreamEvent};
     use std::path::PathBuf;
+    use wiremux::envelope::{decode_envelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT};
+    use wiremux::frame::{FrameScanner, StreamEvent};
 
     #[test]
     fn parses_required_port_with_defaults() {
@@ -508,7 +517,7 @@ mod tests {
         assert_eq!(args.baud, 115_200);
         assert_eq!(
             args.max_payload_len,
-            esp_serial_mux::frame::DEFAULT_MAX_PAYLOAD_LEN
+            wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN
         );
         assert_eq!(args.reconnect_delay_ms, 500);
         assert_eq!(args.channel, None);
@@ -739,7 +748,7 @@ mod tests {
 
     #[test]
     fn builds_input_frame_that_round_trips_through_scanner() {
-        let frame = build_input_frame(1, b"help", esp_serial_mux::frame::DEFAULT_MAX_PAYLOAD_LEN)
+        let frame = build_input_frame(1, b"help", wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN)
             .expect("valid input frame");
         let mut scanner = FrameScanner::default();
         let events = scanner.push(&frame);

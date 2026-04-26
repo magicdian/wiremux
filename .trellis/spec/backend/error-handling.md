@@ -63,11 +63,13 @@ CLI reporting rules:
 
 ### ESP Producer APIs
 
-`esp_serial_mux_write()` must validate before enqueueing:
+`esp_wiremux_write()` must validate before enqueueing:
 
 - mux is initialized and started
-- channel ID is below `ESP_SERIAL_MUX_MAX_CHANNELS`
+- channel ID is below `ESP_WIREMUX_MAX_CHANNELS`
 - channel is registered
+- direction is exactly one supported envelope direction:
+  `ESP_WIREMUX_DIRECTION_INPUT` or `ESP_WIREMUX_DIRECTION_OUTPUT`
 - direction is allowed by the channel config
 - payload pointer is non-null when length is non-zero
 - payload length is at or below configured `max_payload_len`
@@ -81,7 +83,7 @@ Queue-full behavior follows channel backpressure policy:
 ### ESP Inbound APIs
 
 The ESP component has an inbound parser/dispatch path through
-`esp_serial_mux_receive_bytes()` and registered input handlers. Keep this path
+`esp_wiremux_receive_bytes()` and registered input handlers. Keep this path
 bounded and deterministic.
 
 Required validation:
@@ -94,11 +96,17 @@ Required validation:
 | channel is unregistered | reject with no channel callback |
 | channel does not allow input | reject with no channel callback |
 | input payload exceeds configured max | reject before invoking callback |
+| input payload is valid | copy payload out of the shared RX buffer before releasing the mux lock and invoking callback |
 | callback returns error | propagate from the handler path when directly invoked; future system/control reporting must not run inside the lock |
+
+The `esp_wiremux_input_handler_t` payload pointer is valid only for the duration
+of the callback. The mux core must not pass a pointer into `s_mux.rx_buffer`
+after releasing the lock, because other callers of `esp_wiremux_receive_bytes()`
+could reuse that buffer before the handler finishes.
 
 ### ESP Default USB Serial/JTAG Transport
 
-When `esp_serial_mux_config_init()` leaves the default USB Serial/JTAG transport installed, `esp_serial_mux_init()` must prepare the transport before `esp_serial_mux_start()` creates the RX task.
+When `esp_wiremux_config_init()` leaves the default USB Serial/JTAG transport installed, `esp_wiremux_init()` must prepare the transport before `esp_wiremux_start()` creates the RX task.
 
 Required behavior:
 
@@ -107,7 +115,7 @@ Required behavior:
 | default USB Serial/JTAG read or write transport is used and driver is not installed | call `usb_serial_jtag_driver_install()` before mux start |
 | USB Serial/JTAG driver is already installed | reuse it, do not reinstall |
 | custom read and write transport are both provided | do not install USB Serial/JTAG driver |
-| driver install fails | return the install error from `esp_serial_mux_init()` and do not start tasks |
+| driver install fails | return the install error from `esp_wiremux_init()` and do not start tasks |
 
 Assertion point: no task may call `usb_serial_jtag_read_bytes()` unless `usb_serial_jtag_is_driver_installed()` was true or driver install just succeeded.
 
@@ -131,4 +139,13 @@ on the same serial handle.
 
 `usb_serial_jtag_read_bytes()` dereferences the driver object internally. If the mux RX task starts before `usb_serial_jtag_driver_install()`, ESP32 can panic with `LoadProhibited` at boot.
 
-Fix: keep driver preparation inside the default transport path in `sources/esp32/components/esp_serial_mux/src/esp_serial_mux.c`, before task creation. If an application supplies custom transport callbacks, that application owns its transport driver initialization.
+Fix: keep driver preparation inside the default transport path in `sources/esp32/components/esp-wiremux/src/esp_wiremux.c`, before task creation. If an application supplies custom transport callbacks, that application owns its transport driver initialization.
+
+### Passing combined direction flags as envelope direction
+
+Channel configs may use direction flags such as
+`ESP_WIREMUX_DIRECTION_INPUT | ESP_WIREMUX_DIRECTION_OUTPUT`, but a
+`MuxEnvelope.direction` value must be a single protobuf enum. `esp_wiremux_write()`
+must reject combined or unknown direction values with `ESP_ERR_INVALID_ARG`
+before enqueueing, otherwise the device can emit an invalid `direction = 3`
+envelope that host tools cannot interpret as a defined enum.

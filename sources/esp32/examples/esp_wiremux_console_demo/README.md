@@ -1,15 +1,15 @@
-# Console Mux Demo
+# ESP Wiremux Console Demo
 
-This ESP-IDF example demonstrates the first integration shape for `esp_serial_mux`:
+This ESP-IDF example demonstrates the first integration shape for `esp_wiremux`:
 
 - channel 0: system/control manifest
 - channel 1: console line-mode adapter
 - channel 2: ESP log adapter
 - channel 3: demo telemetry/text output
 
-The mux component writes magic-framed records to the same stdout transport used by the board's serial connection. A host tool can parse records with the `ESMX` magic while preserving ordinary terminal output.
+The mux component writes magic-framed records to the same stdout transport used by the board's serial connection. A host tool can parse records with the `WMUX` magic while preserving ordinary terminal output.
 
-The demo registers ESP-IDF console commands and dispatches them from mux channel 1 in line-mode. Host input is framed as `ESMX` + `MuxEnvelope(direction=input)`, validated on the ESP32, then passed to `esp_console_run()`.
+The demo registers ESP-IDF console commands and dispatches them from mux channel 1 in line-mode. Host input is framed as `WMUX` + `MuxEnvelope(direction=input)`, validated on the ESP32, then passed to `esp_console_run()`.
 
 ```text
 help
@@ -67,7 +67,7 @@ idf.py build flash monitor
 ```
 
 If VS Code reports that this is not a complete ESP-IDF project, open the folder
-`sources/esp32/examples/console_mux_demo` directly and make sure the ESP-IDF
+`sources/esp32/examples/esp_wiremux_console_demo` directly and make sure the ESP-IDF
 extension has a configured `IDF_PATH`. The root `CMakeLists.txt`,
 `sdkconfig.defaults`, and `main/CMakeLists.txt` are all project-local.
 

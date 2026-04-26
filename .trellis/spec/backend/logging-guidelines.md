@@ -13,9 +13,9 @@ ESP log integration is provided through `esp_log_set_vprintf()`. The adapter for
 Public API:
 
 ```c
-void esp_serial_mux_log_config_init(esp_serial_mux_log_config_t *config);
-esp_err_t esp_serial_mux_bind_esp_log(const esp_serial_mux_log_config_t *config);
-esp_err_t esp_serial_mux_unbind_esp_log(void);
+void esp_wiremux_log_config_init(esp_wiremux_log_config_t *config);
+esp_err_t esp_wiremux_bind_esp_log(const esp_wiremux_log_config_t *config);
+esp_err_t esp_wiremux_unbind_esp_log(void);
 ```
 
 Default config:
@@ -53,7 +53,7 @@ va_list copy;
 va_copy(copy, args);
 int len = vsnprintf(buffer, sizeof(buffer), fmt, copy);
 va_end(copy);
-(void)esp_serial_mux_write(...);
+(void)esp_wiremux_write(...);
 ```
 
 Correct recursion guard:

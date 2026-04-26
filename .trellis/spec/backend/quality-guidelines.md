@@ -23,7 +23,7 @@ operation.
 - Do not hard-code `/dev/tty.usbmodem2101` in implementation. It is only a local example path.
 - Do not make console mode a compile-time-only behavior. Public config must preserve line-mode and passthrough mode.
 - Do not call ESP logging APIs from mux internals after installing the log adapter.
-- Do not implement host-to-device frames with a separate ad-hoc wire format. Use the same `ESMX` frame and `MuxEnvelope` payload contract.
+- Do not implement host-to-device frames with a separate ad-hoc wire format. Use the same `WMUX` frame and `MuxEnvelope` payload contract.
 
 ## Required Patterns
 
@@ -54,10 +54,10 @@ Console integration must use mode-configurable config:
 
 ```c
 typedef enum {
-    ESP_SERIAL_MUX_CONSOLE_MODE_DISABLED = 0,
-    ESP_SERIAL_MUX_CONSOLE_MODE_LINE = 1,
-    ESP_SERIAL_MUX_CONSOLE_MODE_PASSTHROUGH = 2,
-} esp_serial_mux_console_mode_t;
+    ESP_WIREMUX_CONSOLE_MODE_DISABLED = 0,
+    ESP_WIREMUX_CONSOLE_MODE_LINE = 1,
+    ESP_WIREMUX_CONSOLE_MODE_PASSTHROUGH = 2,
+} esp_wiremux_console_mode_t;
 ```
 
 `PASSTHROUGH` can return `ESP_ERR_NOT_SUPPORTED` until implemented, but the enum and config field must remain.
@@ -74,30 +74,30 @@ full-duplex mux behavior.
 Host:
 
 ```bash
-esp-serial-mux listen --port <path> [--channel id]
-esp-serial-mux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
-esp-serial-mux send --port <path> --channel <id> [--line text]
+wiremux listen --port <path> [--channel id]
+wiremux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
+wiremux send --port <path> --channel <id> [--line text]
 ```
 
 ESP:
 
 ```c
-typedef esp_err_t (*esp_serial_mux_transport_read_fn)(uint8_t *data,
+typedef esp_err_t (*esp_wiremux_transport_read_fn)(uint8_t *data,
                                                       size_t capacity,
                                                       size_t *read_len,
                                                       uint32_t timeout_ms,
                                                       void *user_ctx);
 
-typedef esp_err_t (*esp_serial_mux_input_handler_t)(uint8_t channel_id,
+typedef esp_err_t (*esp_wiremux_input_handler_t)(uint8_t channel_id,
                                                     const uint8_t *payload,
                                                     size_t payload_len,
                                                     void *user_ctx);
 
-esp_err_t esp_serial_mux_register_input_handler(uint8_t channel_id,
-                                                esp_serial_mux_input_handler_t handler,
+esp_err_t esp_wiremux_register_input_handler(uint8_t channel_id,
+                                                esp_wiremux_input_handler_t handler,
                                                 void *user_ctx);
 
-esp_err_t esp_serial_mux_receive_bytes(const uint8_t *data, size_t len);
+esp_err_t esp_wiremux_receive_bytes(const uint8_t *data, size_t len);
 ```
 
 These names are the current public boundary. If they change, update this spec,
@@ -121,6 +121,7 @@ the demo, and host verification commands in the same task.
 |------|-------------------|
 | host sends to unregistered channel | ESP rejects without callback |
 | host sends output-direction frame | ESP rejects without callback |
+| device write uses combined input/output direction flags | ESP rejects with `ESP_ERR_INVALID_ARG` before enqueueing |
 | host sends oversized input payload | ESP rejects before allocation-heavy work |
 | console command succeeds | host can observe response on console channel |
 | console command fails | host can observe command error text or return status |
@@ -139,6 +140,9 @@ the demo, and host verification commands in the same task.
 - Host unit test builds an input frame and verifies the scanner decodes it back into the expected envelope fields.
 - Host unit tests cover `listen --line`, `--send-channel`, invalid channel, missing line for one-shot `send`, and macOS `tty` to `cu` preference.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.
+- ESP unit or review-level validation covers `esp_wiremux_write()` rejecting
+  combined direction flags and input callbacks receiving payload data that does
+  not alias the shared RX buffer.
 - Demo-level verification documents the exact commands used to run `help` through channel 1, trigger `mux_log` on channel 2, and trigger `mux_hello` on channel 3.
 
 ### 7. Wrong vs Correct
@@ -152,7 +156,7 @@ Host writes raw "help\n" to the serial port and assumes ESP console receives it.
 #### Correct
 
 ```text
-Host wraps "help\n" in a channel-1 input MuxEnvelope, then in an ESMX frame with CRC32.
+Host wraps "help\n" in a channel-1 input MuxEnvelope, then in a WMUX frame with CRC32.
 ESP validates the frame and dispatches the payload to the registered console input handler.
 ```
 
@@ -165,8 +169,10 @@ Host opens the serial port once, sends the input frame with `listen --line`, the
 ## Testing Requirements
 
 - Host Rust code must pass `cargo test`, `cargo check`, and `cargo fmt --check`.
-- ESP-IDF code must be built with `idf.py build` in `sources/esp32/examples/console_mux_demo` when ESP-IDF is available.
+- Portable C core changes must compile and pass `sources/core/c/tests/wiremux_core_smoke_test.c`.
+- ESP-IDF code must be built with `idf.py build` in `sources/esp32/examples/esp_wiremux_console_demo` when ESP-IDF is available.
 - Any frame layout change must add or update a host parser test.
+- Any portable C frame validation change must keep ESP inbound dispatch using `wiremux_frame_decode()`.
 - Any ESP encoder change must be manually or automatically validated against the host scanner.
 - Any console or full-duplex change must include at least one bidirectional
   console verification path.

@@ -14,6 +14,9 @@ pub const DIRECTION_INPUT: u32 = 1;
 pub const DIRECTION_OUTPUT: u32 = 2;
 pub const PAYLOAD_KIND_TEXT: u32 = 1;
 pub const PAYLOAD_KIND_BINARY: u32 = 2;
+pub const PAYLOAD_KIND_PROTOBUF: u32 = 3;
+pub const PAYLOAD_KIND_CONTROL: u32 = 4;
+pub const PAYLOAD_KIND_EVENT: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {

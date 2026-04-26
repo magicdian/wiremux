@@ -17,20 +17,35 @@ dispatch them to registered channel handlers.
 
 ```text
 sources/
+├── core/
+│   ├── README.md
+│   ├── proto/wiremux.proto
+│   └── c/
+│       ├── include/
+│       │   ├── wiremux_envelope.h
+│       │   ├── wiremux_frame.h
+│       │   ├── wiremux_manifest.h
+│       │   └── wiremux_status.h
+│       ├── src/
+│           ├── wiremux_proto_internal.h
+│           ├── wiremux_envelope.c
+│           ├── wiremux_frame.c
+│           └── wiremux_manifest.c
+│       └── tests/
+│           └── wiremux_core_smoke_test.c
 ├── host/
 │   ├── Cargo.toml
-│   ├── proto/esp_serial_mux.proto
 │   └── src/
 │       ├── crc32.rs
 │       ├── frame.rs
 │       ├── lib.rs
 │       └── main.rs
 └── esp32/
-    ├── components/esp_serial_mux/
+    ├── components/esp-wiremux/
     │   ├── CMakeLists.txt
     │   ├── include/
     │   └── src/
-    └── examples/console_mux_demo/
+    └── examples/esp_wiremux_console_demo/
 ```
 
 ## Module Organization
@@ -42,7 +57,7 @@ Keep protocol parsing in the library crate and CLI behavior in `src/main.rs`.
 - `src/frame.rs`: binary frame constants, encoder helpers, mixed-stream scanner.
 - `src/crc32.rs`: CRC32 implementation used by the frame scanner.
 - `src/lib.rs`: public module exports for tests and later tools.
-- `proto/esp_serial_mux.proto`: stable envelope and manifest schema.
+- `sources/core/proto/wiremux.proto`: stable envelope and manifest schema.
 
 Do not put parser state machines directly in `main.rs`; they must stay
 unit-testable without a serial device.
@@ -51,29 +66,58 @@ Host transmit support belongs in the same crate as the listener. Keep the
 existing `listen --line` single-handle path and `send` one-shot path in
 `src/main.rs`; do not create a second executable for channel input.
 
+### Portable Core
+
+The portable C core lives under `sources/core/c`.
+
+- `include/wiremux_frame.h`: shared `WMUX` frame constants, frame header type,
+  status enum, encoded-length helper, frame encoder, single-frame decoder, and
+  CRC32 contract.
+- `include/wiremux_envelope.h`: shared `wiremux.v1.MuxEnvelope` field model,
+  direction/payload-kind enums, encoded-length helper, encoder, and decoder.
+- `include/wiremux_manifest.h`: shared `wiremux.v1.DeviceManifest` and
+  `ChannelDescriptor` encoder contract, including native endianness and device
+  capability fields.
+- `include/wiremux_status.h`: portable status codes used by core APIs before
+  platform adapters map them to runtime-specific error types.
+- `src/wiremux_frame.c`: platform-independent frame encode/decode
+  implementation with no ESP-IDF dependency.
+- `src/wiremux_envelope.c`: platform-independent protobuf-compatible envelope
+  encode/decode implementation.
+- `src/wiremux_manifest.c`: platform-independent protobuf-compatible manifest
+  encoder, including repeated payload kind/type descriptor fields.
+- `tests/wiremux_core_smoke_test.c`: portable C smoke coverage for CRC,
+  envelope round-trip, manifest encoding, and frame decode.
+
+Platform adapters must prefer this core for shared protocol primitives instead
+of duplicating frame constants, length checks, CRC implementations, or
+single-frame decode rules.
+
 ### ESP-IDF
 
-The reusable ESP component lives under `sources/esp32/components/esp_serial_mux`.
+The reusable ESP component lives under `sources/esp32/components/esp-wiremux`.
 
-- `include/esp_serial_mux.h`: core init, channel registration, input handler,
+- `include/esp_wiremux.h`: core init, channel registration, input handler,
   receive, and write APIs.
-- `include/esp_serial_mux_frame.h`: magic/length/CRC frame encoder contract.
-- `include/esp_serial_mux_console.h`: mode-configurable console adapter API.
-- `include/esp_serial_mux_log.h`: ESP log adapter API.
-- `src/esp_serial_mux.c`: service tasks, queues, inbound parsing, envelope
-  encoding/decoding, transport reads/writes.
-- `src/esp_serial_mux_frame.c`: C frame encoder and CRC32.
-- `src/esp_serial_mux_console.c`: line-mode console adapter.
-- `src/esp_serial_mux_log.c`: `esp_log_set_vprintf()` adapter.
+- `include/esp_wiremux_frame.h`: ESP-facing wrapper around the portable
+  `wiremux_frame.h` contract.
+- `include/esp_wiremux_console.h`: mode-configurable console adapter API.
+- `include/esp_wiremux_log.h`: ESP log adapter API.
+- `src/esp_wiremux.c`: service tasks, queues, inbound parsing, core envelope
+  encode/decode integration, protobuf manifest emission, transport reads/writes.
+- `src/esp_wiremux_frame.c`: maps portable `wiremux_status_t` results to
+  `esp_err_t`.
+- `src/esp_wiremux_console.c`: line-mode console adapter.
+- `src/esp_wiremux_log.c`: `esp_log_set_vprintf()` adapter.
 
 Examples belong under `sources/esp32/examples/<name>`.
 
 ## Naming Conventions
 
 - Rust modules use snake_case filenames.
-- ESP-IDF public symbols use the `esp_serial_mux_` prefix.
-- ESP-IDF component folder is `esp_serial_mux`.
-- Demo projects should be named by scenario, for example `console_mux_demo`.
+- ESP-IDF public symbols use the `esp_wiremux_` prefix.
+- ESP-IDF component folder is `esp-wiremux`.
+- Demo projects should be named by scenario, for example `esp_wiremux_console_demo`.
 
 ## Cross-Layer Protocol Contract
 
@@ -84,7 +128,7 @@ The host frame scanner and ESP frame encoder must remain byte-compatible.
 Rust:
 
 ```rust
-pub const MAGIC: [u8; 4] = *b"ESMX";
+pub const MAGIC: [u8; 4] = *b"WMUX";
 pub const SUPPORTED_VERSION: u8 = 1;
 pub const HEADER_LEN: usize = 14;
 
@@ -98,11 +142,27 @@ impl FrameScanner {
 C:
 
 ```c
-#define ESP_SERIAL_MUX_MAGIC "ESMX"
-#define ESP_SERIAL_MUX_FRAME_VERSION 1
-#define ESP_SERIAL_MUX_FRAME_HEADER_LEN 14
+#define WIREMUX_MAGIC "WMUX"
+#define WIREMUX_FRAME_VERSION 1
+#define WIREMUX_FRAME_HEADER_LEN 14
 
-esp_err_t esp_serial_mux_frame_encode(const esp_serial_mux_frame_header_t *header,
+wiremux_status_t wiremux_frame_encode(const wiremux_frame_header_t *header,
+                                      const uint8_t *payload,
+                                      size_t payload_len,
+                                      uint8_t *out,
+                                      size_t out_capacity,
+                                      size_t *written);
+
+wiremux_status_t wiremux_frame_decode(const uint8_t *data,
+                                      size_t len,
+                                      size_t max_payload_len,
+                                      wiremux_frame_view_t *frame);
+
+#define ESP_WIREMUX_MAGIC "WMUX"
+#define ESP_WIREMUX_FRAME_VERSION 1
+#define ESP_WIREMUX_FRAME_HEADER_LEN 14
+
+esp_err_t esp_wiremux_frame_encode(const esp_wiremux_frame_header_t *header,
                                       const uint8_t *payload,
                                       size_t payload_len,
                                       uint8_t *out,
@@ -114,7 +174,7 @@ esp_err_t esp_serial_mux_frame_encode(const esp_serial_mux_frame_header_t *heade
 
 | Offset | Size | Field | Encoding |
 |--------|------|-------|----------|
-| 0 | 4 | magic | ASCII `ESMX` |
+| 0 | 4 | magic | ASCII `WMUX` |
 | 4 | 1 | version | `1` |
 | 5 | 1 | flags | low 8 frame flags |
 | 6 | 4 | payload length | little-endian `u32` |
@@ -123,7 +183,7 @@ esp_err_t esp_serial_mux_frame_encode(const esp_serial_mux_frame_header_t *heade
 
 ### Payload Contract
 
-Frame payload must be `esp_serial_mux.v1.MuxEnvelope` bytes with these required fields for emitted device data:
+Frame payload must be `wiremux.v1.MuxEnvelope` bytes with these required fields for emitted device data:
 
 - `channel_id` field 1
 - `direction` field 2
@@ -135,14 +195,29 @@ Frame payload must be `esp_serial_mux.v1.MuxEnvelope` bytes with these required 
 
 For host-to-device input frames, `channel_id`, `direction`, `sequence`, `kind`, and `payload` are required. `direction` must be input, and ESP dispatch must reject frames for unregistered channels or channels without input direction enabled.
 
+System channel manifest frames must use:
+
+- `channel_id = 0`
+- `direction = output`
+- `kind = control`
+- `payload_type = "wiremux.v1.DeviceManifest"`
+- `payload = wiremux.v1.DeviceManifest` bytes
+
+`DeviceManifest` must include protocol version, max channels, max payload length,
+native endianness, transport name, SDK name/version, feature flags, and channel
+descriptors. Channel descriptors may include repeated payload kinds and payload
+types in addition to the default payload kind. Native endianness is diagnostic
+metadata for tools and binary payload interpretation; it does not change the
+`WMUX` frame layout or protobuf wire encoding.
+
 ### Host CLI Contract
 
 Current listener:
 
 ```bash
-esp-serial-mux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]
-esp-serial-mux listen --port <path> [--channel output_id] [--send-channel input_id] [--line text]
-esp-serial-mux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]
+wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]
+wiremux listen --port <path> [--channel output_id] [--send-channel input_id] [--line text]
+wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]
 ```
 
 Required behavior:
@@ -158,15 +233,16 @@ Required behavior:
 
 ### Good/Base/Bad Cases
 
-- Good: ordinary text, then valid `ESMX` frame, then ordinary text. Host emits terminal, frame, terminal.
+- Good: ordinary text, then valid `WMUX` frame, then ordinary text. Host emits terminal, frame, terminal.
 - Base: frame arrives one byte at a time. Host emits no partial frame until length and CRC are complete.
-- Bad: ordinary text contains `ESMX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
+- Bad: ordinary text contains `WMUX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
 - Bad: a candidate frame has valid magic/version/length but bad CRC. Host emits a `crc_error` diagnostic event, drains the invalid candidate, and continues scanning.
 
 ### Tests Required
 
 - Rust tests must cover valid frames, partial frames, false magic, bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
 - ESP frame encoder changes must be validated against Rust scanner output before release.
+- Portable C core changes must pass `sources/core/c/tests/wiremux_core_smoke_test.c`.
 - Bidirectional changes must keep the existing host frame-building and CLI parser
   tests current, and should add ESP inbound dispatch tests or demo-level manual
   verification steps when ESP behavior changes.
@@ -180,9 +256,9 @@ Trigger: validating a command that needs both host input and decoded output on t
 ### 2. Signatures
 
 ```bash
-esp-serial-mux listen --port <path> --channel 1 --line help
-esp-serial-mux listen --port <path> --send-channel 1 --channel 2 --line mux_log
-esp-serial-mux listen --port <path> --send-channel 1 --channel 3 --line mux_hello
+wiremux listen --port <path> --channel 1 --line help
+wiremux listen --port <path> --send-channel 1 --channel 2 --line mux_log
+wiremux listen --port <path> --send-channel 1 --channel 3 --line mux_hello
 ```
 
 ### 3. Contracts
@@ -219,8 +295,8 @@ esp-serial-mux listen --port <path> --send-channel 1 --channel 3 --line mux_hell
 #### Wrong
 
 ```bash
-esp-serial-mux listen --port /dev/cu.usbmodem2101 --channel 1
-esp-serial-mux send --port /dev/cu.usbmodem2101 --channel 1 --line help
+wiremux listen --port /dev/cu.usbmodem2101 --channel 1
+wiremux send --port /dev/cu.usbmodem2101 --channel 1 --line help
 ```
 
 This assumes two processes can reliably own the same serial port.
@@ -228,5 +304,5 @@ This assumes two processes can reliably own the same serial port.
 #### Correct
 
 ```bash
-esp-serial-mux listen --port /dev/cu.usbmodem2101 --channel 1 --line help
+wiremux listen --port /dev/cu.usbmodem2101 --channel 1 --line help
 ```

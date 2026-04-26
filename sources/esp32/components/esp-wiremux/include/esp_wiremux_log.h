@@ -15,13 +15,13 @@ typedef struct {
     size_t max_line_len;
     uint32_t write_timeout_ms;
     bool tee_to_previous;
-} esp_serial_mux_log_config_t;
+} esp_wiremux_log_config_t;
 
-void esp_serial_mux_log_config_init(esp_serial_mux_log_config_t *config);
+void esp_wiremux_log_config_init(esp_wiremux_log_config_t *config);
 
-esp_err_t esp_serial_mux_bind_esp_log(const esp_serial_mux_log_config_t *config);
+esp_err_t esp_wiremux_bind_esp_log(const esp_wiremux_log_config_t *config);
 
-esp_err_t esp_serial_mux_unbind_esp_log(void);
+esp_err_t esp_wiremux_unbind_esp_log(void);
 
 #ifdef __cplusplus
 }

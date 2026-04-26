@@ -1,11 +1,11 @@
 # 快速开始
 
-`esp-serial-mux` 的目标是在不改硬件的情况下，把 ESP32 的单个串口/USB CDC/JTAG 风格连接拆成多个软件通道。
+`wiremux` 的目标是在不改硬件的情况下，把 ESP32 的单个串口/USB CDC/JTAG 风格连接拆成多个软件通道。
 
 当前首期结构：
 
-- ESP32 侧组件：`sources/esp32/components/esp_serial_mux`
-- ESP32 示例：`sources/esp32/examples/console_mux_demo`
+- ESP32 侧组件：`sources/esp32/components/esp-wiremux`
+- ESP32 示例：`sources/esp32/examples/esp_wiremux_console_demo`
 - Host 侧 Rust CLI：`sources/host`
 
 ## Host 侧运行
@@ -25,7 +25,7 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --lin
 在已配置 ESP-IDF v5.4 或更新版本的 shell 中：
 
 ```bash
-cd sources/esp32/examples/console_mux_demo
+cd sources/esp32/examples/esp_wiremux_console_demo
 idf.py set-target esp32s3
 idf.py build flash monitor
 ```

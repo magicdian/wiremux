@@ -1,0 +1,8 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Backend layout, naming, and cross-language protocol contract"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Protocol parsing and ESP/Rust error behavior"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required tests and forbidden protocol regressions"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "ESP log adapter rename must avoid recursive logging"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Rename spans host, ESP, protocol, docs, and examples"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Batch rename requires old-name search coverage"}

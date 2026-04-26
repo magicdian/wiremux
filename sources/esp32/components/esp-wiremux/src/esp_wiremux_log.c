@@ -1,4 +1,4 @@
-#include "esp_serial_mux_log.h"
+#include "esp_wiremux_log.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -6,9 +6,9 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "esp_serial_mux.h"
+#include "esp_wiremux.h"
 
-static esp_serial_mux_log_config_t s_log_config;
+static esp_wiremux_log_config_t s_log_config;
 static vprintf_like_t s_previous_vprintf;
 static bool s_log_bound;
 static volatile bool s_in_mux_log_vprintf;
@@ -47,9 +47,9 @@ static int mux_log_vprintf(const char *fmt, va_list args)
             len = max_line_len - 1;
             line[len] = '\0';
         }
-        (void)esp_serial_mux_write(s_log_config.channel_id,
-                                   ESP_SERIAL_MUX_DIRECTION_OUTPUT,
-                                   ESP_SERIAL_MUX_PAYLOAD_KIND_TEXT,
+        (void)esp_wiremux_write(s_log_config.channel_id,
+                                   ESP_WIREMUX_DIRECTION_OUTPUT,
+                                   ESP_WIREMUX_PAYLOAD_KIND_TEXT,
                                    0,
                                    (const uint8_t *)line,
                                    len,
@@ -61,7 +61,7 @@ static int mux_log_vprintf(const char *fmt, va_list args)
     return previous_result != 0 ? previous_result : formatted;
 }
 
-void esp_serial_mux_log_config_init(esp_serial_mux_log_config_t *config)
+void esp_wiremux_log_config_init(esp_wiremux_log_config_t *config)
 {
     if (config == NULL) {
         return;
@@ -74,23 +74,23 @@ void esp_serial_mux_log_config_init(esp_serial_mux_log_config_t *config)
     config->tee_to_previous = true;
 }
 
-esp_err_t esp_serial_mux_bind_esp_log(const esp_serial_mux_log_config_t *config)
+esp_err_t esp_wiremux_bind_esp_log(const esp_wiremux_log_config_t *config)
 {
     if (config == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const esp_serial_mux_channel_config_t channel = {
+    const esp_wiremux_channel_config_t channel = {
         .channel_id = config->channel_id,
         .name = "log",
         .description = "ESP-IDF log adapter",
-        .directions = ESP_SERIAL_MUX_DIRECTION_OUTPUT,
-        .default_payload_kind = ESP_SERIAL_MUX_PAYLOAD_KIND_TEXT,
-        .flush_policy = ESP_SERIAL_MUX_FLUSH_HIGH_WATERMARK,
-        .backpressure_policy = ESP_SERIAL_MUX_BACKPRESSURE_DROP_OLDEST,
+        .directions = ESP_WIREMUX_DIRECTION_OUTPUT,
+        .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_TEXT,
+        .flush_policy = ESP_WIREMUX_FLUSH_HIGH_WATERMARK,
+        .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_DROP_OLDEST,
     };
 
-    esp_err_t err = esp_serial_mux_register_channel(&channel);
+    esp_err_t err = esp_wiremux_register_channel(&channel);
     if (err != ESP_OK) {
         return err;
     }
@@ -101,7 +101,7 @@ esp_err_t esp_serial_mux_bind_esp_log(const esp_serial_mux_log_config_t *config)
     return ESP_OK;
 }
 
-esp_err_t esp_serial_mux_unbind_esp_log(void)
+esp_err_t esp_wiremux_unbind_esp_log(void)
 {
     if (!s_log_bound) {
         return ESP_ERR_INVALID_STATE;

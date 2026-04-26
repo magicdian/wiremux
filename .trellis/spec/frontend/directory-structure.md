@@ -13,7 +13,7 @@ committed.
 The current user-facing surfaces are:
 
 - Rust host CLI: `sources/host/src/main.rs`
-- ESP-IDF demo application: `sources/esp32/examples/console_mux_demo/`
+- ESP-IDF demo application: `sources/esp32/examples/esp_wiremux_console_demo/`
 - Documentation: `docs/zh/`
 
 Do not create frontend directories or imply a frontend architecture unless the
@@ -35,8 +35,8 @@ sources/
 │   ├── proto/
 │   └── src/
 └── esp32/
-    ├── components/esp_serial_mux/
-    └── examples/console_mux_demo/
+    ├── components/esp-wiremux/
+    └── examples/esp_wiremux_console_demo/
 ```
 
 ## Future UI Placement
@@ -77,7 +77,7 @@ behavior:
 - `docs/zh/host-tool.md`
 - `docs/zh/esp-idf-console-integration.md`
 - `sources/host/src/main.rs`
-- `sources/esp32/examples/console_mux_demo/main/console_mux_demo_main.c`
+- `sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`
 
 ## Forbidden Patterns
 
@@ -85,7 +85,7 @@ behavior:
 - Do not add frontend dependencies to `sources/host/Cargo.toml`.
 - Do not describe a React/Vite/Next architecture as existing until those files
   are committed.
-- Do not build a UI that bypasses the `ESMX` frame and `MuxEnvelope` protocol
+- Do not build a UI that bypasses the `WMUX` frame and `MuxEnvelope` protocol
   contract.
 
 ## Common Mistakes

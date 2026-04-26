@@ -12,10 +12,10 @@ implementation.
 
 The actual product surface is:
 
-- ESP-IDF C component code under `sources/esp32/components/esp_serial_mux/`.
-- ESP-IDF demo application under `sources/esp32/examples/console_mux_demo/`.
+- ESP-IDF C component code under `sources/esp32/components/esp-wiremux/`.
+- ESP-IDF demo application under `sources/esp32/examples/esp_wiremux_console_demo/`.
 - Rust host CLI/library code under `sources/host/`.
-- Protocol schema under `sources/host/proto/esp_serial_mux.proto`.
+- Protocol schema under `sources/core/proto/wiremux.proto`.
 - Chinese user documentation under `docs/zh/`.
 
 Do not introduce a database, embedded key-value store, or migration framework
@@ -26,9 +26,9 @@ unless a task explicitly requires persistent state.
 State is in memory and bounded by configuration:
 
 - ESP mux runtime state is held in the static `s_mux` context in
-  `sources/esp32/components/esp_serial_mux/src/esp_serial_mux.c`.
+  `sources/esp32/components/esp-wiremux/src/esp_wiremux.c`.
 - ESP channel metadata is registered at runtime with
-  `esp_serial_mux_register_channel()`.
+  `esp_wiremux_register_channel()`.
 - Host CLI state is process-local in `sources/host/src/main.rs`.
 - Host frame scanning buffers only pending stream bytes in
   `sources/host/src/frame.rs`.
@@ -89,7 +89,7 @@ in the same change. That update must document:
 - How migrations are run in development and release workflows.
 - Rollback or forward-only policy.
 - Good/base/bad test cases for schema evolution.
-- How schema changes relate to `sources/host/proto/esp_serial_mux.proto`.
+- How schema changes relate to `sources/core/proto/wiremux.proto`.
 
 ## Naming Conventions
 
@@ -97,10 +97,10 @@ There are no table or column naming conventions today.
 
 Current schema-like names are protocol names:
 
-- Protobuf package: `esp_serial_mux.v1`.
+- Protobuf package: `wiremux.v1`.
 - Protobuf messages use PascalCase, for example `MuxEnvelope`.
 - Protobuf fields use snake_case, for example `channel_id`.
-- ESP public constants use the `ESP_SERIAL_MUX_` prefix.
+- ESP public constants use the `ESP_WIREMUX_` prefix.
 - Rust public constants use all-caps snake case, for example `SUPPORTED_VERSION`.
 
 Keep protocol field numbers stable. Renaming a protobuf field in source is less
@@ -127,4 +127,4 @@ dangerous than changing its field number, but both require cross-language review
   `sources/host/src/*.rs` and ESP-IDF build/demo verification.
 - Assuming channel registration is durable. Channels are registered at runtime by
   application code such as
-  `sources/esp32/examples/console_mux_demo/main/console_mux_demo_main.c`.
+  `sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.

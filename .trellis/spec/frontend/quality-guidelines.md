@@ -20,7 +20,7 @@ cargo test
 ```
 
 ESP-IDF changes should be built from
-`sources/esp32/examples/console_mux_demo` with `idf.py build` when ESP-IDF is
+`sources/esp32/examples/esp_wiremux_console_demo` with `idf.py build` when ESP-IDF is
 available.
 
 ## Forbidden Patterns

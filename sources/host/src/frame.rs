@@ -1,6 +1,6 @@
 use crate::crc32::crc32;
 
-pub const MAGIC: [u8; 4] = *b"ESMX";
+pub const MAGIC: [u8; 4] = *b"WMUX";
 pub const SUPPORTED_VERSION: u8 = 1;
 pub const HEADER_LEN: usize = 14;
 pub const DEFAULT_MAX_PAYLOAD_LEN: usize = 1024 * 1024;
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn preserves_terminal_suffix_that_may_be_magic_prefix() {
         let frame = build_frame_payload(0, b"ok").expect("valid frame");
-        let mut stream = b"hello E".to_vec();
+        let mut stream = b"hello W".to_vec();
         stream.extend_from_slice(&frame[1..]);
 
         assert_eq!(

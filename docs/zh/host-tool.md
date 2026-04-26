@@ -5,19 +5,21 @@ Host 侧首期使用 Rust 实现，目标是单文件可执行程序。
 当前命令形态：
 
 ```bash
-esp-serial-mux listen --port /dev/tty.usbmodem2101 --baud 115200
-esp-serial-mux send --port /dev/tty.usbmodem2101 --channel 1 --line help
-esp-serial-mux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
+wiremux listen --port /dev/tty.usbmodem2101 --baud 115200
+wiremux send --port /dev/tty.usbmodem2101 --channel 1 --line help
+wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
 ```
 
 当前能力：
 
 - 使用 `serialport` backend 打开指定设备路径，并配置波特率。
-- 从 mixed stream 中扫描 `ESMX` magic。
+- 从 mixed stream 中扫描 `WMUX` magic。
 - 校验 version、length、CRC32。
+- C core 侧也提供同等的单帧 decode/validate API，ESP 入站路径复用该公共规则。
 - 有效 mux frame 输出摘要。
+- frame 摘要包含 `payload_type`；manifest 会以 `wiremux.v1.DeviceManifest` 标识。
 - 非 mux 字节按普通终端输出保留。
-- 构造 host-to-device input `MuxEnvelope`，并通过同一个 `ESMX` frame 格式发送到指定 channel。
+- 构造 host-to-device input `MuxEnvelope`，并通过同一个 `WMUX` frame 格式发送到指定 channel。
 
 ## 端口选择
 
@@ -53,6 +55,8 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 
 ```
 
 `--channel 2` 应看到 log adapter 输出，`--channel 3` 应看到 telemetry 输出。
+`mux_manifest` 会触发 channel 0 的 protobuf manifest 输出；当前 CLI 会显示
+`payload_type` 和 payload 摘要，后续可增加结构化 manifest decode。
 
 如果想在一次运行中看到所有 channel，不要传 `--channel`：
 
@@ -72,10 +76,13 @@ cargo build --release
 构建产物位于：
 
 ```text
-sources/host/target/release/esp-serial-mux
+sources/host/target/release/wiremux
 ```
 
 ## 后续计划
 
 - 添加 capture/replay 子命令。
 - 协议稳定后再加入 `ratatui` TUI。
+- 增加 service/broker 模式，由一个 host 进程独占真实串口并向多个 frontend 分发 channel。
+- 在 service/broker 基础上支持 Unix PTY 暴露，让用户用 `screen`、`minicom` 等工具打开单独 channel。
+- Windows native virtual COM 支持进入长期 roadmap，短期不作为首期跨平台虚拟设备目标。

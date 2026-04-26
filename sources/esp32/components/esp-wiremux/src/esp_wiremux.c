@@ -1,4 +1,4 @@
-#include "esp_serial_mux.h"
+#include "esp_wiremux.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -7,8 +7,9 @@
 #include <unistd.h>
 
 #include "esp_timer.h"
-#include "esp_serial_mux_frame.h"
+#include "esp_wiremux_frame.h"
 #include "sdkconfig.h"
+#include "wiremux_manifest.h"
 
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 #include "driver/usb_serial_jtag.h"
@@ -21,38 +22,29 @@
 typedef struct {
     uint32_t channel_id;
     uint32_t direction;
-    esp_serial_mux_payload_kind_t kind;
+    esp_wiremux_payload_kind_t kind;
     uint32_t flags;
     uint32_t sequence;
     uint64_t timestamp_us;
+    const char *payload_type;
+    size_t payload_type_len;
     size_t payload_len;
     uint8_t payload[];
 } pending_item_t;
 
 typedef struct {
     bool registered;
-    esp_serial_mux_channel_config_t config;
-    esp_serial_mux_input_handler_t input_handler;
+    esp_wiremux_channel_config_t config;
+    esp_wiremux_input_handler_t input_handler;
     void *input_handler_ctx;
     uint32_t next_sequence;
     uint32_t dropped_count;
 } channel_state_t;
 
 typedef struct {
-    uint8_t channel_id;
-    uint32_t direction;
-    uint32_t sequence;
-    uint64_t timestamp_us;
-    esp_serial_mux_payload_kind_t kind;
-    uint32_t flags;
-    const uint8_t *payload;
-    size_t payload_len;
-} inbound_envelope_t;
-
-typedef struct {
     bool initialized;
     bool started;
-    esp_serial_mux_config_t config;
+    esp_wiremux_config_t config;
     QueueHandle_t queue;
     TaskHandle_t task;
     TaskHandle_t input_task;
@@ -60,7 +52,7 @@ typedef struct {
     uint8_t *rx_buffer;
     size_t rx_len;
     size_t rx_capacity;
-    channel_state_t channels[ESP_SERIAL_MUX_MAX_CHANNELS];
+    channel_state_t channels[ESP_WIREMUX_MAX_CHANNELS];
 } mux_context_t;
 
 static mux_context_t s_mux;
@@ -74,25 +66,31 @@ static esp_err_t default_stdin_transport_read(uint8_t *data,
                                               size_t *read_len,
                                               uint32_t timeout_ms,
                                               void *user_ctx);
-static esp_err_t prepare_default_transport(const esp_serial_mux_config_t *config);
+static esp_err_t prepare_default_transport(const esp_wiremux_config_t *config);
 static void mux_task(void *arg);
 static void mux_input_task(void *arg);
 static void free_pending_item(pending_item_t *item);
-static size_t envelope_encoded_len(const pending_item_t *item);
-static esp_err_t encode_envelope(const pending_item_t *item,
-                                 uint8_t *out,
-                                 size_t out_capacity,
-                                 size_t *written);
+static esp_err_t wiremux_status_to_esp(wiremux_status_t status);
+static void item_to_envelope(const pending_item_t *item, wiremux_envelope_t *envelope);
+static esp_err_t write_typed(uint8_t channel_id,
+                             uint32_t direction,
+                             esp_wiremux_payload_kind_t kind,
+                             uint32_t flags,
+                             const char *payload_type,
+                             const uint8_t *payload,
+                             size_t payload_len,
+                             uint32_t timeout_ms);
 static esp_err_t enqueue_item(pending_item_t *item,
-                              const esp_serial_mux_channel_config_t *channel,
+                              const esp_wiremux_channel_config_t *channel,
                               uint32_t timeout_ms);
 static void parse_rx_buffer_locked(void);
-static esp_err_t dispatch_input_envelope_locked(const inbound_envelope_t *envelope);
-static esp_err_t decode_inbound_envelope(const uint8_t *data,
-                                         size_t len,
-                                         inbound_envelope_t *envelope);
+static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelope);
+static uint32_t native_endianness(void);
+static const char *default_transport_name(void);
+static bool is_valid_direction(uint32_t direction);
+static bool are_valid_channel_directions(uint32_t directions);
 
-void esp_serial_mux_config_init(esp_serial_mux_config_t *config)
+void esp_wiremux_config_init(esp_wiremux_config_t *config)
 {
     if (config == NULL) {
         return;
@@ -109,10 +107,10 @@ void esp_serial_mux_config_init(esp_serial_mux_config_t *config)
     config->transport.read = default_stdin_transport_read;
 }
 
-esp_err_t esp_serial_mux_init(const esp_serial_mux_config_t *config)
+esp_err_t esp_wiremux_init(const esp_wiremux_config_t *config)
 {
-    esp_serial_mux_config_t resolved;
-    esp_serial_mux_config_init(&resolved);
+    esp_wiremux_config_t resolved;
+    esp_wiremux_config_init(&resolved);
     if (config != NULL) {
         resolved = *config;
         if (resolved.transport.write == NULL) {
@@ -147,7 +145,7 @@ esp_err_t esp_serial_mux_init(const esp_serial_mux_config_t *config)
         return ESP_ERR_NO_MEM;
     }
 
-    s_mux.rx_capacity = ESP_SERIAL_MUX_FRAME_HEADER_LEN + resolved.max_payload_len;
+    s_mux.rx_capacity = ESP_WIREMUX_FRAME_HEADER_LEN + resolved.max_payload_len;
     s_mux.rx_buffer = malloc(s_mux.rx_capacity);
     if (s_mux.rx_buffer == NULL) {
         vQueueDelete(s_mux.queue);
@@ -160,14 +158,14 @@ esp_err_t esp_serial_mux_init(const esp_serial_mux_config_t *config)
     return ESP_OK;
 }
 
-esp_err_t esp_serial_mux_start(void)
+esp_err_t esp_wiremux_start(void)
 {
     if (!s_mux.initialized || s_mux.started) {
         return ESP_ERR_INVALID_STATE;
     }
 
     BaseType_t result = xTaskCreatePinnedToCore(mux_task,
-                                                "esp_serial_mux",
+                                                "esp_wiremux",
                                                 s_mux.config.task_stack_size,
                                                 NULL,
                                                 s_mux.config.task_priority,
@@ -181,7 +179,7 @@ esp_err_t esp_serial_mux_start(void)
 
     if (s_mux.config.transport.read != NULL) {
         result = xTaskCreatePinnedToCore(mux_input_task,
-                                         "esp_serial_mux_rx",
+                                         "esp_wiremux_rx",
                                          s_mux.config.task_stack_size,
                                          NULL,
                                          s_mux.config.task_priority,
@@ -199,7 +197,7 @@ esp_err_t esp_serial_mux_start(void)
     return ESP_OK;
 }
 
-esp_err_t esp_serial_mux_stop(void)
+esp_err_t esp_wiremux_stop(void)
 {
     if (!s_mux.initialized || !s_mux.started) {
         return ESP_ERR_INVALID_STATE;
@@ -212,12 +210,13 @@ esp_err_t esp_serial_mux_stop(void)
     return ESP_OK;
 }
 
-esp_err_t esp_serial_mux_register_channel(const esp_serial_mux_channel_config_t *config)
+esp_err_t esp_wiremux_register_channel(const esp_wiremux_channel_config_t *config)
 {
     if (!s_mux.initialized || config == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (config->channel_id >= ESP_SERIAL_MUX_MAX_CHANNELS || config->directions == 0) {
+    if (config->channel_id >= ESP_WIREMUX_MAX_CHANNELS ||
+        !are_valid_channel_directions(config->directions)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -229,21 +228,21 @@ esp_err_t esp_serial_mux_register_channel(const esp_serial_mux_channel_config_t 
     return ESP_OK;
 }
 
-esp_err_t esp_serial_mux_register_input_handler(uint8_t channel_id,
-                                                esp_serial_mux_input_handler_t handler,
-                                                void *user_ctx)
+esp_err_t esp_wiremux_register_input_handler(uint8_t channel_id,
+                                             esp_wiremux_input_handler_t handler,
+                                             void *user_ctx)
 {
     if (!s_mux.initialized || handler == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (channel_id >= ESP_SERIAL_MUX_MAX_CHANNELS) {
+    if (channel_id >= ESP_WIREMUX_MAX_CHANNELS) {
         return ESP_ERR_INVALID_ARG;
     }
 
     xSemaphoreTake(s_mux.lock, portMAX_DELAY);
     channel_state_t *channel = &s_mux.channels[channel_id];
     if (!channel->registered ||
-        (channel->config.directions & ESP_SERIAL_MUX_DIRECTION_INPUT) == 0) {
+        (channel->config.directions & ESP_WIREMUX_DIRECTION_INPUT) == 0) {
         xSemaphoreGive(s_mux.lock);
         return ESP_ERR_NOT_FOUND;
     }
@@ -254,7 +253,7 @@ esp_err_t esp_serial_mux_register_input_handler(uint8_t channel_id,
     return ESP_OK;
 }
 
-esp_err_t esp_serial_mux_receive_bytes(const uint8_t *data, size_t len)
+esp_err_t esp_wiremux_receive_bytes(const uint8_t *data, size_t len)
 {
     if (!s_mux.initialized || (len > 0 && data == NULL)) {
         return ESP_ERR_INVALID_ARG;
@@ -272,18 +271,39 @@ esp_err_t esp_serial_mux_receive_bytes(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
-esp_err_t esp_serial_mux_write(uint8_t channel_id,
-                               uint32_t direction,
-                               esp_serial_mux_payload_kind_t kind,
-                               uint32_t flags,
-                               const uint8_t *payload,
-                               size_t payload_len,
-                               uint32_t timeout_ms)
+esp_err_t esp_wiremux_write(uint8_t channel_id,
+                            uint32_t direction,
+                            esp_wiremux_payload_kind_t kind,
+                            uint32_t flags,
+                            const uint8_t *payload,
+                            size_t payload_len,
+                            uint32_t timeout_ms)
+{
+    return write_typed(channel_id,
+                       direction,
+                       kind,
+                       flags,
+                       NULL,
+                       payload,
+                       payload_len,
+                       timeout_ms);
+}
+
+static esp_err_t write_typed(uint8_t channel_id,
+                             uint32_t direction,
+                             esp_wiremux_payload_kind_t kind,
+                             uint32_t flags,
+                             const char *payload_type,
+                             const uint8_t *payload,
+                             size_t payload_len,
+                             uint32_t timeout_ms)
 {
     if (!s_mux.initialized || !s_mux.started) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (channel_id >= ESP_SERIAL_MUX_MAX_CHANNELS || (payload_len > 0 && payload == NULL)) {
+    if (channel_id >= ESP_WIREMUX_MAX_CHANNELS ||
+        !is_valid_direction(direction) ||
+        (payload_len > 0 && payload == NULL)) {
         return ESP_ERR_INVALID_ARG;
     }
     if (payload_len > s_mux.config.max_payload_len) {
@@ -313,6 +333,8 @@ esp_err_t esp_serial_mux_write(uint8_t channel_id,
     item->flags = flags;
     item->sequence = channel_state.next_sequence;
     item->timestamp_us = (uint64_t)esp_timer_get_time();
+    item->payload_type = payload_type;
+    item->payload_type_len = payload_type != NULL ? strlen(payload_type) : 0;
     item->payload_len = payload_len;
     if (payload_len > 0) {
         memcpy(item->payload, payload, payload_len);
@@ -321,68 +343,97 @@ esp_err_t esp_serial_mux_write(uint8_t channel_id,
     return enqueue_item(item, &channel_state.config, timeout_ms);
 }
 
-esp_err_t esp_serial_mux_write_text(uint8_t channel_id,
-                                    uint32_t direction,
-                                    const char *text,
-                                    uint32_t timeout_ms)
+esp_err_t esp_wiremux_write_text(uint8_t channel_id,
+                                 uint32_t direction,
+                                 const char *text,
+                                 uint32_t timeout_ms)
 {
     if (text == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    return esp_serial_mux_write(channel_id,
-                                direction,
-                                ESP_SERIAL_MUX_PAYLOAD_KIND_TEXT,
-                                0,
-                                (const uint8_t *)text,
-                                strlen(text),
-                                timeout_ms);
+    return esp_wiremux_write(channel_id,
+                             direction,
+                             ESP_WIREMUX_PAYLOAD_KIND_TEXT,
+                             0,
+                             (const uint8_t *)text,
+                             strlen(text),
+                             timeout_ms);
 }
 
-esp_err_t esp_serial_mux_emit_manifest(uint32_t timeout_ms)
+esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
 {
-    char manifest[512];
-    size_t offset = 0;
+    if (!s_mux.initialized || !s_mux.started) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    offset += snprintf(manifest + offset,
-                       sizeof(manifest) - offset,
-                       "esp_serial_mux protocol=%u max_channels=%u\n",
-                       ESP_SERIAL_MUX_FRAME_VERSION,
-                       ESP_SERIAL_MUX_MAX_CHANNELS);
-
-    for (uint8_t i = 0; i < ESP_SERIAL_MUX_MAX_CHANNELS && offset < sizeof(manifest); ++i) {
+    wiremux_channel_descriptor_t channels[ESP_WIREMUX_MAX_CHANNELS];
+    size_t channel_count = 0;
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    for (uint8_t i = 0; i < ESP_WIREMUX_MAX_CHANNELS; ++i) {
         if (!s_mux.channels[i].registered) {
             continue;
         }
-        offset += snprintf(manifest + offset,
-                           sizeof(manifest) - offset,
-                           "channel=%u name=%s directions=0x%lx\n",
-                           i,
-                           s_mux.channels[i].config.name != NULL ? s_mux.channels[i].config.name : "",
-                           (unsigned long)s_mux.channels[i].config.directions);
+        channels[channel_count++] = (wiremux_channel_descriptor_t) {
+            .channel_id = i,
+            .name = s_mux.channels[i].config.name,
+            .description = s_mux.channels[i].config.description,
+            .directions = s_mux.channels[i].config.directions,
+            .default_payload_kind = s_mux.channels[i].config.default_payload_kind,
+            .flags = 0,
+        };
+    }
+    const size_t max_payload_len = s_mux.config.max_payload_len;
+    xSemaphoreGive(s_mux.lock);
+
+    const wiremux_device_manifest_t manifest = {
+        .device_name = "esp-wiremux",
+        .firmware_version = "0.1.0",
+        .protocol_version = ESP_WIREMUX_FRAME_VERSION,
+        .max_channels = ESP_WIREMUX_MAX_CHANNELS,
+        .channels = channels,
+        .channel_count = channel_count,
+        .native_endianness = native_endianness(),
+        .max_payload_len = (uint32_t)max_payload_len,
+        .transport = default_transport_name(),
+        .feature_flags = WIREMUX_FEATURE_MANIFEST_PROTOBUF,
+        .sdk_name = WIREMUX_SDK_NAME_ESP,
+        .sdk_version = "0.1.0",
+    };
+
+    const size_t manifest_len = wiremux_device_manifest_encoded_len(&manifest);
+    uint8_t *payload = malloc(manifest_len);
+    if (payload == NULL) {
+        return ESP_ERR_NO_MEM;
     }
 
-    if (offset >= sizeof(manifest)) {
-        offset = sizeof(manifest) - 1;
-        manifest[offset] = '\0';
+    size_t written = 0;
+    esp_err_t err = wiremux_status_to_esp(wiremux_device_manifest_encode(&manifest,
+                                                                         payload,
+                                                                         manifest_len,
+                                                                         &written));
+    if (err == ESP_OK) {
+        err = write_typed(ESP_WIREMUX_CHANNEL_SYSTEM,
+                          ESP_WIREMUX_DIRECTION_OUTPUT,
+                          ESP_WIREMUX_PAYLOAD_KIND_CONTROL,
+                          0,
+                          WIREMUX_MANIFEST_PAYLOAD_TYPE,
+                          payload,
+                          written,
+                          timeout_ms);
     }
 
-    return esp_serial_mux_write(ESP_SERIAL_MUX_CHANNEL_SYSTEM,
-                                ESP_SERIAL_MUX_DIRECTION_OUTPUT,
-                                ESP_SERIAL_MUX_PAYLOAD_KIND_CONTROL,
-                                0,
-                                (const uint8_t *)manifest,
-                                strlen(manifest),
-                                timeout_ms);
+    free(payload);
+    return err;
 }
 
 static esp_err_t enqueue_item(pending_item_t *item,
-                              const esp_serial_mux_channel_config_t *channel,
+                              const esp_wiremux_channel_config_t *channel,
                               uint32_t timeout_ms)
 {
     TickType_t wait_ticks = pdMS_TO_TICKS(timeout_ms);
 
-    if (channel->backpressure_policy == ESP_SERIAL_MUX_BACKPRESSURE_DROP_NEWEST) {
+    if (channel->backpressure_policy == ESP_WIREMUX_BACKPRESSURE_DROP_NEWEST) {
         wait_ticks = 0;
     }
 
@@ -390,7 +441,7 @@ static esp_err_t enqueue_item(pending_item_t *item,
         return ESP_OK;
     }
 
-    if (channel->backpressure_policy == ESP_SERIAL_MUX_BACKPRESSURE_DROP_OLDEST) {
+    if (channel->backpressure_policy == ESP_WIREMUX_BACKPRESSURE_DROP_OLDEST) {
         pending_item_t *old_item = NULL;
         if (xQueueReceive(s_mux.queue, &old_item, 0) == pdTRUE) {
             free_pending_item(old_item);
@@ -401,7 +452,7 @@ static esp_err_t enqueue_item(pending_item_t *item,
     }
 
     xSemaphoreTake(s_mux.lock, portMAX_DELAY);
-    if (item->channel_id < ESP_SERIAL_MUX_MAX_CHANNELS) {
+    if (item->channel_id < ESP_WIREMUX_MAX_CHANNELS) {
         s_mux.channels[item->channel_id].dropped_count++;
     }
     xSemaphoreGive(s_mux.lock);
@@ -423,7 +474,10 @@ static void mux_task(void *arg)
             break;
         }
 
-        const size_t envelope_len = envelope_encoded_len(item);
+        wiremux_envelope_t mux_envelope;
+        item_to_envelope(item, &mux_envelope);
+
+        const size_t envelope_len = wiremux_envelope_encoded_len(&mux_envelope);
         uint8_t *envelope = malloc(envelope_len);
         if (envelope == NULL) {
             free_pending_item(item);
@@ -431,26 +485,27 @@ static void mux_task(void *arg)
         }
 
         size_t envelope_written = 0;
-        if (encode_envelope(item, envelope, envelope_len, &envelope_written) != ESP_OK) {
+        if (wiremux_envelope_encode(&mux_envelope, envelope, envelope_len, &envelope_written) !=
+            WIREMUX_STATUS_OK) {
             free(envelope);
             free_pending_item(item);
             continue;
         }
 
-        const size_t frame_len = esp_serial_mux_frame_encoded_len(envelope_written);
+        const size_t frame_len = esp_wiremux_frame_encoded_len(envelope_written);
         uint8_t *frame = malloc(frame_len);
         if (frame != NULL) {
             size_t written = 0;
-            const esp_serial_mux_frame_header_t header = {
-                .version = ESP_SERIAL_MUX_FRAME_VERSION,
+            const esp_wiremux_frame_header_t header = {
+                .version = ESP_WIREMUX_FRAME_VERSION,
                 .flags = (uint8_t)(item->flags & 0xffu),
             };
-            if (esp_serial_mux_frame_encode(&header,
-                                            envelope,
-                                            envelope_written,
-                                            frame,
-                                            frame_len,
-                                            &written) == ESP_OK) {
+            if (esp_wiremux_frame_encode(&header,
+                                         envelope,
+                                         envelope_written,
+                                         frame,
+                                         frame_len,
+                                         &written) == ESP_OK) {
                 (void)s_mux.config.transport.write(frame,
                                                    written,
                                                    s_mux.config.default_write_timeout_ms,
@@ -478,21 +533,13 @@ static void mux_input_task(void *arg)
                                                     20,
                                                     s_mux.config.transport.user_ctx);
         if (err == ESP_OK && read_len > 0) {
-            (void)esp_serial_mux_receive_bytes(buffer, read_len);
+            (void)esp_wiremux_receive_bytes(buffer, read_len);
         } else {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
 
     vTaskDelete(NULL);
-}
-
-static uint32_t read_le32(const uint8_t *data)
-{
-    return (uint32_t)data[0] |
-           ((uint32_t)data[1] << 8) |
-           ((uint32_t)data[2] << 16) |
-           ((uint32_t)data[3] << 24);
 }
 
 static void rx_drop_prefix(size_t len)
@@ -507,11 +554,11 @@ static void rx_drop_prefix(size_t len)
 
 static size_t find_magic_pos(void)
 {
-    if (s_mux.rx_len < ESP_SERIAL_MUX_MAGIC_LEN) {
+    if (s_mux.rx_len < ESP_WIREMUX_MAGIC_LEN) {
         return SIZE_MAX;
     }
-    for (size_t i = 0; i <= s_mux.rx_len - ESP_SERIAL_MUX_MAGIC_LEN; ++i) {
-        if (memcmp(s_mux.rx_buffer + i, ESP_SERIAL_MUX_MAGIC, ESP_SERIAL_MUX_MAGIC_LEN) == 0) {
+    for (size_t i = 0; i <= s_mux.rx_len - ESP_WIREMUX_MAGIC_LEN; ++i) {
+        if (memcmp(s_mux.rx_buffer + i, ESP_WIREMUX_MAGIC, ESP_WIREMUX_MAGIC_LEN) == 0) {
             return i;
         }
     }
@@ -520,11 +567,11 @@ static size_t find_magic_pos(void)
 
 static size_t magic_prefix_suffix_len(void)
 {
-    const size_t max_len = s_mux.rx_len < ESP_SERIAL_MUX_MAGIC_LEN - 1
+    const size_t max_len = s_mux.rx_len < ESP_WIREMUX_MAGIC_LEN - 1
                                ? s_mux.rx_len
-                               : ESP_SERIAL_MUX_MAGIC_LEN - 1;
+                               : ESP_WIREMUX_MAGIC_LEN - 1;
     for (size_t len = max_len; len > 0; --len) {
-        if (memcmp(s_mux.rx_buffer + s_mux.rx_len - len, ESP_SERIAL_MUX_MAGIC, len) == 0) {
+        if (memcmp(s_mux.rx_buffer + s_mux.rx_len - len, ESP_WIREMUX_MAGIC, len) == 0) {
             return len;
         }
     }
@@ -544,182 +591,76 @@ static void parse_rx_buffer_locked(void)
             rx_drop_prefix(magic_pos);
             continue;
         }
-        if (s_mux.rx_len < ESP_SERIAL_MUX_FRAME_HEADER_LEN) {
+        if (s_mux.rx_len < ESP_WIREMUX_FRAME_HEADER_LEN) {
             return;
         }
 
-        const uint8_t version = s_mux.rx_buffer[4];
-        if (version != ESP_SERIAL_MUX_FRAME_VERSION) {
+        wiremux_frame_view_t frame = {0};
+        const wiremux_status_t frame_status = wiremux_frame_decode(s_mux.rx_buffer,
+                                                                   s_mux.rx_len,
+                                                                   s_mux.config.max_payload_len,
+                                                                   &frame);
+        if (frame_status == WIREMUX_STATUS_INCOMPLETE) {
+            return;
+        }
+        if (frame_status == WIREMUX_STATUS_BAD_VERSION ||
+            frame_status == WIREMUX_STATUS_BAD_MAGIC ||
+            frame_status == WIREMUX_STATUS_INVALID_SIZE) {
+            rx_drop_prefix(1);
+            continue;
+        }
+        if (frame_status == WIREMUX_STATUS_CRC_MISMATCH) {
+            rx_drop_prefix(frame.frame_len > 0 ? frame.frame_len : 1);
+            continue;
+        }
+        if (frame_status != WIREMUX_STATUS_OK) {
             rx_drop_prefix(1);
             continue;
         }
 
-        const size_t payload_len = (size_t)read_le32(&s_mux.rx_buffer[6]);
-        if (payload_len > s_mux.config.max_payload_len) {
-            rx_drop_prefix(1);
-            continue;
-        }
-
-        const size_t total_len = ESP_SERIAL_MUX_FRAME_HEADER_LEN + payload_len;
-        if (s_mux.rx_len < total_len) {
-            return;
-        }
-
-        const uint32_t expected_crc = read_le32(&s_mux.rx_buffer[10]);
-        const uint8_t *payload = &s_mux.rx_buffer[ESP_SERIAL_MUX_FRAME_HEADER_LEN];
-        if (esp_serial_mux_crc32(payload, payload_len) != expected_crc) {
-            rx_drop_prefix(total_len);
-            continue;
-        }
-
-        inbound_envelope_t envelope = {0};
-        esp_err_t err = decode_inbound_envelope(payload, payload_len, &envelope);
-        if (err == ESP_OK) {
+        wiremux_envelope_t envelope = {0};
+        if (wiremux_envelope_decode(frame.payload, frame.payload_len, &envelope) ==
+            WIREMUX_STATUS_OK) {
             (void)dispatch_input_envelope_locked(&envelope);
         }
-        rx_drop_prefix(total_len);
+        rx_drop_prefix(frame.frame_len);
     }
 }
 
-static esp_err_t dispatch_input_envelope_locked(const inbound_envelope_t *envelope)
+static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelope)
 {
     if (envelope == NULL ||
-        envelope->direction != ESP_SERIAL_MUX_DIRECTION_INPUT ||
-        envelope->channel_id >= ESP_SERIAL_MUX_MAX_CHANNELS ||
+        envelope->direction != ESP_WIREMUX_DIRECTION_INPUT ||
+        envelope->channel_id >= ESP_WIREMUX_MAX_CHANNELS ||
         envelope->payload_len > s_mux.config.max_payload_len) {
         return ESP_ERR_INVALID_ARG;
     }
 
     channel_state_t *channel = &s_mux.channels[envelope->channel_id];
     if (!channel->registered ||
-        (channel->config.directions & ESP_SERIAL_MUX_DIRECTION_INPUT) == 0 ||
+        (channel->config.directions & ESP_WIREMUX_DIRECTION_INPUT) == 0 ||
         channel->input_handler == NULL) {
         return ESP_ERR_NOT_FOUND;
     }
 
-    esp_serial_mux_input_handler_t handler = channel->input_handler;
+    esp_wiremux_input_handler_t handler = channel->input_handler;
     void *handler_ctx = channel->input_handler_ctx;
     const uint8_t channel_id = (uint8_t)envelope->channel_id;
-    const uint8_t *payload = envelope->payload;
     const size_t payload_len = envelope->payload_len;
+    uint8_t *payload = NULL;
+    if (payload_len > 0) {
+        payload = malloc(payload_len);
+        if (payload == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(payload, envelope->payload, payload_len);
+    }
 
     xSemaphoreGive(s_mux.lock);
     esp_err_t err = handler(channel_id, payload, payload_len, handler_ctx);
     xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    free(payload);
     return err;
-}
-
-static esp_err_t read_varint_inbound(const uint8_t *data,
-                                     size_t len,
-                                     size_t *cursor,
-                                     uint64_t *value)
-{
-    uint64_t result = 0;
-    for (uint8_t shift = 0; shift < 64; shift += 7) {
-        if (*cursor >= len) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-        const uint8_t byte = data[(*cursor)++];
-        result |= ((uint64_t)(byte & 0x7fu)) << shift;
-        if ((byte & 0x80u) == 0) {
-            *value = result;
-            return ESP_OK;
-        }
-    }
-    return ESP_ERR_INVALID_SIZE;
-}
-
-static esp_err_t read_bytes_inbound(const uint8_t *data,
-                                    size_t len,
-                                    size_t *cursor,
-                                    const uint8_t **value,
-                                    size_t *value_len)
-{
-    uint64_t field_len = 0;
-    esp_err_t err = read_varint_inbound(data, len, cursor, &field_len);
-    if (err != ESP_OK) {
-        return err;
-    }
-    if (field_len > (uint64_t)(len - *cursor)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    *value = &data[*cursor];
-    *value_len = (size_t)field_len;
-    *cursor += (size_t)field_len;
-    return ESP_OK;
-}
-
-static esp_err_t decode_inbound_envelope(const uint8_t *data,
-                                         size_t len,
-                                         inbound_envelope_t *envelope)
-{
-    if (data == NULL || envelope == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    size_t cursor = 0;
-    while (cursor < len) {
-        uint64_t key = 0;
-        esp_err_t err = read_varint_inbound(data, len, &cursor, &key);
-        if (err != ESP_OK) {
-            return err;
-        }
-
-        const uint32_t field_number = (uint32_t)(key >> 3);
-        const uint32_t wire_type = (uint32_t)(key & 0x07u);
-        uint64_t varint = 0;
-
-        switch (wire_type) {
-        case 0:
-            err = read_varint_inbound(data, len, &cursor, &varint);
-            if (err != ESP_OK) {
-                return err;
-            }
-            switch (field_number) {
-            case 1:
-                envelope->channel_id = (uint32_t)varint;
-                break;
-            case 2:
-                envelope->direction = (uint32_t)varint;
-                break;
-            case 3:
-                envelope->sequence = (uint32_t)varint;
-                break;
-            case 4:
-                envelope->timestamp_us = varint;
-                break;
-            case 5:
-                envelope->kind = (esp_serial_mux_payload_kind_t)varint;
-                break;
-            case 8:
-                envelope->flags = (uint32_t)varint;
-                break;
-            default:
-                break;
-            }
-            break;
-        case 2: {
-            const uint8_t *field = NULL;
-            size_t field_len = 0;
-            err = read_bytes_inbound(data, len, &cursor, &field, &field_len);
-            if (err != ESP_OK) {
-                return err;
-            }
-            if (field_number == 7) {
-                envelope->payload = field;
-                envelope->payload_len = field_len;
-            }
-            break;
-        }
-        default:
-            return ESP_ERR_NOT_SUPPORTED;
-        }
-    }
-
-    if (envelope->payload == NULL && envelope->payload_len != 0) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    return ESP_OK;
 }
 
 static void free_pending_item(pending_item_t *item)
@@ -727,89 +668,68 @@ static void free_pending_item(pending_item_t *item)
     free(item);
 }
 
-static size_t varint_len(uint64_t value)
+static void item_to_envelope(const pending_item_t *item, wiremux_envelope_t *envelope)
 {
-    size_t len = 1;
-    while (value >= 0x80u) {
-        value >>= 7;
-        len++;
-    }
-    return len;
+    memset(envelope, 0, sizeof(*envelope));
+    envelope->channel_id = item->channel_id;
+    envelope->direction = item->direction;
+    envelope->sequence = item->sequence;
+    envelope->timestamp_us = item->timestamp_us;
+    envelope->kind = item->kind;
+    envelope->payload_type = item->payload_type;
+    envelope->payload_type_len = item->payload_type_len;
+    envelope->payload = item->payload;
+    envelope->payload_len = item->payload_len;
+    envelope->flags = item->flags;
 }
 
-static size_t varint_field_len(uint32_t field_number, uint64_t value)
+static esp_err_t wiremux_status_to_esp(wiremux_status_t status)
 {
-    return varint_len(((uint64_t)field_number << 3) | 0u) + varint_len(value);
-}
-
-static size_t bytes_field_len(uint32_t field_number, size_t len)
-{
-    return varint_len(((uint64_t)field_number << 3) | 2u) + varint_len(len) + len;
-}
-
-static uint8_t *write_varint(uint8_t *out, uint64_t value)
-{
-    while (value >= 0x80u) {
-        *out++ = (uint8_t)(value | 0x80u);
-        value >>= 7;
-    }
-    *out++ = (uint8_t)value;
-    return out;
-}
-
-static uint8_t *write_varint_field(uint8_t *out, uint32_t field_number, uint64_t value)
-{
-    out = write_varint(out, ((uint64_t)field_number << 3) | 0u);
-    return write_varint(out, value);
-}
-
-static uint8_t *write_bytes_field(uint8_t *out, uint32_t field_number, const uint8_t *data, size_t len)
-{
-    out = write_varint(out, ((uint64_t)field_number << 3) | 2u);
-    out = write_varint(out, len);
-    if (len > 0) {
-        memcpy(out, data, len);
-        out += len;
-    }
-    return out;
-}
-
-static size_t envelope_encoded_len(const pending_item_t *item)
-{
-    return varint_field_len(1, item->channel_id) +
-           varint_field_len(2, item->direction) +
-           varint_field_len(3, item->sequence) +
-           varint_field_len(4, item->timestamp_us) +
-           varint_field_len(5, item->kind) +
-           bytes_field_len(7, item->payload_len) +
-           varint_field_len(8, item->flags);
-}
-
-static esp_err_t encode_envelope(const pending_item_t *item,
-                                 uint8_t *out,
-                                 size_t out_capacity,
-                                 size_t *written)
-{
-    if (item == NULL || out == NULL || written == NULL) {
+    switch (status) {
+    case WIREMUX_STATUS_OK:
+        return ESP_OK;
+    case WIREMUX_STATUS_INVALID_ARG:
         return ESP_ERR_INVALID_ARG;
-    }
-
-    const size_t required = envelope_encoded_len(item);
-    if (out_capacity < required) {
+    case WIREMUX_STATUS_INVALID_SIZE:
         return ESP_ERR_INVALID_SIZE;
+    case WIREMUX_STATUS_NOT_SUPPORTED:
+        return ESP_ERR_NOT_SUPPORTED;
+    case WIREMUX_STATUS_INCOMPLETE:
+    case WIREMUX_STATUS_BAD_MAGIC:
+    case WIREMUX_STATUS_BAD_VERSION:
+    case WIREMUX_STATUS_CRC_MISMATCH:
+        return ESP_FAIL;
+    default:
+        return ESP_FAIL;
     }
+}
 
-    uint8_t *cursor = out;
-    cursor = write_varint_field(cursor, 1, item->channel_id);
-    cursor = write_varint_field(cursor, 2, item->direction);
-    cursor = write_varint_field(cursor, 3, item->sequence);
-    cursor = write_varint_field(cursor, 4, item->timestamp_us);
-    cursor = write_varint_field(cursor, 5, item->kind);
-    cursor = write_bytes_field(cursor, 7, item->payload, item->payload_len);
-    cursor = write_varint_field(cursor, 8, item->flags);
+static uint32_t native_endianness(void)
+{
+    const uint16_t value = 0x0001u;
+    return (*(const uint8_t *)&value == 0x01u) ? WIREMUX_ENDIANNESS_LITTLE
+                                               : WIREMUX_ENDIANNESS_BIG;
+}
 
-    *written = (size_t)(cursor - out);
-    return ESP_OK;
+static const char *default_transport_name(void)
+{
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    return "esp-usb-serial-jtag";
+#else
+    return "stdio";
+#endif
+}
+
+static bool is_valid_direction(uint32_t direction)
+{
+    return direction == ESP_WIREMUX_DIRECTION_INPUT ||
+           direction == ESP_WIREMUX_DIRECTION_OUTPUT;
+}
+
+static bool are_valid_channel_directions(uint32_t directions)
+{
+    const uint32_t allowed = ESP_WIREMUX_DIRECTION_INPUT | ESP_WIREMUX_DIRECTION_OUTPUT;
+    return directions != 0 && (directions & ~allowed) == 0;
 }
 
 static esp_err_t default_stdout_transport_write(const uint8_t *data,
@@ -848,7 +768,7 @@ static esp_err_t default_stdout_transport_write(const uint8_t *data,
 #endif
 }
 
-static esp_err_t prepare_default_transport(const esp_serial_mux_config_t *config)
+static esp_err_t prepare_default_transport(const esp_wiremux_config_t *config)
 {
     if (config == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -865,7 +785,7 @@ static esp_err_t prepare_default_transport(const esp_serial_mux_config_t *config
     }
 
     usb_serial_jtag_driver_config_t driver_config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    const size_t frame_buffer_size = ESP_SERIAL_MUX_FRAME_HEADER_LEN + config->max_payload_len;
+    const size_t frame_buffer_size = ESP_WIREMUX_FRAME_HEADER_LEN + config->max_payload_len;
     if (frame_buffer_size > driver_config.rx_buffer_size) {
         driver_config.rx_buffer_size = (uint32_t)frame_buffer_size;
     }

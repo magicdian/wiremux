@@ -14,12 +14,12 @@ Important existing type definitions:
 
 - `MuxEnvelope`, `DecodeError`, `FrameScanner`, and `StreamEvent` in
   `sources/host/src/`.
-- `esp_serial_mux_config_t`, `esp_serial_mux_channel_config_t`, and payload enums
-  in `sources/esp32/components/esp_serial_mux/include/esp_serial_mux.h`.
-- `esp_serial_mux_frame_header_t` and frame constants in
-  `sources/esp32/components/esp_serial_mux/include/esp_serial_mux_frame.h`.
+- `esp_wiremux_config_t`, `esp_wiremux_channel_config_t`, and payload enums
+  in `sources/esp32/components/esp-wiremux/include/esp_wiremux.h`.
+- `esp_wiremux_frame_header_t` and frame constants in
+  `sources/esp32/components/esp-wiremux/include/esp_wiremux_frame.h`.
 - `MuxEnvelope`, `ChannelDescriptor`, and `DeviceManifest` in
-  `sources/host/proto/esp_serial_mux.proto`.
+  `sources/core/proto/wiremux.proto`.
 
 ## Type Organization
 
@@ -44,7 +44,7 @@ u8::try_from(channel).map_err(|_| format!("invalid --channel value: {value}; mus
 ```
 
 ```c
-if (channel_id >= ESP_SERIAL_MUX_MAX_CHANNELS || (payload_len > 0 && payload == NULL)) {
+if (channel_id >= ESP_WIREMUX_MAX_CHANNELS || (payload_len > 0 && payload == NULL)) {
     return ESP_ERR_INVALID_ARG;
 }
 ```

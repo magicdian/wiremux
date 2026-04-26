@@ -13,7 +13,7 @@ The current stateful loops are not frontend hooks:
 - `FrameScanner::push()` and `FrameScanner::finish()` in `sources/host/src/frame.rs`.
 - The host `listen()` loop in `sources/host/src/main.rs`.
 - FreeRTOS tasks `mux_task()` and `mux_input_task()` in
-  `sources/esp32/components/esp_serial_mux/src/esp_serial_mux.c`.
+  `sources/esp32/components/esp-wiremux/src/esp_wiremux.c`.
 
 Do not add hook guidelines by copying generic React patterns. Add them only when
 a frontend framework is introduced.
@@ -56,7 +56,7 @@ examples only; do not create them without a UI task.
 
 - Do not put serial-port ownership inside a browser-only hook without a real
   native/local bridge.
-- Do not duplicate the `ESMX` scanner in UI code without byte-level tests against
+- Do not duplicate the `WMUX` scanner in UI code without byte-level tests against
   the backend contract.
 - Do not hide reconnect or partial-frame behavior inside UI state without exposing
   errors to the user.
