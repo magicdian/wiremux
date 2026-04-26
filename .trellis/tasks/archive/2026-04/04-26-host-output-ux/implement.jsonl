@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "host CLI layout, output contract, batch filtering"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "CRC/decode diagnostics handling"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "host tests and console behavior"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "host diagnostics and log channel visibility"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "temporary file persistence boundary"}
