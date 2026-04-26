@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-04-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~165 | Active |
+| `journal-1.md` | ~199 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-04-26 | Core GoogleTest foundation | `91b88e3`, `75234de` | `main` |
 | 4 | 2026-04-26 | Wiremux core migration | `9c54ea1`, `494239a` | `main` |
 | 3 | 2026-04-26 | Bootstrap project guidelines | `8abad12`, `9b3c7e9` | `main` |
 | 2 | 2026-04-26 | Complete bidirectional mux MVP | `addb794`, `1f57e59`, `0369f00`, `7e5fcb3`, `3186cc0`, `c585e34`, `471fbe9`, `8aa8d09` | `main` |

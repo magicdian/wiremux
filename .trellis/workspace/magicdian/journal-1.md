@@ -163,3 +163,37 @@ Notes:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Core GoogleTest foundation
+
+**Date**: 2026-04-26
+**Task**: Core GoogleTest foundation
+**Branch**: `main`
+
+### Summary
+
+Added host-side GoogleTest/GoogleMock infrastructure for the portable C core, migrated smoke coverage into 16 gtest cases, documented the CMake/CTest workflow, and archived the completed Trellis task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `91b88e3` | (see git log) |
+| `75234de` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
