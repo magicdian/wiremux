@@ -117,3 +117,49 @@ Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Wiremux core migration
+
+**Date**: 2026-04-26
+**Task**: Wiremux core migration
+**Branch**: `main`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Product rename | Migrated public host crate/binary to `wiremux`, ESP-IDF component to `esp-wiremux`, and ESP C APIs to `esp_wiremux_*`. |
+| Core architecture | Added `sources/core` with shared proto schema, portable C frame encode/decode, CRC32, envelope encode/decode, manifest encode, and a C smoke test. |
+| ESP adapter | Reworked ESP component to consume core protocol APIs while keeping FreeRTOS tasks, queues, USB Serial/JTAG transport, console adapter, and log adapter platform-specific. |
+| Host CLI | Kept `listen`, `send`, and single-handle `listen --line` flows under the `wiremux` crate/bin with `WMUX` framing. |
+| Specs/docs | Updated backend/frontend Trellis specs and Chinese docs for the new layered `wiremux` architecture, manifest fields, endian semantics, and roadmap boundaries. |
+| Validation | Ran portable C smoke test, `cargo fmt --check`, `cargo check`, `cargo test` with 32 tests, `git diff --check`, stale-name search, and TODO/FIXME search. Human verified ESP32 `help` command over channel 1 after rebuild. |
+
+Notes:
+- ESP-IDF build was not run in this shell because `idf.py` was unavailable, but the user rebuilt ESP32 firmware externally and verified channel-1 console output.
+- Follow-up roadmap remains host structured manifest decode, broker/service mode, PTY endpoints, and future TUI.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9c54ea1` | (see git log) |
+| `494239a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

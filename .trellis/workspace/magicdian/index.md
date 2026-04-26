@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
+- **Total Sessions**: 4
 - **Last Active**: 2026-04-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~119 | Active |
+| `journal-1.md` | ~165 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-04-26 | Wiremux core migration | `9c54ea1`, `494239a` | `main` |
 | 3 | 2026-04-26 | Bootstrap project guidelines | `8abad12`, `9b3c7e9` | `main` |
 | 2 | 2026-04-26 | Complete bidirectional mux MVP | `addb794`, `1f57e59`, `0369f00`, `7e5fcb3`, `3186cc0`, `c585e34`, `471fbe9`, `8aa8d09` | `main` |
 | 1 | 2026-04-25 | ESP serial mux one-way milestone | `709fb9a`, `8d356dd`, `7aef44e`, `1bb3749`, `adc9372`, `9ac534c` | `main` |
