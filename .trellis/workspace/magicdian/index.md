@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
-- **Last Active**: 2026-04-27
+- **Total Sessions**: 17
+- **Last Active**: 2026-04-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~678 | Active |
+| `journal-1.md` | ~712 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-04-28 | TUI unclassified input read-only | `25d38df`, `d83c7a4` | `dev` |
 | 16 | 2026-04-27 | Polish TUI passthrough terminal experience | `7562092`, `1816fd8` | `dev` |
 | 15 | 2026-04-27 | Console passthrough mode 2604.27.3 | `a89bfcd` | `dev` |
 | 14 | 2026-04-27 | Registry example packaging release | `fec186f`, `a94bfc9` | `dev` |

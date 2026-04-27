@@ -676,3 +676,37 @@ Improved TUI passthrough UX with Esc-x exit parity, terminal-native cursor place
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: TUI unclassified input read-only
+
+**Date**: 2026-04-28
+**Task**: TUI unclassified input read-only
+**Branch**: `dev`
+
+### Summary
+
+Made the TUI all-channel view read-only, gated channel input on manifest DIRECTION_INPUT, kept passthrough active only for explicit input-capable channels, updated host docs/specs, and archived the task after user acceptance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `25d38df` | (see git log) |
+| `d83c7a4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
