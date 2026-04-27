@@ -642,3 +642,37 @@ External tool gaps in this shell:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Polish TUI passthrough terminal experience
+
+**Date**: 2026-04-27
+**Task**: Polish TUI passthrough terminal experience
+**Branch**: `dev`
+
+### Summary
+
+Improved TUI passthrough UX with Esc-x exit parity, terminal-native cursor placement, shell-like prompt rendering, docs, specs, and focused host tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7562092` | (see git log) |
+| `1816fd8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
