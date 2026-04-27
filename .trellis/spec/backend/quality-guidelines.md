@@ -238,6 +238,149 @@ Correct single-process hardware check:
 Host opens the serial port once, sends the input frame with `listen --line`, then keeps decoding output on the same handle.
 ```
 
+## Scenario: Release Versioning and ESP Registry Packaging
+
+### 1. Scope / Trigger
+
+Trigger: changing release versions, ESP Component Registry manifests, release
+automation, or generated ESP-IDF component package layout.
+
+This is an infra boundary. The source tree keeps `sources/core/c` platform-neutral
+while release automation generates ESP Registry packages under `dist/`.
+
+### 2. Signatures
+
+Version files and declarations:
+
+```text
+VERSION
+sources/host/Cargo.toml
+sources/host/Cargo.lock
+sources/esp32/components/esp-wiremux/idf_component.yml
+sources/esp32/components/esp-wiremux/include/esp_wiremux.h
+```
+
+Generator:
+
+```bash
+tools/esp-registry/generate-packages.sh
+
+WIREMUX_RELEASE_VERSION=<YYMM.DD.BuildNumber>
+WIREMUX_ESP_REGISTRY_NAMESPACE=<namespace>
+WIREMUX_ESP_REGISTRY_URL=<registry-url>
+WIREMUX_REPOSITORY_URL=<repository-url>
+WIREMUX_ESP_REGISTRY_OUTPUT_DIR=<dist/esp-registry path>
+```
+
+Generated package roots:
+
+```text
+dist/esp-registry/wiremux-core/
+dist/esp-registry/esp-wiremux/
+```
+
+CI:
+
+```text
+.github/workflows/esp-registry-release.yml
+```
+
+### 3. Contracts
+
+- Release versions use `YYMM.DD.BuildNumber`, for example `2604.27.1`.
+- Same-day patch releases increment `BuildNumber`; a different release date
+  updates `YYMM.DD` and resets `BuildNumber` to `1`.
+- `VERSION`, host Cargo package version, host lockfile version, ESP component
+  manifest version, and `ESP_WIREMUX_VERSION` must match.
+- Host crate and ESP component license declarations must be `Apache-2.0`.
+- `sources/core/c/CMakeLists.txt` must remain a host-side portable C test/build
+  project. Do not convert the core source tree into an ESP-IDF component.
+- Registry packages are generated into ignored `dist/esp-registry/` directories.
+- `wiremux-core` package contains copied portable core headers/sources, its own
+  generated `CMakeLists.txt`, `idf_component.yml`, `README.md`,
+  `README_CN.md`, and `LICENSE`.
+- `esp-wiremux` package contains copied ESP adapter headers/sources, its own
+  generated `CMakeLists.txt`, `idf_component.yml`, `README.md`,
+  `README_CN.md`, and `LICENSE`.
+- `esp-wiremux` registry manifest depends on
+  `<namespace>/wiremux-core` at the same version with `require: public`.
+- Root GitHub `README.md` should describe Wiremux as a platform-neutral
+  serial-style byte-stream multiplexer; ESP-IDF is the current reference
+  integration, not the whole project boundary.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| version does not match `^[0-9]{4}\.[0-9]{2}\.[0-9]+$` | generator exits non-zero |
+| `WIREMUX_ESP_REGISTRY_OUTPUT_DIR` points outside `dist/esp-registry` | generator refuses to write |
+| source-tree ESP component references `../../../core/c` for local dev | allowed only in source tree |
+| generated `esp-wiremux` package references parent-relative core paths | fail review; package must depend on registry `wiremux-core` |
+| generated package missing README or LICENSE | fail package validation |
+| release workflow runs from a non-main commit | workflow must fail before upload |
+| release tag version differs from `VERSION` after stripping leading `v` | workflow must fail before upload |
+| namespace is pending or unavailable | do not publish production release with that namespace |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `VERSION` is `2604.27.1`, Cargo and ESP declarations match, generated
+  packages pack with `compote component pack`, and both tarballs include README,
+  README_CN, LICENSE, and `idf_component.yml`.
+- Base: local ESP example still builds from `sources/esp32/examples/...` using
+  the source-tree component and parent-relative local core reference.
+- Bad: editing `sources/core/c/CMakeLists.txt` to use
+  `idf_component_register()` makes future maintainers think the portable core is
+  ESP-only.
+- Bad: root README introduces Wiremux as ESP32-only even though the core is
+  platform-neutral.
+
+### 6. Tests Required
+
+- `bash -n tools/esp-registry/generate-packages.sh`
+- `tools/esp-registry/generate-packages.sh`
+- `rg` check that release declarations use the same version.
+- `rg` check that generated packages do not contain parent-relative core paths.
+- `compote component pack --name wiremux-core` in
+  `dist/esp-registry/wiremux-core`.
+- `compote component pack --name esp-wiremux` in
+  `dist/esp-registry/esp-wiremux`.
+- `tar -tzf` check that each package archive includes README, README_CN,
+  LICENSE, and `idf_component.yml`.
+- Host checks: `cargo fmt --check`, `cargo check`, and `cargo test` in
+  `sources/host`.
+- Portable core checks when core files changed: configure, build, and run
+  `ctest` for `sources/core/c`.
+- ESP example build with ESP-IDF when ESP component or packaging behavior
+  changed.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Change `sources/core/c/CMakeLists.txt` into an ESP-IDF component and publish it
+directly from the source tree.
+```
+
+#### Correct
+
+```text
+Keep `sources/core/c` portable. Generate `dist/esp-registry/wiremux-core` at
+release time with a registry-specific `CMakeLists.txt` and manifest.
+```
+
+#### Wrong
+
+```text
+Release host v2604.27.2 while ESP component manifest still says 2604.27.1.
+```
+
+#### Correct
+
+```text
+Update `VERSION`, Cargo files, ESP manifest, and `ESP_WIREMUX_VERSION` together.
+```
+
 ## Testing Requirements
 
 - Host Rust code must pass `cargo test`, `cargo check`, and `cargo fmt --check`.

@@ -1,0 +1,7 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Review validation coverage and command gates"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Review packaging against repo layout and core boundary"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Review version source and generated package drift"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review cross-layer release/version consistency"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Review validation script failure behavior"}

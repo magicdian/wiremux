@@ -419,7 +419,7 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
 
     const wiremux_device_manifest_t manifest = {
         .device_name = "esp-wiremux",
-        .firmware_version = "0.1.0",
+        .firmware_version = ESP_WIREMUX_VERSION,
         .protocol_version = ESP_WIREMUX_FRAME_VERSION,
         .max_channels = ESP_WIREMUX_MAX_CHANNELS,
         .channels = channels,
@@ -433,7 +433,7 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
                          WIREMUX_FEATURE_COMPRESSION_HEATSHRINK |
                          WIREMUX_FEATURE_COMPRESSION_LZ4,
         .sdk_name = WIREMUX_SDK_NAME_ESP,
-        .sdk_version = "0.1.0",
+        .sdk_version = ESP_WIREMUX_VERSION,
     };
 
     const size_t manifest_len = wiremux_device_manifest_encoded_len(&manifest);
