@@ -1,4 +1,4 @@
-version: "2604.27.1"
+version: "2604.27.2"
 description: "Wiremux ESP-IDF adapter component"
 license: "Apache-2.0"
 dependencies:

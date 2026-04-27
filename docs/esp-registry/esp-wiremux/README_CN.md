@@ -57,6 +57,12 @@ wiremux listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line hel
 wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
 ```
 
+## 示例
+
+该 component 包含 `esp_wiremux_console_demo` Registry example。示例展示
+channel 1 line-mode console 输入、channel 2 ESP log 输出、channel 3 telemetry
+和 channel 4 UTF-8 文本输出。
+
 ## Channel 约定
 
 示例工程使用这些 channel：

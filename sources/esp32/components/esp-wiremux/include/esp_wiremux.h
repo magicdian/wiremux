@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 #define ESP_WIREMUX_CHANNEL_SYSTEM 0
-#define ESP_WIREMUX_VERSION "2604.27.1"
+#define ESP_WIREMUX_VERSION "2604.27.2"
 
 /*
  * ESP-facing aliases keep applications on the esp_wiremux public API while

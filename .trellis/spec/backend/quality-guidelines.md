@@ -287,7 +287,7 @@ CI:
 
 ### 3. Contracts
 
-- Release versions use `YYMM.DD.BuildNumber`, for example `2604.27.1`.
+- Release versions use `YYMM.DD.BuildNumber`, for example `2604.27.2`.
 - Same-day patch releases increment `BuildNumber`; a different release date
   updates `YYMM.DD` and resets `BuildNumber` to `1`.
 - `VERSION`, host Cargo package version, host lockfile version, ESP component
@@ -304,6 +304,17 @@ CI:
   `README_CN.md`, and `LICENSE`.
 - `esp-wiremux` registry manifest depends on
   `<namespace>/wiremux-core` at the same version with `require: public`.
+- `esp-wiremux` package includes `examples/esp_wiremux_console_demo` with a
+  registry-friendly project `CMakeLists.txt`; do not copy the source-tree
+  example's `EXTRA_COMPONENT_DIRS` into the generated package.
+- Generated example `main/idf_component.yml` depends on
+  `<namespace>/esp-wiremux` at the same version and includes
+  `override_path: "../../../"` so local packaged-example builds use the package
+  being validated. ESP Registry strips `override_path` when users download the
+  example.
+- Trusted Uploader entries for the release workflow must leave Branch empty.
+  GitHub Release events use tag refs, while the workflow enforces main ancestry
+  before upload.
 - Root GitHub `README.md` should describe Wiremux as a platform-neutral
   serial-style byte-stream multiplexer; ESP-IDF is the current reference
   integration, not the whole project boundary.
@@ -317,15 +328,20 @@ CI:
 | source-tree ESP component references `../../../core/c` for local dev | allowed only in source tree |
 | generated `esp-wiremux` package references parent-relative core paths | fail review; package must depend on registry `wiremux-core` |
 | generated package missing README or LICENSE | fail package validation |
+| generated `esp-wiremux` package missing `examples/esp_wiremux_console_demo` | fail package validation |
+| generated example keeps source-tree `EXTRA_COMPONENT_DIRS` | fail review; downloaded examples must use registry dependencies |
+| Trusted Uploader Branch is `main` for the release workflow | registry OIDC auth fails because release events use tag refs |
 | release workflow runs from a non-main commit | workflow must fail before upload |
 | release tag version differs from `VERSION` after stripping leading `v` | workflow must fail before upload |
 | namespace is pending or unavailable | do not publish production release with that namespace |
 
 ### 5. Good/Base/Bad Cases
 
-- Good: `VERSION` is `2604.27.1`, Cargo and ESP declarations match, generated
+- Good: `VERSION` is `2604.27.2`, Cargo and ESP declarations match, generated
   packages pack with `compote component pack`, and both tarballs include README,
   README_CN, LICENSE, and `idf_component.yml`.
+- Good: `magicdian/esp-wiremux` Registry page shows one example after the patch
+  upload because the generated package includes `examples/esp_wiremux_console_demo`.
 - Base: local ESP example still builds from `sources/esp32/examples/...` using
   the source-tree component and parent-relative local core reference.
 - Bad: editing `sources/core/c/CMakeLists.txt` to use
@@ -346,6 +362,12 @@ CI:
   `dist/esp-registry/esp-wiremux`.
 - `tar -tzf` check that each package archive includes README, README_CN,
   LICENSE, and `idf_component.yml`.
+- `tar -tzf` check that the `esp-wiremux` archive includes
+  `examples/esp_wiremux_console_demo/CMakeLists.txt`,
+  `examples/esp_wiremux_console_demo/main/idf_component.yml`, and demo source.
+- Build the generated registry example under
+  `dist/esp-registry/esp-wiremux/examples/esp_wiremux_console_demo` after
+  package generation.
 - Host checks: `cargo fmt --check`, `cargo check`, and `cargo test` in
   `sources/host`.
 - Portable core checks when core files changed: configure, build, and run
@@ -372,7 +394,7 @@ release time with a registry-specific `CMakeLists.txt` and manifest.
 #### Wrong
 
 ```text
-Release host v2604.27.2 while ESP component manifest still says 2604.27.1.
+Release host v2604.27.3 while ESP component manifest still says 2604.27.2.
 ```
 
 #### Correct
