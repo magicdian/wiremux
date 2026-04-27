@@ -540,3 +540,57 @@ Testing completed:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Registry example packaging release
+
+**Date**: 2026-04-27
+**Task**: Registry example packaging release
+**Branch**: `dev`
+
+### Summary
+
+Recorded completion of the 2604.27.2 ESP Registry patch that packages the ESP-IDF console demo as an esp-wiremux registry example and archives the finished task.
+
+### Main Changes
+
+| Area | Result |
+|------|--------|
+| Release | `fec186f` bumped declarations to `2604.27.2` and updated release documentation. |
+| ESP Registry | Package generation now copies `esp_wiremux_console_demo` into `esp-wiremux/examples/`, so the Registry examples tab can show the demo. |
+| Docs/specs | Trusted Uploader tag-ref behavior and package-generation expectations are documented. |
+| Task state | Archived `04-27-04-27-registry-example-2604-27-2` after confirming the work was already committed. |
+
+Finish-work checks rerun:
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cmake --build sources/core/c/build`
+- `ctest --test-dir sources/core/c/build --output-on-failure`
+- `tools/esp-registry/generate-packages.sh`
+- `git diff --check`
+- verified `dist/esp-registry/esp-wiremux/examples/esp_wiremux_console_demo` exists
+
+External tool gaps in this shell:
+- `compote --version` failed: `command not found`
+- `idf.py --version` failed: `command not found`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fec186f` | (see git log) |
+| `a94bfc9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
