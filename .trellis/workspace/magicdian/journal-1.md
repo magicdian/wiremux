@@ -19,7 +19,17 @@ Implemented the first ESP serial mux milestone: Rust host listener/decoder with 
 
 ### Main Changes
 
-(Add details)
+- Added project-wide `2604.27.1` version declarations using the
+  `YYMM.DD.BuildNumber` convention.
+- Added Apache-2.0 release metadata for host Cargo and ESP-IDF component
+  manifests.
+- Added generated ESP Registry packages for `wiremux-core` and `esp-wiremux`,
+  including English/Chinese README templates and release documentation.
+- Added GitHub Release CI for trusted ESP Registry uploads from `main`.
+- Added GitHub-facing English/Chinese README files with screenshots and device
+  integration examples.
+- Captured the release/versioning/registry package contract in
+  `.trellis/spec/backend/quality-guidelines.md`.
 
 ### Git Commits
 
@@ -34,7 +44,18 @@ Implemented the first ESP serial mux milestone: Rust host listener/decoder with 
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test`
+- [OK] `cmake -S sources/core/c -B sources/core/c/build`
+- [OK] `cmake --build sources/core/c/build`
+- [OK] `ctest --test-dir sources/core/c/build --output-on-failure`
+- [OK] `bash -n tools/esp-registry/generate-packages.sh`
+- [OK] `tools/esp-registry/generate-packages.sh`
+- [OK] `compote component pack --name wiremux-core`
+- [OK] `compote component pack --name esp-wiremux`
+- [OK] `idf.py build` in `sources/esp32/examples/esp_wiremux_console_demo`
+- [OK] `git diff --check`
 
 ### Status
 
@@ -430,6 +451,39 @@ when manifest metadata is available, while filtered listen output remains raw.
 - [OK] `ctest --test-dir sources/core/c/build --output-on-failure`
 - [OK] Human ESP32 reset/listen verification passed
 - [WARN] `idf.py build` not run in Codex shell because `idf.py` was unavailable
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 12: Versioning and ESP Registry release setup
+
+**Date**: 2026-04-27
+**Task**: Versioning and ESP Registry release setup
+**Branch**: `dev`
+
+### Summary
+
+Added YYMM.DD.BuildNumber versioning, Apache-2.0 metadata, ESP Registry package generation and Release CI, GitHub README/README_CN, ESP Registry README templates, and release packaging specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9e4dd0b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
 
 ### Status
 
