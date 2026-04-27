@@ -1,0 +1,5 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Host TUI input behavior contract and required tests"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host CLI/TUI contracts and docs expectations"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Input state helper should reuse existing manifest metadata patterns"}
