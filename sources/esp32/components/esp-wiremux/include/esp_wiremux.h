@@ -20,6 +20,12 @@ extern "C" {
 
 #define ESP_WIREMUX_CHANNEL_SYSTEM 0
 
+/*
+ * ESP-facing aliases keep applications on the esp_wiremux public API while
+ * preserving the portable core's wire-protocol numeric values. Do not renumber
+ * these constants. Channel configs may OR direction flags together, but
+ * esp_wiremux_write*() direction arguments must pass exactly one direction.
+ */
 typedef enum {
     ESP_WIREMUX_DIRECTION_INPUT = WIREMUX_DIRECTION_INPUT,
     ESP_WIREMUX_DIRECTION_OUTPUT = WIREMUX_DIRECTION_OUTPUT,

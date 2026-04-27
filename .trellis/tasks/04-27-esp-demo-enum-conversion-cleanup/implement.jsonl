@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "ESP public API naming and core/ESP boundary"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "ESP API stability and protocol constants"}
