@@ -6,7 +6,7 @@ This project uses one release version for host and SDK artifacts.
 
 Version format: `YYMM.DD.BuildNumber`.
 
-Current release: `2604.27.1`.
+Current release: `2604.27.2`.
 
 When publishing another release on the same date, increment `BuildNumber`. When
 publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
@@ -37,6 +37,13 @@ ESP Registry packages are generated under `dist/esp-registry/`:
 
 The generated `esp-wiremux` package depends on the generated registry package
 `<namespace>/wiremux-core` at the same version.
+
+The generated `esp-wiremux` package also includes the console demo under
+`examples/esp_wiremux_console_demo`. The source-tree demo uses
+`EXTRA_COMPONENT_DIRS` for local development, but the generated registry example
+has a registry-friendly project `CMakeLists.txt` and a `main/idf_component.yml`
+dependency on `<namespace>/esp-wiremux` with `override_path: "../../../"`.
+The registry strips `override_path` from downloaded examples.
 
 ## Generate Packages Locally
 
@@ -163,8 +170,15 @@ Registry setup required before the first CI upload:
 4. For each component, add a Trusted Uploader:
    - Repository: `magicdian/wiremux`
    - Workflow: `esp-registry-release.yml`
-   - Branch: `main`
+   - Branch: leave empty
+   - Environment: leave empty
 5. Ensure the workflow namespace matches the registry namespace.
+
+GitHub Release events run from tag refs, for example
+`refs/tags/v2604.27.2`. Do not set Trusted Uploader Branch to `main` for this
+workflow, or the registry OIDC authorization will not match. The workflow itself
+still fetches `origin/main` and fails before upload if the tagged release commit
+is not contained in `main`.
 
 The workflow uses OIDC and does not require a long-lived
 `IDF_COMPONENT_API_TOKEN` secret.
