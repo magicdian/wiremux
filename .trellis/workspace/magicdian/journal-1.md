@@ -710,3 +710,37 @@ Made the TUI all-channel view read-only, gated channel input on manifest DIRECTI
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Fix TUI passthrough wrapped output
+
+**Date**: 2026-04-28
+**Task**: Fix TUI passthrough wrapped output
+**Branch**: `dev`
+
+### Summary
+
+Fixed TUI passthrough rendering so wrapped output rows drive visible scrollback, scrollbar range, and cursor placement; added narrow-pane regression tests and archived the task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5c57630` | (see git log) |
+| `ec53ce5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
