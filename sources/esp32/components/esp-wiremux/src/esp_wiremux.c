@@ -97,6 +97,8 @@ static esp_err_t enqueue_item(pending_item_t *item,
 static void parse_rx_buffer_locked(void);
 static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelope);
 static esp_err_t dispatch_input_record_locked(const wiremux_record_t *record);
+static bool is_manifest_request(const wiremux_envelope_t *envelope);
+static esp_err_t handle_manifest_request_locked(const wiremux_envelope_t *envelope);
 static uint32_t native_endianness(void);
 static const char *default_transport_name(void);
 static bool is_valid_direction(uint32_t direction);
@@ -409,6 +411,7 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
             .directions = s_mux.channels[i].config.directions,
             .default_payload_kind = s_mux.channels[i].config.default_payload_kind,
             .flags = 0,
+            .default_interaction_mode = s_mux.channels[i].config.interaction_mode,
         };
     }
     const size_t max_payload_len = s_mux.config.max_payload_len;
@@ -416,7 +419,7 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
 
     const wiremux_device_manifest_t manifest = {
         .device_name = "esp-wiremux",
-        .firmware_version = "0.1.0",
+        .firmware_version = ESP_WIREMUX_VERSION,
         .protocol_version = ESP_WIREMUX_FRAME_VERSION,
         .max_channels = ESP_WIREMUX_MAX_CHANNELS,
         .channels = channels,
@@ -425,11 +428,12 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
         .max_payload_len = (uint32_t)max_payload_len,
         .transport = default_transport_name(),
         .feature_flags = WIREMUX_FEATURE_MANIFEST_PROTOBUF |
+                         WIREMUX_FEATURE_MANIFEST_REQUEST |
                          WIREMUX_FEATURE_BATCH |
                          WIREMUX_FEATURE_COMPRESSION_HEATSHRINK |
                          WIREMUX_FEATURE_COMPRESSION_LZ4,
         .sdk_name = WIREMUX_SDK_NAME_ESP,
-        .sdk_version = "0.1.0",
+        .sdk_version = ESP_WIREMUX_VERSION,
     };
 
     const size_t manifest_len = wiremux_device_manifest_encoded_len(&manifest);
@@ -746,8 +750,15 @@ static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelo
 
     channel_state_t *channel = &s_mux.channels[envelope->channel_id];
     if (!channel->registered ||
-        (channel->config.directions & ESP_WIREMUX_DIRECTION_INPUT) == 0 ||
-        channel->input_handler == NULL) {
+        (channel->config.directions & ESP_WIREMUX_DIRECTION_INPUT) == 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (is_manifest_request(envelope)) {
+        return handle_manifest_request_locked(envelope);
+    }
+
+    if (channel->input_handler == NULL) {
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -768,6 +779,29 @@ static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelo
     esp_err_t err = handler(channel_id, payload, payload_len, handler_ctx);
     xSemaphoreTake(s_mux.lock, portMAX_DELAY);
     free(payload);
+    return err;
+}
+
+static bool is_manifest_request(const wiremux_envelope_t *envelope)
+{
+    return envelope != NULL &&
+           envelope->channel_id == ESP_WIREMUX_CHANNEL_SYSTEM &&
+           envelope->payload_type != NULL &&
+           envelope->payload_type_len == strlen(WIREMUX_MANIFEST_REQUEST_PAYLOAD_TYPE) &&
+           memcmp(envelope->payload_type,
+                  WIREMUX_MANIFEST_REQUEST_PAYLOAD_TYPE,
+                  envelope->payload_type_len) == 0;
+}
+
+static esp_err_t handle_manifest_request_locked(const wiremux_envelope_t *envelope)
+{
+    if (envelope == NULL || envelope->payload_len != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreGive(s_mux.lock);
+    esp_err_t err = esp_wiremux_emit_manifest(s_mux.config.default_write_timeout_ms);
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
     return err;
 }
 

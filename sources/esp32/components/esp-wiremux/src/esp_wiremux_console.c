@@ -52,6 +52,7 @@ esp_err_t esp_wiremux_bind_console(const esp_wiremux_console_config_t *config)
         .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_TEXT,
         .flush_policy = ESP_WIREMUX_FLUSH_IMMEDIATE,
         .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_BLOCK_WITH_TIMEOUT,
+        .interaction_mode = (esp_wiremux_channel_interaction_mode_t)config->mode,
     };
 
     esp_err_t err = esp_wiremux_register_channel(&channel);

@@ -19,7 +19,17 @@ Implemented the first ESP serial mux milestone: Rust host listener/decoder with 
 
 ### Main Changes
 
-(Add details)
+- Added project-wide `2604.27.1` version declarations using the
+  `YYMM.DD.BuildNumber` convention.
+- Added Apache-2.0 release metadata for host Cargo and ESP-IDF component
+  manifests.
+- Added generated ESP Registry packages for `wiremux-core` and `esp-wiremux`,
+  including English/Chinese README templates and release documentation.
+- Added GitHub Release CI for trusted ESP Registry uploads from `main`.
+- Added GitHub-facing English/Chinese README files with screenshots and device
+  integration examples.
+- Captured the release/versioning/registry package contract in
+  `.trellis/spec/backend/quality-guidelines.md`.
 
 ### Git Commits
 
@@ -34,7 +44,18 @@ Implemented the first ESP serial mux milestone: Rust host listener/decoder with 
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test`
+- [OK] `cmake -S sources/core/c -B sources/core/c/build`
+- [OK] `cmake --build sources/core/c/build`
+- [OK] `ctest --test-dir sources/core/c/build --output-on-failure`
+- [OK] `bash -n tools/esp-registry/generate-packages.sh`
+- [OK] `tools/esp-registry/generate-packages.sh`
+- [OK] `compote component pack --name wiremux-core`
+- [OK] `compote component pack --name esp-wiremux`
+- [OK] `idf.py build` in `sources/esp32/examples/esp_wiremux_console_demo`
+- [OK] `git diff --check`
 
 ### Status
 
@@ -223,6 +244,242 @@ Implemented generic Wiremux batch records and compression support across core C,
 | `1b86705` | (see git log) |
 | `4596b51` | (see git log) |
 | `369d363` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 7: Optimize host listen output
+
+**Date**: 2026-04-27
+**Task**: Optimize host listen output
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Host CLI | Split listen stdout display from diagnostics logging. Filtered channel output now writes raw payload bytes without prefixes or forced newlines; unfiltered output uses concise `chN> ` record prefixes. |
+| Diagnostics | Added per-run temp diagnostics files under `std::env::temp_dir()/wiremux/`, with startup marker `wiremux> diagnostics: <path>`. Full frame metadata, batch summaries, CRC errors, and decode errors are written there. |
+| Display UX | Preserves CRLF/CR/LF as real terminal line breaks and inserts an own-line `wiremux> continued after partial chN line` marker when switching channels from a partial visible line. |
+| Tests/Docs/Specs | Added host display and batch diagnostics tests; updated Chinese host docs and backend specs to match the new output contract. |
+
+**Verification**:
+- `python3 ./.trellis/scripts/task.py validate .trellis/tasks/04-26-host-output-ux`
+- `cargo test`
+- `cargo check`
+- `cargo fmt --check`
+
+**Commits**:
+- `378842d feat(host): simplify listen output`
+- `fe1af9f chore(task): archive 04-26-host-output-ux`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `378842d` | (see git log) |
+| `fe1af9f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 8: Host ratatui TUI and manifest discovery
+
+**Date**: 2026-04-27
+**Task**: Host ratatui TUI and manifest discovery
+**Branch**: `dev`
+
+### Summary
+
+Added ratatui host TUI, host-initiated DeviceManifestRequest discovery, core channel interaction modes, ESP manifest response mapping, host manifest decode/cache support, docs/spec updates, and tests. Human manually validated the ESP-flashed TUI flow before commit.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3edebfb` | (see git log) |
+| `bc11c69` | (see git log) |
+| `2af4677` | (see git log) |
+| `c40f7e9` | (see git log) |
+| `6aa67ac` | (see git log) |
+| `1e6b44f` | (see git log) |
+| `ca9359d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 9: Host TUI Log Scrollback
+
+**Date**: 2026-04-27
+**Task**: Host TUI Log Scrollback
+**Branch**: `dev`
+
+### Summary
+
+Added host TUI mouse-wheel log scrollback with frozen historical views, right-side draggable scrollbar, empty-Enter live-follow recovery, docs, specs, and tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6454642` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 10: Clarify ESP enum aliases
+
+**Date**: 2026-04-27
+**Task**: Clarify ESP enum aliases
+**Branch**: `dev`
+
+### Summary
+
+Kept ESP_WIREMUX public aliases and documented that they intentionally mirror core wire-protocol enum values without runtime conversion.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1de0107` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 11: Manifest channel name labels
+
+**Date**: 2026-04-27
+**Task**: Manifest channel name labels
+**Branch**: `dev`
+
+### Summary
+
+Implemented manifest-backed channel display labels using the existing
+`ChannelDescriptor.name` field. Host `listen` and TUI now render `chN(name)>`
+when manifest metadata is available, while filtered listen output remains raw.
+
+### Main Changes
+
+- Added UTF-8-safe 15-byte channel-name truncation in the portable C manifest
+  encoder, with C tests for ASCII, emoji, and invalid UTF-8 cases.
+- Added Rust host display label handling for passive `listen` manifest frames
+  and TUI manifest state.
+- Added ESP32 demo channel 4 with an overlong emoji name and UTF-8 payloads,
+  plus a delayed manifest emission so passive listen can learn labels after USB
+  serial reset/reconnect.
+- Updated docs, backend specs, and `.gitignore`; removed the tracked local
+  `.vscode/settings.json`.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4328303` | (see git log) |
+
+### Testing
+
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test`
+- [OK] `ctest --test-dir sources/core/c/build --output-on-failure`
+- [OK] Human ESP32 reset/listen verification passed
+- [WARN] `idf.py build` not run in Codex shell because `idf.py` was unavailable
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 12: Versioning and ESP Registry release setup
+
+**Date**: 2026-04-27
+**Task**: Versioning and ESP Registry release setup
+**Branch**: `dev`
+
+### Summary
+
+Added YYMM.DD.BuildNumber versioning, Apache-2.0 metadata, ESP Registry package generation and Release CI, GitHub README/README_CN, ESP Registry README templates, and release packaging specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9e4dd0b` | (see git log) |
 
 ### Testing
 

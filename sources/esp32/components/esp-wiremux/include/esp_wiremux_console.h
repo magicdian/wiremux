@@ -4,15 +4,16 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "wiremux_manifest.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef enum {
-    ESP_WIREMUX_CONSOLE_MODE_DISABLED = 0,
-    ESP_WIREMUX_CONSOLE_MODE_LINE = 1,
-    ESP_WIREMUX_CONSOLE_MODE_PASSTHROUGH = 2,
+    ESP_WIREMUX_CONSOLE_MODE_DISABLED = WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+    ESP_WIREMUX_CONSOLE_MODE_LINE = WIREMUX_CHANNEL_INTERACTION_LINE,
+    ESP_WIREMUX_CONSOLE_MODE_PASSTHROUGH = WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH,
 } esp_wiremux_console_mode_t;
 
 typedef struct {

@@ -11,11 +11,14 @@ extern "C" {
 #endif
 
 #define WIREMUX_MANIFEST_PAYLOAD_TYPE "wiremux.v1.DeviceManifest"
+#define WIREMUX_MANIFEST_REQUEST_PAYLOAD_TYPE "wiremux.v1.DeviceManifestRequest"
 #define WIREMUX_SDK_NAME_ESP "esp-wiremux"
 #define WIREMUX_FEATURE_MANIFEST_PROTOBUF (1u << 0)
 #define WIREMUX_FEATURE_BATCH (1u << 1)
 #define WIREMUX_FEATURE_COMPRESSION_HEATSHRINK (1u << 2)
 #define WIREMUX_FEATURE_COMPRESSION_LZ4 (1u << 3)
+#define WIREMUX_FEATURE_MANIFEST_REQUEST (1u << 4)
+#define WIREMUX_CHANNEL_NAME_MAX_BYTES 15u
 
 typedef enum {
     WIREMUX_ENDIANNESS_UNSPECIFIED = 0,
@@ -23,6 +26,12 @@ typedef enum {
     WIREMUX_ENDIANNESS_BIG = 2,
     WIREMUX_ENDIANNESS_MIXED = 3,
 } wiremux_endianness_t;
+
+typedef enum {
+    WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED = 0,
+    WIREMUX_CHANNEL_INTERACTION_LINE = 1,
+    WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH = 2,
+} wiremux_channel_interaction_mode_t;
 
 typedef struct {
     uint32_t channel_id;
@@ -35,6 +44,9 @@ typedef struct {
     size_t payload_type_count;
     uint32_t default_payload_kind;
     uint32_t flags;
+    const uint32_t *interaction_modes;
+    size_t interaction_mode_count;
+    uint32_t default_interaction_mode;
 } wiremux_channel_descriptor_t;
 
 typedef struct {

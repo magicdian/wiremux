@@ -57,9 +57,17 @@ The scanner must not fail the whole stream on invalid mux candidates.
 
 CLI reporting rules:
 
-- Without a channel filter, `FrameError::CrcMismatch` must print a visible `crc_error` line with version, flags, payload length, expected CRC, and actual CRC.
-- With `--channel <id>`, CRC errors cannot be attributed to a channel because the envelope is untrusted; suppress them to keep filtered channel output clean.
-- Envelope decode failures for CRC-valid frames are printed only in unfiltered mode unless a future decoder can safely extract a channel ID from a partially decoded envelope.
+- Without a channel filter, `FrameError::CrcMismatch` must write a full
+  `crc_error` line to the diagnostics file with version, flags, payload length,
+  expected CRC, and actual CRC. Stdout should stay concise and may print only
+  `wiremux> crc error; details in diagnostics`.
+- With `--channel <id>`, CRC errors cannot be attributed to a channel because the
+  envelope is untrusted; suppress stdout reporting to keep filtered channel
+  output clean, but still write the full diagnostics line.
+- Envelope decode failures for CRC-valid frames must be written to diagnostics.
+  In unfiltered mode stdout may print a concise `wiremux>` marker; in filtered
+  mode stdout stays clean unless a future decoder can safely extract a channel ID
+  from a partially decoded envelope.
 
 ### ESP Producer APIs
 

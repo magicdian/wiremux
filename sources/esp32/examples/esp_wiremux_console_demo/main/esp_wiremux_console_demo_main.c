@@ -19,7 +19,7 @@ static int help_command(int argc, char **argv)
     (void)argv;
     return esp_wiremux_write_text(1,
                                   ESP_WIREMUX_DIRECTION_OUTPUT,
-                                  "available commands: help hello mux_manifest mux_hello mux_log mux_stress mux_diag\n",
+                                  "available commands: help hello mux_manifest mux_hello mux_log mux_utf8 mux_stress mux_diag\n",
                                   20);
 }
 
@@ -73,6 +73,23 @@ static int mux_log_command(int argc, char **argv)
                                   ESP_WIREMUX_DIRECTION_OUTPUT,
                                   "log emitted on channel 2\n",
                                   20);
+}
+
+static int mux_utf8_command(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    esp_err_t err = esp_wiremux_write_text(4,
+                                           ESP_WIREMUX_DIRECTION_OUTPUT,
+                                           "UTF-8 demo: 你好 wiremux 🚗🎒😄 payload stays intact\n",
+                                           20);
+    if (err == ESP_OK) {
+        err = esp_wiremux_write_text(1,
+                                     ESP_WIREMUX_DIRECTION_OUTPUT,
+                                     "UTF-8 emoji payload emitted on channel 4\n",
+                                     20);
+    }
+    return err;
 }
 
 static int mux_diag_command(int argc, char **argv)
@@ -209,6 +226,14 @@ static void register_demo_commands(void)
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&mux_log_cmd));
 
+    const esp_console_cmd_t mux_utf8_cmd = {
+        .command = "mux_utf8",
+        .help = "Emit UTF-8 and emoji text on the mux UTF-8 demo channel",
+        .hint = NULL,
+        .func = mux_utf8_command,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&mux_utf8_cmd));
+
     const esp_console_cmd_t mux_stress_cmd = {
         .command = "mux_stress",
         .help = "Emit matched high-volume channel 2 and 3 records for codec comparison",
@@ -246,7 +271,7 @@ static void init_mux(void)
         .channel_id = ESP_WIREMUX_CHANNEL_SYSTEM,
         .name = "system",
         .description = "System manifest and control messages",
-        .directions = ESP_WIREMUX_DIRECTION_OUTPUT,
+        .directions = ESP_WIREMUX_DIRECTION_INPUT | ESP_WIREMUX_DIRECTION_OUTPUT,
         .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_CONTROL,
         .flush_policy = ESP_WIREMUX_FLUSH_IMMEDIATE,
         .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_BLOCK_WITH_TIMEOUT,
@@ -282,12 +307,32 @@ static void init_mux(void)
     };
     ESP_ERROR_CHECK(esp_wiremux_register_channel(&telemetry_channel));
 
+    const esp_wiremux_channel_config_t utf8_channel = {
+        .channel_id = 4,
+        .name = "🚗🎒😄🔥",
+        .description = "Demo UTF-8 and emoji text output",
+        .directions = ESP_WIREMUX_DIRECTION_OUTPUT,
+        .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_TEXT,
+        .flush_policy = ESP_WIREMUX_FLUSH_PERIODIC,
+        .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_DROP_OLDEST,
+        .output_policy = {
+            .send_mode = ESP_WIREMUX_SEND_BATCHED,
+            .compression = ESP_WIREMUX_COMPRESSION_LZ4,
+            .batch_interval_ms = 100,
+            .batch_max_bytes = 384,
+        },
+    };
+    ESP_ERROR_CHECK(esp_wiremux_register_channel(&utf8_channel));
+
     ESP_ERROR_CHECK(esp_wiremux_emit_manifest(20));
 }
 
 static void telemetry_task(void *arg)
 {
     (void)arg;
+
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    (void)esp_wiremux_emit_manifest(20);
 
     uint32_t counter = 0;
     while (true) {
@@ -296,6 +341,15 @@ static void telemetry_task(void *arg)
         (void)esp_wiremux_write_text(3,
                                      ESP_WIREMUX_DIRECTION_OUTPUT,
                                      message,
+                                     20);
+        char utf8_message[128];
+        snprintf(utf8_message,
+                 sizeof(utf8_message),
+                 "UTF-8 telemetry 样本=%lu emoji=🚗🎒😄\n",
+                 (unsigned long)counter);
+        (void)esp_wiremux_write_text(4,
+                                     ESP_WIREMUX_DIRECTION_OUTPUT,
+                                     utf8_message,
                                      20);
         ESP_LOGI(TAG, "demo periodic log count=%lu", (unsigned long)counter);
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -319,6 +373,10 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_wiremux_write_text(3,
                                            ESP_WIREMUX_DIRECTION_OUTPUT,
                                            "demo telemetry initial sample\n",
+                                           20));
+    ESP_ERROR_CHECK(esp_wiremux_write_text(4,
+                                           ESP_WIREMUX_DIRECTION_OUTPUT,
+                                           "UTF-8 initial sample 你好 🚗🎒😄\n",
                                            20));
 
     while (true) {

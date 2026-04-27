@@ -1,0 +1,8 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Backend module layout and protocol contract"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Host/ESP deterministic error handling"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required validation commands and test coverage"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data-flow verification"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "ESP log/demo expectations"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Shared helper/constant reuse verification"}

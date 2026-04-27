@@ -1,0 +1,56 @@
+name: Publish ESP Registry Components
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      ESP_REGISTRY_NAMESPACE: magicdian
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(tr -d '[:space:]' < VERSION)"
+          tag_version="${GITHUB_REF_NAME#v}"
+
+          if [ "${tag_version}" != "${version}" ]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+            exit 1
+          fi
+
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "Release commit ${GITHUB_SHA} is not contained in origin/main" >&2
+            exit 1
+          fi
+
+      - name: Generate ESP Registry packages
+        shell: bash
+        env:
+          WIREMUX_ESP_REGISTRY_NAMESPACE: ${{ env.ESP_REGISTRY_NAMESPACE }}
+        run: tools/esp-registry/generate-packages.sh
+
+      - name: Upload wiremux-core
+        uses: espressif/upload-components-ci-action@v2
+        with:
+          namespace: ${{ env.ESP_REGISTRY_NAMESPACE }}
+          components: wiremux-core:dist/esp-registry/wiremux-core
+
+      - name: Upload esp-wiremux
+        uses: espressif/upload-components-ci-action@v2
+        with:
+          namespace: ${{ env.ESP_REGISTRY_NAMESPACE }}
+          components: esp-wiremux:dist/esp-registry/esp-wiremux

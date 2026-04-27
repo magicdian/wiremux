@@ -89,6 +89,17 @@ host 会根据 `payload_type = "wiremux.v1.MuxBatch"` 解 batch，并按每条 r
 
 `DeviceManifest` 包含 protocol version、最大 channel 数、最大 payload 长度、
 native endianness、transport 名称、SDK 名称/版本、feature flags，以及每个已注册
-channel 的名称、描述、方向、可选 payload kind/type 列表和默认 payload kind。
+channel 的名称、描述、方向、可选 payload kind/type 列表、默认 payload kind，以及
+channel interaction mode。interaction mode 当前用于区分 line-mode console 和后续
+passthrough/key-stream 输入能力。
+
+channel `name` 是 host prompt 使用的短标签，manifest 输出时最多保留 15 bytes。
+允许 UTF-8；如果配置值超过 15 bytes，core 会截到 15 bytes 内最长的有效 UTF-8
+前缀，避免 host 看到乱码或无效字符串。`description` 继续作为较长的人类说明，不承担
+prompt 标签职责。
+
+host 可以在 system channel 0 发送 `payload_type =
+"wiremux.v1.DeviceManifestRequest"` 的空 `MuxEnvelope(direction=input)` 来请求设备重新
+输出 manifest。设备仍然以 `payload_type = "wiremux.v1.DeviceManifest"` 回复。
 大小端信息用于诊断和业务二进制 payload 解释，不影响 `WMUX` frame 或 protobuf
 envelope 的 wire encoding。

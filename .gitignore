@@ -2,4 +2,10 @@
 /sources/core/c/build/
 /sources/esp32/examples/*/build/
 /sources/esp32/examples/*/sdkconfig
+/dist/
 .DS_Store
+/sources/esp32/examples/*/dependencies.lock
+/sources/esp32/examples/*/managed_components/
+.vscode/
+.idea/
+*.iml

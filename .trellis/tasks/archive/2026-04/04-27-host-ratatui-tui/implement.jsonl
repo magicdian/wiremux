@@ -1,0 +1,8 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host/core/ESP layout and protocol contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required host/core/ESP tests and bidirectional console invariants"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Deterministic mixed-stream and inbound error handling"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Config/persistence boundary for future host config"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Host diagnostics and concise output behavior"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer proto/core/ESP/host data flow"}

@@ -1,0 +1,8 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Validation commands and backend quality gates"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Keep ESP/local validation deterministic"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Generated packaging must avoid drift and duplicated release values"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Release metadata docs must not introduce persistence"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "ESP component packaging paths and core boundary"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Version and registry flow spans host, ESP, CI, docs"}

@@ -1,0 +1,8 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Review host/core/ESP layout and protocol contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Review required host/core/ESP tests and bidirectional console invariants"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Review config/persistence boundary"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Review deterministic mixed-stream and inbound error handling"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Review host diagnostics and concise output behavior"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review cross-layer proto/core/ESP/host data flow"}

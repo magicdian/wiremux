@@ -1,23 +1,29 @@
+use std::collections::HashMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wiremux::batch::{decode_batch, decode_batch_records, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE};
 use wiremux::codec::decompress;
-use wiremux::envelope::{
-    decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT,
-};
+use wiremux::envelope::{decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT};
 use wiremux::frame::{
     build_frame_payload_with_max, BuildFrameError, FrameError, FrameScanner, StreamEvent,
     DEFAULT_MAX_PAYLOAD_LEN,
 };
+use wiremux::manifest::{
+    decode_manifest, display_channel_name, encode_manifest_request, DeviceManifest,
+    MANIFEST_PAYLOAD_TYPE, MANIFEST_REQUEST_PAYLOAD_TYPE,
+};
+
+mod tui;
 
 #[derive(Debug)]
 enum CliCommand {
     Listen(ListenArgs),
     Send(SendArgs),
+    Tui(TuiArgs),
 }
 
 #[derive(Debug)]
@@ -40,6 +46,136 @@ struct SendArgs {
     line: String,
 }
 
+#[derive(Debug, Clone)]
+struct TuiArgs {
+    port: PathBuf,
+    baud: u32,
+    max_payload_len: usize,
+    reconnect_delay_ms: u64,
+}
+
+struct DisplayOutput<W: Write> {
+    out: W,
+    channel_filter: Option<u32>,
+    line_open: bool,
+    line_channel: Option<u32>,
+    channel_names: HashMap<u32, String>,
+}
+
+impl<W: Write> DisplayOutput<W> {
+    fn new(out: W, channel_filter: Option<u32>) -> Self {
+        Self {
+            out,
+            channel_filter,
+            line_open: false,
+            line_channel: None,
+            channel_names: HashMap::new(),
+        }
+    }
+
+    fn write_terminal(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.channel_filter.is_some() {
+            return Ok(());
+        }
+
+        self.out.write_all(bytes)?;
+        self.update_line_state(bytes, None);
+        Ok(())
+    }
+
+    fn write_record(&mut self, envelope: &MuxEnvelope) -> io::Result<()> {
+        if self
+            .channel_filter
+            .is_some_and(|channel| channel != envelope.channel_id)
+        {
+            return Ok(());
+        }
+
+        if self.channel_filter.is_some() {
+            self.out.write_all(&envelope.payload)?;
+            return Ok(());
+        }
+
+        self.prepare_unfiltered_record(envelope.channel_id)?;
+        write!(self.out, "{}> ", self.channel_prefix(envelope.channel_id))?;
+        self.line_open = true;
+        self.line_channel = Some(envelope.channel_id);
+        self.out.write_all(&envelope.payload)?;
+        self.update_line_state(&envelope.payload, Some(envelope.channel_id));
+        Ok(())
+    }
+
+    fn update_manifest(&mut self, manifest: &DeviceManifest) {
+        self.channel_names.clear();
+        for channel in &manifest.channels {
+            if let Some(name) = display_channel_name(&channel.name) {
+                self.channel_names.insert(channel.channel_id, name);
+            }
+        }
+    }
+
+    fn channel_prefix(&self, channel_id: u32) -> String {
+        match self.channel_names.get(&channel_id) {
+            Some(name) => format!("ch{channel_id}({name})"),
+            None => format!("ch{channel_id}"),
+        }
+    }
+
+    fn write_marker_line(&mut self, message: &str) -> io::Result<()> {
+        if self.line_open {
+            self.out.write_all(b"\n")?;
+        }
+        writeln!(self.out, "wiremux> {message}")?;
+        self.line_open = false;
+        self.line_channel = None;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
+
+    fn prepare_unfiltered_record(&mut self, channel_id: u32) -> io::Result<()> {
+        if !self.line_open || self.line_channel == Some(channel_id) {
+            return Ok(());
+        }
+
+        match self.line_channel {
+            Some(previous_channel) => {
+                self.out.write_all(b"\n")?;
+                writeln!(
+                    self.out,
+                    "wiremux> continued after partial ch{} line",
+                    previous_channel
+                )?;
+            }
+            None => {
+                self.out.write_all(b"\n")?;
+            }
+        }
+        self.line_open = false;
+        self.line_channel = None;
+        Ok(())
+    }
+
+    fn update_line_state(&mut self, bytes: &[u8], channel: Option<u32>) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        if bytes
+            .last()
+            .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+        {
+            self.line_open = false;
+            self.line_channel = None;
+        } else {
+            self.line_open = true;
+            self.line_channel = channel;
+        }
+    }
+}
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -55,36 +191,40 @@ fn run() -> Result<(), String> {
     match command {
         CliCommand::Listen(args) => listen(args).map_err(|err| err.to_string()),
         CliCommand::Send(args) => send(args).map_err(|err| err.to_string()),
+        CliCommand::Tui(args) => tui::run(args).map_err(|err| err.to_string()),
     }
 }
 
 fn listen(args: ListenArgs) -> io::Result<()> {
-    let mut stdout = io::stdout().lock();
+    let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.port)?;
+    let mut display = DisplayOutput::new(io::stdout().lock(), args.channel);
     let reconnect_delay = Duration::from_millis(args.reconnect_delay_ms);
 
     writeln!(
-        stdout,
+        diagnostics,
         "[wiremux] listening on {} at {} baud; reconnect_delay={}ms",
         args.port.display(),
         args.baud,
         args.reconnect_delay_ms
     )?;
+    display.write_marker_line(&format!("diagnostics: {}", diagnostics_path.display()))?;
+    display.flush()?;
 
     loop {
         let (connected_port, mut input) = match open_available_port(&args.port, args.baud) {
             Ok((path, file)) => {
-                writeln!(stdout, "[wiremux] connected: {}", path.display())?;
-                stdout.flush()?;
+                writeln!(diagnostics, "[wiremux] connected: {}", path.display())?;
+                diagnostics.flush()?;
                 (path, file)
             }
             Err(err) => {
                 writeln!(
-                    stdout,
+                    diagnostics,
                     "[wiremux] waiting for {}: {}",
                     args.port.display(),
                     err
                 )?;
-                stdout.flush()?;
+                diagnostics.flush()?;
                 thread::sleep(reconnect_delay);
                 continue;
             }
@@ -96,12 +236,12 @@ fn listen(args: ListenArgs) -> io::Result<()> {
             input.write_all(&frame)?;
             input.flush()?;
             writeln!(
-                stdout,
+                diagnostics,
                 "[wiremux] sent {} bytes to channel {}",
                 line.len(),
                 channel
             )?;
-            stdout.flush()?;
+            diagnostics.flush()?;
         }
 
         let mut scanner = FrameScanner::new(args.max_payload_len);
@@ -110,20 +250,21 @@ fn listen(args: ListenArgs) -> io::Result<()> {
         loop {
             match input.read(&mut buf) {
                 Ok(0) => {
-                    writeln!(stdout, "\n[wiremux] disconnected: EOF")?;
+                    writeln!(diagnostics, "[wiremux] disconnected: EOF")?;
                     break;
                 }
                 Ok(read_len) => {
                     for event in scanner.push(&buf[..read_len]) {
-                        write_event(&mut stdout, event, args.channel)?;
+                        write_event(&mut display, &mut diagnostics, event)?;
                     }
-                    stdout.flush()?;
+                    display.flush()?;
+                    diagnostics.flush()?;
                 }
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
                 Err(err) => {
                     writeln!(
-                        stdout,
-                        "\n[wiremux] disconnected {}: {err}",
+                        diagnostics,
+                        "[wiremux] disconnected {}: {err}",
                         connected_port.display()
                     )?;
                     break;
@@ -132,9 +273,10 @@ fn listen(args: ListenArgs) -> io::Result<()> {
         }
 
         for event in scanner.finish() {
-            write_event(&mut stdout, event, args.channel)?;
+            write_event(&mut display, &mut diagnostics, event)?;
         }
-        stdout.flush()?;
+        display.flush()?;
+        diagnostics.flush()?;
 
         thread::sleep(reconnect_delay);
     }
@@ -269,37 +411,84 @@ fn requested_file_name_starts_with(path: &Path, prefix: &str) -> bool {
         .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
 }
 
-fn write_event<W: Write>(
-    out: &mut W,
+fn create_diagnostics_file(requested_port: &Path) -> io::Result<(PathBuf, File)> {
+    let dir = env::temp_dir().join("wiremux");
+    fs::create_dir_all(&dir)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let filename = format!(
+        "wiremux-{}-{:06}-{}.log",
+        now.as_secs(),
+        now.subsec_micros(),
+        sanitize_port_for_filename(requested_port)
+    );
+    let path = dir.join(filename);
+    let file = File::create(&path)?;
+    Ok((path, file))
+}
+
+fn sanitize_port_for_filename(port: &Path) -> String {
+    let value = port.to_string_lossy();
+    let mut sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    while sanitized.starts_with('_') {
+        sanitized.remove(0);
+    }
+    while sanitized.ends_with('_') {
+        sanitized.pop();
+    }
+
+    if sanitized.is_empty() {
+        "port".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn write_event<W: Write, D: Write>(
+    display: &mut DisplayOutput<W>,
+    diagnostics: &mut D,
     event: StreamEvent,
-    channel_filter: Option<u32>,
 ) -> io::Result<()> {
     match event {
-        StreamEvent::Terminal(bytes) => {
-            if channel_filter.is_none() {
-                out.write_all(&bytes)?;
-            }
-            Ok(())
-        }
+        StreamEvent::Terminal(bytes) => display.write_terminal(&bytes),
         StreamEvent::Frame(frame) => match decode_envelope(&frame.payload) {
             Ok(envelope) => {
+                if envelope.payload_type == MANIFEST_PAYLOAD_TYPE {
+                    return write_manifest_event(display, diagnostics, &envelope);
+                }
                 if envelope.payload_type == BATCH_PAYLOAD_TYPE {
-                    return write_batch_event(out, &envelope, channel_filter);
+                    return write_batch_event(display, diagnostics, &envelope);
                 }
-                if channel_filter.is_some_and(|channel| channel != envelope.channel_id) {
-                    return Ok(());
-                }
-                write_envelope_line(out, &envelope)
+                write_envelope_diagnostics(diagnostics, &envelope)?;
+                display.write_record(&envelope)
             }
-            Err(err) => writeln!(
-                out,
-                "\n[wiremux] frame version={} flags={} payload_len={} envelope_decode_error={:?} payload={}",
-                frame.version,
-                frame.flags,
-                frame.payload.len(),
-                err,
-                printable_payload(&frame.payload)
-            ),
+            Err(err) => {
+                writeln!(
+                    diagnostics,
+                    "[wiremux] frame version={} flags={} payload_len={} envelope_decode_error={:?} payload={}",
+                    frame.version,
+                    frame.flags,
+                    frame.payload.len(),
+                    err,
+                    printable_payload(&frame.payload)
+                )?;
+                if display.channel_filter.is_none() {
+                    display.write_marker_line("envelope decode error; details in diagnostics")?;
+                }
+                Ok(())
+            }
         },
         StreamEvent::FrameError(FrameError::CrcMismatch {
             version,
@@ -308,27 +497,53 @@ fn write_event<W: Write>(
             expected_crc,
             actual_crc,
         }) => {
-            if channel_filter.is_none() {
-                writeln!(
-                    out,
-                    "\n[wiremux] crc_error version={version} flags={flags} payload_len={payload_len} expected=0x{expected_crc:08x} actual=0x{actual_crc:08x}"
-                )?;
+            writeln!(
+                diagnostics,
+                "[wiremux] crc_error version={version} flags={flags} payload_len={payload_len} expected=0x{expected_crc:08x} actual=0x{actual_crc:08x}"
+            )?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line("crc error; details in diagnostics")?;
             }
             Ok(())
         }
     }
 }
 
-fn write_batch_event<W: Write>(
-    out: &mut W,
+fn write_manifest_event<W: Write, D: Write>(
+    display: &mut DisplayOutput<W>,
+    diagnostics: &mut D,
     envelope: &MuxEnvelope,
-    channel_filter: Option<u32>,
+) -> io::Result<()> {
+    match decode_manifest(&envelope.payload) {
+        Ok(manifest) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] manifest received: {} channels",
+                manifest.channels.len()
+            )?;
+            display.update_manifest(&manifest);
+        }
+        Err(err) => {
+            writeln!(diagnostics, "[wiremux] manifest_decode_error={err:?}")?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line("manifest decode error; details in diagnostics")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_batch_event<W: Write, D: Write>(
+    display: &mut DisplayOutput<W>,
+    diagnostics: &mut D,
+    envelope: &MuxEnvelope,
 ) -> io::Result<()> {
     let batch = match decode_batch(&envelope.payload) {
         Ok(batch) => batch,
         Err(err) => {
-            if channel_filter.is_none() {
-                writeln!(out, "\n[wiremux] batch_decode_error={err:?}")?;
+            writeln!(diagnostics, "[wiremux] batch_decode_error={err:?}")?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line("batch decode error; details in diagnostics")?;
             }
             return Ok(());
         }
@@ -341,12 +556,13 @@ fn write_batch_event<W: Write>(
     let records_payload = match decompress(batch.compression, &batch.records, uncompressed_len) {
         Ok(records_payload) => records_payload,
         Err(err) => {
-            if channel_filter.is_none() {
-                writeln!(
-                    out,
-                    "\n[wiremux] batch compression={} raw_len={} decode_error={err:?}",
-                    batch.compression, batch.uncompressed_len
-                )?;
+            writeln!(
+                diagnostics,
+                "[wiremux] batch compression={} raw_len={} decode_error={err:?}",
+                batch.compression, batch.uncompressed_len
+            )?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line("batch payload decode error; details in diagnostics")?;
             }
             return Ok(());
         }
@@ -354,35 +570,32 @@ fn write_batch_event<W: Write>(
     let records = match decode_batch_records(&records_payload) {
         Ok(records) => records,
         Err(err) => {
-            if channel_filter.is_none() {
-                writeln!(out, "\n[wiremux] batch_records_decode_error={err:?}")?;
+            writeln!(diagnostics, "[wiremux] batch_records_decode_error={err:?}")?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line("batch records decode error; details in diagnostics")?;
             }
             return Ok(());
         }
     };
-    if channel_filter.is_none() {
-        writeln!(
-            out,
-            "\n[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
-            records.len(),
-            batch.compression,
-            batch.records.len(),
-            records_payload.len()
-        )?;
-    }
+    writeln!(
+        diagnostics,
+        "[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
+        records.len(),
+        batch.compression,
+        batch.records.len(),
+        records_payload.len()
+    )?;
     for record in records {
-        if channel_filter.is_some_and(|channel| channel != record.channel_id) {
-            continue;
-        }
-        write_envelope_line(out, &record)?;
+        write_envelope_diagnostics(diagnostics, &record)?;
+        display.write_record(&record)?;
     }
     Ok(())
 }
 
-fn write_envelope_line<W: Write>(out: &mut W, envelope: &MuxEnvelope) -> io::Result<()> {
+fn write_envelope_diagnostics<W: Write>(out: &mut W, envelope: &MuxEnvelope) -> io::Result<()> {
     writeln!(
         out,
-        "\n[wiremux] ch={} dir={} seq={} ts={} kind={} type={} flags={} payload={}",
+        "[wiremux] ch={} dir={} seq={} ts={} kind={} type={} flags={} payload={}",
         envelope.channel_id,
         envelope.direction,
         envelope.sequence,
@@ -399,13 +612,39 @@ fn build_input_frame(
     payload: &[u8],
     max_payload_len: usize,
 ) -> Result<Vec<u8>, BuildFrameError> {
+    build_input_frame_typed(
+        channel,
+        wiremux::envelope::PAYLOAD_KIND_TEXT,
+        "",
+        payload,
+        max_payload_len,
+    )
+}
+
+fn build_manifest_request_frame(max_payload_len: usize) -> Result<Vec<u8>, BuildFrameError> {
+    build_input_frame_typed(
+        0,
+        wiremux::envelope::PAYLOAD_KIND_CONTROL,
+        MANIFEST_REQUEST_PAYLOAD_TYPE,
+        &encode_manifest_request(),
+        max_payload_len,
+    )
+}
+
+fn build_input_frame_typed(
+    channel: u8,
+    kind: u32,
+    payload_type: &str,
+    payload: &[u8],
+    max_payload_len: usize,
+) -> Result<Vec<u8>, BuildFrameError> {
     let envelope = MuxEnvelope {
         channel_id: u32::from(channel),
         direction: DIRECTION_INPUT,
         sequence: 1,
         timestamp_us: now_micros(),
-        kind: PAYLOAD_KIND_TEXT,
-        payload_type: String::new(),
+        kind,
+        payload_type: payload_type.to_string(),
         payload: payload.to_vec(),
         flags: 0,
     };
@@ -461,6 +700,10 @@ where
         Some("send") => {
             args.next();
             "send"
+        }
+        Some("tui") => {
+            args.next();
+            "tui"
         }
         Some("-h" | "--help") => return Ok(None),
         _ => "listen",
@@ -547,6 +790,20 @@ where
             channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
             line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
         }))),
+        "tui" => {
+            if channel.is_some() || send_channel.is_some() || line.is_some() {
+                return Err(format!(
+                    "tui does not accept --channel, --send-channel, or --line\n{}",
+                    usage()
+                ));
+            }
+            Ok(Some(CliCommand::Tui(TuiArgs {
+                port,
+                baud,
+                max_payload_len,
+                reconnect_delay_ms,
+            })))
+        }
         _ => unreachable!("command is normalized before parsing"),
     }
 }
@@ -559,19 +816,69 @@ fn parse_channel(value: &str) -> Result<u8, String> {
 }
 
 fn usage() -> String {
-    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]".to_string()
+    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500]".to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_input_frame, paired_tty_cu_path, parse_args, printable_payload, usbmodem_fragment,
-        CliCommand,
+        build_input_frame, build_manifest_request_frame, paired_tty_cu_path, parse_args,
+        printable_payload, sanitize_port_for_filename, usbmodem_fragment, write_event, CliCommand,
+        DisplayOutput,
     };
     use super::{port_candidates, requested_file_name_starts_with};
     use std::path::PathBuf;
-    use wiremux::envelope::{decode_envelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT};
-    use wiremux::frame::{FrameScanner, StreamEvent};
+    use wiremux::batch::{
+        encode_batch, encode_batch_records, MuxBatch, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE,
+    };
+    use wiremux::envelope::{
+        decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, DIRECTION_OUTPUT,
+        PAYLOAD_KIND_BATCH, PAYLOAD_KIND_CONTROL, PAYLOAD_KIND_TEXT,
+    };
+    use wiremux::frame::{FrameScanner, MuxFrame, StreamEvent};
+    use wiremux::manifest::{
+        ChannelDescriptor, DeviceManifest, MANIFEST_PAYLOAD_TYPE, MANIFEST_REQUEST_PAYLOAD_TYPE,
+    };
+
+    fn output_envelope(channel_id: u32, payload: &[u8]) -> MuxEnvelope {
+        MuxEnvelope {
+            channel_id,
+            direction: DIRECTION_OUTPUT,
+            sequence: 1,
+            timestamp_us: 10,
+            kind: PAYLOAD_KIND_TEXT,
+            payload_type: String::new(),
+            payload: payload.to_vec(),
+            flags: 0,
+        }
+    }
+
+    fn manifest_with_channel_name(channel_id: u32, name: &str) -> DeviceManifest {
+        DeviceManifest {
+            device_name: String::new(),
+            firmware_version: String::new(),
+            protocol_version: 1,
+            max_channels: 8,
+            channels: vec![ChannelDescriptor {
+                channel_id,
+                name: name.to_string(),
+                description: String::new(),
+                directions: Vec::new(),
+                payload_kinds: Vec::new(),
+                payload_types: Vec::new(),
+                flags: 0,
+                default_payload_kind: 0,
+                interaction_modes: Vec::new(),
+                default_interaction_mode: 0,
+            }],
+            native_endianness: 0,
+            max_payload_len: 512,
+            transport: String::new(),
+            feature_flags: 0,
+            sdk_name: String::new(),
+            sdk_version: String::new(),
+        }
+    }
 
     #[test]
     fn parses_required_port_with_defaults() {
@@ -705,6 +1012,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_tui_subcommand() {
+        let command = parse_args(
+            ["tui", "--port", "/dev/cu.usbmodem2101", "--baud", "921600"].map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Tui(args) = command else {
+            panic!("expected tui command");
+        };
+
+        assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(args.baud, 921_600);
+        assert_eq!(
+            args.max_payload_len,
+            wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN
+        );
+    }
+
+    #[test]
+    fn rejects_tui_channel_filter_args() {
+        let err = parse_args(
+            ["tui", "--port", "/dev/cu.usbmodem2101", "--channel", "1"].map(String::from),
+        )
+        .expect_err("invalid tui args");
+
+        assert!(err.contains("tui does not accept"));
+    }
+
+    #[test]
     fn requires_port() {
         let err = parse_args(["--baud", "115200"].map(String::from)).expect_err("missing port");
 
@@ -761,6 +1097,195 @@ mod tests {
     #[test]
     fn prints_binary_payload_as_hex() {
         assert_eq!(printable_payload(&[0xff, 0x00, 0x10]), "ff 00 10");
+    }
+
+    #[test]
+    fn filtered_display_writes_raw_payload_and_preserves_newlines() {
+        let mut display = DisplayOutput::new(Vec::new(), Some(1));
+
+        display
+            .write_record(&output_envelope(1, b"line1\r\nline2\rline3\n"))
+            .expect("write record");
+        display
+            .write_record(&output_envelope(2, b"hidden\n"))
+            .expect("filtered record");
+
+        assert_eq!(display.out, b"line1\r\nline2\rline3\n");
+    }
+
+    #[test]
+    fn unfiltered_display_prefixes_record_once_and_preserves_payload_newlines() {
+        let mut display = DisplayOutput::new(Vec::new(), None);
+
+        display
+            .write_record(&output_envelope(3, b"line1\r\nline2\n"))
+            .expect("write record");
+
+        assert_eq!(display.out, b"ch3> line1\r\nline2\n");
+    }
+
+    #[test]
+    fn unfiltered_display_uses_manifest_channel_names() {
+        let mut display = DisplayOutput::new(Vec::new(), None);
+        let manifest = manifest_with_channel_name(4, "🚗🎒😄🔥");
+        display.update_manifest(&manifest);
+
+        display
+            .write_record(&output_envelope(4, "你好 UTF-8 😄\n".as_bytes()))
+            .expect("write record");
+
+        assert_eq!(
+            String::from_utf8(display.out).expect("utf8 output"),
+            "ch4(🚗🎒😄)> 你好 UTF-8 😄\n"
+        );
+    }
+
+    #[test]
+    fn unfiltered_display_ignores_empty_manifest_channel_names() {
+        let mut display = DisplayOutput::new(Vec::new(), None);
+        let manifest = manifest_with_channel_name(4, "\n\r");
+        display.update_manifest(&manifest);
+
+        display
+            .write_record(&output_envelope(4, b"plain\n"))
+            .expect("write record");
+
+        assert_eq!(display.out, b"ch4> plain\n");
+    }
+
+    #[test]
+    fn unfiltered_display_marks_channel_switch_after_partial_line() {
+        let mut display = DisplayOutput::new(Vec::new(), None);
+
+        display
+            .write_record(&output_envelope(1, b"booting"))
+            .expect("write first record");
+        display
+            .write_record(&output_envelope(2, b"sensor ready\n"))
+            .expect("write second record");
+
+        assert_eq!(
+            display.out,
+            b"ch1> booting\nwiremux> continued after partial ch1 line\nch2> sensor ready\n"
+        );
+    }
+
+    #[test]
+    fn unfiltered_display_switches_channels_without_marker_after_newline() {
+        let mut display = DisplayOutput::new(Vec::new(), None);
+
+        display
+            .write_record(&output_envelope(1, b"ready\n"))
+            .expect("write first record");
+        display
+            .write_record(&output_envelope(2, b"sensor ready\n"))
+            .expect("write second record");
+
+        assert_eq!(display.out, b"ch1> ready\nch2> sensor ready\n");
+    }
+
+    #[test]
+    fn sanitizes_port_for_diagnostics_filename() {
+        assert_eq!(
+            sanitize_port_for_filename(&PathBuf::from("/dev/cu.usbmodem2101")),
+            "dev_cu.usbmodem2101"
+        );
+        assert_eq!(sanitize_port_for_filename(&PathBuf::from("/")), "port");
+    }
+
+    #[test]
+    fn batch_event_writes_payloads_to_display_and_summary_to_diagnostics() {
+        let records = vec![
+            output_envelope(3, b"alpha\n"),
+            output_envelope(2, b"beta\n"),
+        ];
+        let records_payload = encode_batch_records(&records);
+        let batch = MuxBatch {
+            compression: COMPRESSION_NONE,
+            records: records_payload.clone(),
+            uncompressed_len: records_payload.len() as u32,
+        };
+        let envelope = MuxEnvelope {
+            channel_id: 0,
+            direction: DIRECTION_OUTPUT,
+            sequence: 1,
+            timestamp_us: 10,
+            kind: PAYLOAD_KIND_BATCH,
+            payload_type: BATCH_PAYLOAD_TYPE.to_string(),
+            payload: encode_batch(&batch),
+            flags: 0,
+        };
+        let frame = MuxFrame {
+            version: 1,
+            flags: 0,
+            payload: encode_envelope(&envelope),
+        };
+        let mut display = DisplayOutput::new(Vec::new(), None);
+        let mut diagnostics = Vec::new();
+
+        write_event(&mut display, &mut diagnostics, StreamEvent::Frame(frame))
+            .expect("write batch event");
+
+        assert_eq!(display.out, b"ch3> alpha\nch2> beta\n");
+        let diagnostics = String::from_utf8(diagnostics).expect("utf8 diagnostics");
+        assert!(diagnostics.contains("[wiremux] batch records=2 compression=0"));
+        assert!(diagnostics.contains("[wiremux] ch=3"));
+        assert!(diagnostics.contains("[wiremux] ch=2"));
+    }
+
+    #[test]
+    fn listen_manifest_event_updates_labels_without_displaying_payload() {
+        let mut channel = Vec::new();
+        write_test_varint_field(&mut channel, 1, 4);
+        write_test_bytes_field(&mut channel, 2, "🚗🎒😄".as_bytes());
+
+        let mut manifest = Vec::new();
+        write_test_bytes_field(&mut manifest, 5, &channel);
+
+        let manifest_envelope = MuxEnvelope {
+            channel_id: 0,
+            direction: DIRECTION_OUTPUT,
+            sequence: 1,
+            timestamp_us: 10,
+            kind: PAYLOAD_KIND_CONTROL,
+            payload_type: MANIFEST_PAYLOAD_TYPE.to_string(),
+            payload: manifest,
+            flags: 0,
+        };
+        let record = output_envelope(4, "demo 😄\n".as_bytes());
+        let mut display = DisplayOutput::new(Vec::new(), None);
+        let mut diagnostics = Vec::new();
+
+        write_event(
+            &mut display,
+            &mut diagnostics,
+            StreamEvent::Frame(MuxFrame {
+                version: 1,
+                flags: 0,
+                payload: encode_envelope(&manifest_envelope),
+            }),
+        )
+        .expect("manifest event");
+        assert!(display.out.is_empty());
+
+        write_event(
+            &mut display,
+            &mut diagnostics,
+            StreamEvent::Frame(MuxFrame {
+                version: 1,
+                flags: 0,
+                payload: encode_envelope(&record),
+            }),
+        )
+        .expect("record event");
+
+        assert_eq!(
+            String::from_utf8(display.out).expect("utf8 output"),
+            "ch4(🚗🎒😄)> demo 😄\n"
+        );
+        assert!(String::from_utf8(diagnostics)
+            .expect("utf8 diagnostics")
+            .contains("manifest received: 1 channels"));
     }
 
     #[test]
@@ -831,5 +1356,43 @@ mod tests {
         assert_eq!(envelope.direction, DIRECTION_INPUT);
         assert_eq!(envelope.kind, PAYLOAD_KIND_TEXT);
         assert_eq!(envelope.payload, b"help");
+    }
+
+    #[test]
+    fn builds_manifest_request_frame() {
+        let frame = build_manifest_request_frame(wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN)
+            .expect("valid request frame");
+        let mut scanner = FrameScanner::default();
+        let events = scanner.push(&frame);
+        assert_eq!(events.len(), 1);
+
+        let StreamEvent::Frame(frame) = &events[0] else {
+            panic!("expected frame event");
+        };
+        let envelope = decode_envelope(&frame.payload).expect("valid envelope");
+        assert_eq!(envelope.channel_id, 0);
+        assert_eq!(envelope.direction, DIRECTION_INPUT);
+        assert_eq!(envelope.kind, PAYLOAD_KIND_CONTROL);
+        assert_eq!(envelope.payload_type, MANIFEST_REQUEST_PAYLOAD_TYPE);
+        assert!(envelope.payload.is_empty());
+    }
+
+    fn write_test_varint(out: &mut Vec<u8>, mut value: u64) {
+        while value >= 0x80 {
+            out.push((value as u8) | 0x80);
+            value >>= 7;
+        }
+        out.push(value as u8);
+    }
+
+    fn write_test_varint_field(out: &mut Vec<u8>, field_number: u32, value: u64) {
+        write_test_varint(out, u64::from(field_number) << 3);
+        write_test_varint(out, value);
+    }
+
+    fn write_test_bytes_field(out: &mut Vec<u8>, field_number: u32, value: &[u8]) {
+        write_test_varint(out, (u64::from(field_number) << 3) | 2);
+        write_test_varint(out, value.len() as u64);
+        out.extend_from_slice(value);
     }
 }

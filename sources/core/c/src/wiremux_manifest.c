@@ -6,7 +6,13 @@
 #include "wiremux_proto_internal.h"
 
 static size_t optional_string_field_len(uint32_t field_number, const char *value);
+static size_t bounded_utf8_prefix_len(const char *value, size_t max_len);
+static size_t optional_bounded_string_field_len(uint32_t field_number, const char *value, size_t max_len);
 static uint8_t *write_optional_string_field(uint8_t *out, uint32_t field_number, const char *value);
+static uint8_t *write_optional_bounded_string_field(uint8_t *out,
+                                                    uint32_t field_number,
+                                                    const char *value,
+                                                    size_t max_len);
 static bool channel_descriptor_is_valid(const wiremux_channel_descriptor_t *channel);
 static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t *channel);
 static uint8_t *write_channel_descriptor(uint8_t *out, const wiremux_channel_descriptor_t *channel);
@@ -90,6 +96,90 @@ static size_t optional_string_field_len(uint32_t field_number, const char *value
     return wiremux_bytes_field_len(field_number, strlen(value));
 }
 
+static size_t bounded_utf8_prefix_len(const char *value, size_t max_len)
+{
+    if (value == NULL || max_len == 0) {
+        return 0;
+    }
+
+    const unsigned char *bytes = (const unsigned char *)value;
+    size_t offset = 0;
+    while (offset < max_len && bytes[offset] != '\0') {
+        const unsigned char first = bytes[offset];
+        size_t width = 0;
+
+        if (first < 0x80) {
+            width = 1;
+        } else if (first >= 0xc2 && first <= 0xdf) {
+            width = 2;
+            if (offset + width > max_len ||
+                bytes[offset + 1] < 0x80 || bytes[offset + 1] > 0xbf) {
+                break;
+            }
+        } else if (first == 0xe0) {
+            width = 3;
+            if (offset + width > max_len ||
+                bytes[offset + 1] < 0xa0 || bytes[offset + 1] > 0xbf ||
+                bytes[offset + 2] < 0x80 || bytes[offset + 2] > 0xbf) {
+                break;
+            }
+        } else if ((first >= 0xe1 && first <= 0xec) || (first >= 0xee && first <= 0xef)) {
+            width = 3;
+            if (offset + width > max_len ||
+                bytes[offset + 1] < 0x80 || bytes[offset + 1] > 0xbf ||
+                bytes[offset + 2] < 0x80 || bytes[offset + 2] > 0xbf) {
+                break;
+            }
+        } else if (first == 0xed) {
+            width = 3;
+            if (offset + width > max_len ||
+                bytes[offset + 1] < 0x80 || bytes[offset + 1] > 0x9f ||
+                bytes[offset + 2] < 0x80 || bytes[offset + 2] > 0xbf) {
+                break;
+            }
+        } else if (first == 0xf0) {
+            width = 4;
+            if (offset + width > max_len ||
+                bytes[offset + 1] < 0x90 || bytes[offset + 1] > 0xbf ||
+                bytes[offset + 2] < 0x80 || bytes[offset + 2] > 0xbf ||
+                bytes[offset + 3] < 0x80 || bytes[offset + 3] > 0xbf) {
+                break;
+            }
+        } else if (first >= 0xf1 && first <= 0xf3) {
+            width = 4;
+            if (offset + width > max_len ||
+                bytes[offset + 1] < 0x80 || bytes[offset + 1] > 0xbf ||
+                bytes[offset + 2] < 0x80 || bytes[offset + 2] > 0xbf ||
+                bytes[offset + 3] < 0x80 || bytes[offset + 3] > 0xbf) {
+                break;
+            }
+        } else if (first == 0xf4) {
+            width = 4;
+            if (offset + width > max_len ||
+                bytes[offset + 1] < 0x80 || bytes[offset + 1] > 0x8f ||
+                bytes[offset + 2] < 0x80 || bytes[offset + 2] > 0xbf ||
+                bytes[offset + 3] < 0x80 || bytes[offset + 3] > 0xbf) {
+                break;
+            }
+        } else {
+            break;
+        }
+
+        offset += width;
+    }
+
+    return offset;
+}
+
+static size_t optional_bounded_string_field_len(uint32_t field_number, const char *value, size_t max_len)
+{
+    const size_t len = bounded_utf8_prefix_len(value, max_len);
+    if (len == 0) {
+        return 0;
+    }
+    return wiremux_bytes_field_len(field_number, len);
+}
+
 static uint8_t *write_optional_string_field(uint8_t *out, uint32_t field_number, const char *value)
 {
     if (value == NULL || value[0] == '\0') {
@@ -98,17 +188,30 @@ static uint8_t *write_optional_string_field(uint8_t *out, uint32_t field_number,
     return wiremux_write_bytes_field(out, field_number, (const uint8_t *)value, strlen(value));
 }
 
+static uint8_t *write_optional_bounded_string_field(uint8_t *out,
+                                                    uint32_t field_number,
+                                                    const char *value,
+                                                    size_t max_len)
+{
+    const size_t len = bounded_utf8_prefix_len(value, max_len);
+    if (len == 0) {
+        return out;
+    }
+    return wiremux_write_bytes_field(out, field_number, (const uint8_t *)value, len);
+}
+
 static bool channel_descriptor_is_valid(const wiremux_channel_descriptor_t *channel)
 {
     return channel != NULL &&
            (channel->payload_kind_count == 0 || channel->payload_kinds != NULL) &&
-           (channel->payload_type_count == 0 || channel->payload_types != NULL);
+           (channel->payload_type_count == 0 || channel->payload_types != NULL) &&
+           (channel->interaction_mode_count == 0 || channel->interaction_modes != NULL);
 }
 
 static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t *channel)
 {
     size_t len = wiremux_varint_field_len(1, channel->channel_id) +
-                 optional_string_field_len(2, channel->name) +
+                 optional_bounded_string_field_len(2, channel->name, WIREMUX_CHANNEL_NAME_MAX_BYTES) +
                  optional_string_field_len(3, channel->description);
 
     if ((channel->directions & WIREMUX_DIRECTION_INPUT) != 0) {
@@ -133,6 +236,16 @@ static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t 
     if (channel->flags != 0) {
         len += wiremux_varint_field_len(7, channel->flags);
     }
+    if (channel->interaction_mode_count > 0) {
+        for (size_t i = 0; i < channel->interaction_mode_count; ++i) {
+            len += wiremux_varint_field_len(9, channel->interaction_modes[i]);
+        }
+    } else if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        len += wiremux_varint_field_len(9, channel->default_interaction_mode);
+    }
+    if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        len += wiremux_varint_field_len(10, channel->default_interaction_mode);
+    }
 
     return len;
 }
@@ -140,7 +253,7 @@ static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t 
 static uint8_t *write_channel_descriptor(uint8_t *out, const wiremux_channel_descriptor_t *channel)
 {
     out = wiremux_write_varint_field(out, 1, channel->channel_id);
-    out = write_optional_string_field(out, 2, channel->name);
+    out = write_optional_bounded_string_field(out, 2, channel->name, WIREMUX_CHANNEL_NAME_MAX_BYTES);
     out = write_optional_string_field(out, 3, channel->description);
     if ((channel->directions & WIREMUX_DIRECTION_INPUT) != 0) {
         out = wiremux_write_varint_field(out, 4, WIREMUX_DIRECTION_INPUT);
@@ -163,6 +276,16 @@ static uint8_t *write_channel_descriptor(uint8_t *out, const wiremux_channel_des
     }
     if (channel->flags != 0) {
         out = wiremux_write_varint_field(out, 7, channel->flags);
+    }
+    if (channel->interaction_mode_count > 0) {
+        for (size_t i = 0; i < channel->interaction_mode_count; ++i) {
+            out = wiremux_write_varint_field(out, 9, channel->interaction_modes[i]);
+        }
+    } else if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 9, channel->default_interaction_mode);
+    }
+    if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 10, channel->default_interaction_mode);
     }
 
     return out;
