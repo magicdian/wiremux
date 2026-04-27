@@ -401,8 +401,10 @@ Required behavior:
 - `tui` owns one serial handle, requests a manifest after connect, displays
   decoded output in a ratatui interface using `chN(name)> ` when manifest names
   are available, and sends bottom-line input through mux input frames. In
-  unfiltered mode TUI input targets channel 1; in channel filter mode it targets
-  the active channel.
+  unfiltered mode TUI is read-only and must not route typed input to any mux
+  channel. In channel filter mode, TUI input targets the active channel only
+  when the manifest descriptor for that channel includes `DIRECTION_INPUT`; the
+  manifest interaction mode then determines line vs passthrough input.
 - TUI passthrough output uses stream semantics only for channels whose manifest
   advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/src/tui.rs` must
   keep each passthrough channel's incomplete `OutputLine` independent: when a

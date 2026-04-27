@@ -174,10 +174,12 @@ the demo, and host verification commands in the same task.
 - Host input frames use the same magic/version/length/CRC wrapper as device output frames.
 - Host input envelopes set `direction = input`.
 - Console line-mode sends complete command lines to the console channel.
-- TUI input mode is manifest-driven. Unfiltered TUI input targets channel 1;
-  filtered TUI input targets the active channel. `LINE` channels send complete
-  command lines on Enter; `PASSTHROUGH` channels send key bytes promptly. It
-  must not raw-write user text to the serial stream outside `WMUX` frames.
+- TUI input mode is manifest-driven. Unfiltered TUI input is read-only and must
+  not fall back to channel 1. Filtered TUI input targets the active channel only
+  when the manifest descriptor includes `DIRECTION_INPUT`; `LINE` channels send
+  complete command lines on Enter and `PASSTHROUGH` channels send key bytes
+  promptly. TUI must not raw-write user text to the serial stream outside
+  `WMUX` frames.
 - TUI passthrough display is channel-local stream editing. In
   `sources/host/src/tui.rs`, `complete_stream_line()`,
   `backspace_stream_line()`, and `append_stream_segment()` must operate on the
@@ -216,8 +218,9 @@ the demo, and host verification commands in the same task.
 | default USB Serial/JTAG driver missing | mux init installs driver before RX task starts |
 | serial disconnects during send/listen | host reconnect behavior remains deterministic |
 | host requests manifest on channel 0 | ESP emits a DeviceManifest response |
-| TUI submits input in unfiltered mode | host sends channel-1 mux input frame |
-| TUI submits input in channel filter mode | host sends mux input frame to active channel |
+| TUI submits input in unfiltered mode | host treats the view as read-only and sends no mux input frame |
+| TUI submits input in channel filter mode for an output-only channel | host treats the channel as read-only and sends no mux input frame |
+| TUI submits input in channel filter mode for an input-capable channel | host sends mux input frame to active channel |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
 | passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
 | passthrough empty Enter echoes `CRLF` | TUI stores a completed empty prompt history row and renders the following current prompt row |

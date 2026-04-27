@@ -101,9 +101,10 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 
 输入路由：
 
-- 无过滤模式下，输入行默认通过 mux channel 1 发送，和 `listen --line` 的默认行为一致。
-- channel 过滤模式下，输入行通过当前过滤 channel 发送。
-- 底部输入行默认显示终端原生光标，方便定位 line-mode 输入和 passthrough 输入。
+- 无过滤模式下，TUI 为只读视图，不会把输入发送到 channel 1 或任何其他 channel。
+- channel 过滤模式下，只有 manifest 声明当前 channel 支持 `DIRECTION_INPUT` 时，
+  输入行才会通过当前过滤 channel 发送。
+- 底部输入区会显示当前输入状态；只读状态不会累积输入或显示可编辑光标。
 - TUI 不会把用户输入作为 raw serial bytes 直接写入串口；host-to-device 输入仍然封装为
   `WMUX` frame + `MuxEnvelope(direction=input)`。
 - 如果 manifest 声明当前输入 channel 的 `default_interaction_mode = PASSTHROUGH`，

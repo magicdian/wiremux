@@ -22,7 +22,7 @@ use ratatui::widgets::{
 use ratatui::Terminal;
 use wiremux::host_session::{
     display_channel_name, DeviceManifest, HostDecodeStage, HostEvent, HostSession, MuxEnvelope,
-    ProtocolCompatibilityKind,
+    ProtocolCompatibilityKind, DIRECTION_INPUT,
 };
 
 use super::{
@@ -45,6 +45,26 @@ struct OutputLine {
 struct RenderOutputLine<'a> {
     channel: Option<u32>,
     text: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputState {
+    ReadOnly,
+    Line(u8),
+    Passthrough(u8),
+}
+
+impl InputState {
+    fn channel(self) -> Option<u8> {
+        match self {
+            Self::ReadOnly => None,
+            Self::Line(channel) | Self::Passthrough(channel) => Some(channel),
+        }
+    }
+
+    fn is_passthrough(self) -> bool {
+        matches!(self, Self::Passthrough(_))
+    }
 }
 
 struct App {
@@ -94,7 +114,10 @@ impl App {
 
     fn push_record(&mut self, envelope: &MuxEnvelope) {
         if self.channel_is_passthrough(envelope.channel_id) {
-            if u32::from(self.active_input_channel()) == envelope.channel_id {
+            if self
+                .active_input_channel()
+                .is_some_and(|channel| u32::from(channel) == envelope.channel_id)
+            {
                 self.follow_live_output();
             }
             let text = String::from_utf8_lossy(&envelope.payload).into_owned();
@@ -209,16 +232,52 @@ impl App {
             .find(|line| line.channel == channel && !line.complete)
     }
 
-    fn active_input_channel(&self) -> u8 {
-        self.filter
-            .and_then(|channel| u8::try_from(channel).ok())
-            .unwrap_or(1)
+    fn active_input_channel(&self) -> Option<u8> {
+        self.filter.and_then(|channel| u8::try_from(channel).ok())
+    }
+
+    fn active_input_state(&self) -> InputState {
+        let Some(channel) = self.active_input_channel() else {
+            return InputState::ReadOnly;
+        };
+        let channel_id = u32::from(channel);
+        let Some(manifest) = self.manifest.as_ref() else {
+            return InputState::ReadOnly;
+        };
+        if !channel_supports_input(manifest, channel_id) {
+            return InputState::ReadOnly;
+        }
+        if channel_supports_passthrough(manifest, channel_id) {
+            InputState::Passthrough(channel)
+        } else {
+            InputState::Line(channel)
+        }
     }
 
     fn active_input_is_passthrough(&self) -> bool {
-        self.manifest.as_ref().is_some_and(|manifest| {
-            channel_supports_passthrough(manifest, u32::from(self.active_input_channel()))
-        })
+        self.active_input_state().is_passthrough()
+    }
+
+    fn clear_input_if_read_only(&mut self) {
+        if self.active_input_state() == InputState::ReadOnly {
+            self.input.clear();
+        }
+    }
+
+    fn input_label(&self) -> String {
+        match self.active_input_state() {
+            InputState::ReadOnly => "read-only".to_string(),
+            InputState::Line(channel) => format!("ch{channel} line"),
+            InputState::Passthrough(channel) => format!("ch{channel} passthrough"),
+        }
+    }
+
+    fn input_title(&self) -> &'static str {
+        match self.active_input_state() {
+            InputState::ReadOnly => "input: read-only, Ctrl-C/Ctrl-]/Esc x quits",
+            InputState::Line(_) => "input: Enter sends, Esc clears, Ctrl-C/Ctrl-]/Esc x quits",
+            InputState::Passthrough(_) => "input: passthrough, Ctrl-C/Ctrl-]/Esc x quits",
+        }
     }
 
     fn channel_is_passthrough(&self, channel_id: u32) -> bool {
@@ -513,12 +572,14 @@ fn handle_key(
             KeyCode::Char('0') => {
                 app.filter = None;
                 app.restore_auto_follow();
+                app.clear_input_if_read_only();
                 app.status = "filter: all".to_string();
             }
             KeyCode::Char(ch @ '1'..='9') => {
                 let channel = ch.to_digit(10).unwrap_or(0);
                 app.filter = Some(channel);
                 app.restore_auto_follow();
+                app.clear_input_if_read_only();
                 app.status = format!("filter: ch{channel}");
             }
             KeyCode::Esc => {
@@ -537,39 +598,47 @@ fn handle_key(
         return Ok(());
     }
 
-    if app.active_input_is_passthrough() {
-        send_tui_passthrough_key(app, serial.as_mut().map(|port| &mut **port), args, key)?;
-        return Ok(());
-    }
-
-    match key.code {
-        KeyCode::Char(ch) => {
-            app.reset_empty_enter_restore();
-            app.input.push(ch);
-        }
-        KeyCode::Backspace => {
-            app.reset_empty_enter_restore();
-            app.input.pop();
-        }
-        KeyCode::Enter => {
-            if app.input.is_empty() {
-                app.handle_empty_enter_restore();
-                return Ok(());
-            }
-            app.reset_empty_enter_restore();
-            let channel = app.active_input_channel();
-            let frame = build_input_frame(channel, app.input.as_bytes(), args.max_payload_len)
-                .map_err(build_frame_error_to_io)?;
-            if let Some(port) = serial {
-                port.write_all(&frame)?;
-                port.flush()?;
-                app.status = format!("sent {} bytes to ch{channel}", app.input.len());
+    match app.active_input_state() {
+        InputState::ReadOnly => match key.code {
+            KeyCode::Enter if app.input.is_empty() => app.handle_empty_enter_restore(),
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Enter => {
                 app.input.clear();
-            } else {
-                app.status = "not connected; input not sent".to_string();
+                app.reset_empty_enter_restore();
+                app.status = "input is read-only".to_string();
             }
+            _ => {}
+        },
+        InputState::Passthrough(_) => {
+            send_tui_passthrough_key(app, serial.as_mut().map(|port| &mut **port), args, key)?;
         }
-        _ => {}
+        InputState::Line(channel) => match key.code {
+            KeyCode::Char(ch) => {
+                app.reset_empty_enter_restore();
+                app.input.push(ch);
+            }
+            KeyCode::Backspace => {
+                app.reset_empty_enter_restore();
+                app.input.pop();
+            }
+            KeyCode::Enter => {
+                if app.input.is_empty() {
+                    app.handle_empty_enter_restore();
+                    return Ok(());
+                }
+                app.reset_empty_enter_restore();
+                let frame = build_input_frame(channel, app.input.as_bytes(), args.max_payload_len)
+                    .map_err(build_frame_error_to_io)?;
+                if let Some(port) = serial {
+                    port.write_all(&frame)?;
+                    port.flush()?;
+                    app.status = format!("sent {} bytes to ch{channel}", app.input.len());
+                    app.input.clear();
+                } else {
+                    app.status = "not connected; input not sent".to_string();
+                }
+            }
+            _ => {}
+        },
     }
 
     Ok(())
@@ -601,6 +670,9 @@ fn apply_pending_escape(
             args,
             KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
         )?;
+    } else if app.active_input_state() == InputState::ReadOnly {
+        app.input.clear();
+        app.status = "input is read-only".to_string();
     } else {
         app.reset_empty_enter_restore();
         app.input.clear();
@@ -615,7 +687,11 @@ fn send_tui_passthrough_key(
     args: &TuiArgs,
     key: KeyEvent,
 ) -> io::Result<()> {
-    let channel = app.active_input_channel();
+    let Some(channel) = app.active_input_state().channel() else {
+        app.input.clear();
+        app.status = "input is read-only".to_string();
+        return Ok(());
+    };
     let policy = app
         .manifest
         .as_ref()
@@ -684,6 +760,7 @@ fn handle_stream_event(app: &mut App, diagnostics: &mut File, event: HostEvent) 
                 manifest.channels.len()
             ));
             app.manifest = Some(manifest);
+            app.clear_input_if_read_only();
         }
         HostEvent::ProtocolCompatibility(compatibility) => match compatibility.compatibility {
             ProtocolCompatibilityKind::Supported => {
@@ -764,6 +841,14 @@ fn handle_envelope(
     Ok(())
 }
 
+fn channel_supports_input(manifest: &DeviceManifest, channel_id: u32) -> bool {
+    manifest
+        .channels
+        .iter()
+        .find(|channel| channel.channel_id == channel_id)
+        .is_some_and(|channel| channel.directions.contains(&DIRECTION_INPUT))
+}
+
 fn decode_error_marker(stage: HostDecodeStage) -> &'static str {
     match stage {
         HostDecodeStage::Envelope => "envelope decode error; details in diagnostics",
@@ -835,15 +920,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             Span::raw(app.filter_label()),
             Span::raw("  "),
             Span::styled("input ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!(
-                "ch{}{}",
-                app.active_input_channel(),
-                if app.active_input_is_passthrough() {
-                    " passthrough"
-                } else {
-                    " line"
-                }
-            )),
+            Span::raw(app.input_label()),
             Span::raw("  "),
             Span::styled("device ", Style::default().fg(Color::Yellow)),
             Span::raw(app.manifest_label()),
@@ -856,17 +933,20 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     .block(Block::default().title("status").borders(Borders::ALL));
     frame.render_widget(status, chunks[1]);
 
-    let input = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Green)),
-        Span::raw(app.input.as_str()),
-    ]))
-    .block(
+    let input_line = if app.active_input_state() == InputState::ReadOnly {
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::DarkGray)),
+            Span::styled("read-only", Style::default().fg(Color::DarkGray)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Green)),
+            Span::raw(app.input.as_str()),
+        ])
+    };
+    let input = Paragraph::new(input_line).block(
         Block::default()
-            .title(if app.active_input_is_passthrough() {
-                "input: passthrough, Ctrl-C/Ctrl-]/Esc x quits"
-            } else {
-                "input: Enter sends, Esc clears, Ctrl-C/Ctrl-]/Esc x quits"
-            })
+            .title(app.input_title())
             .borders(Borders::ALL),
     );
     frame.render_widget(input, chunks[2]);
@@ -874,11 +954,14 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
 }
 
 fn should_append_passthrough_prompt(app: &App, filtered: &[&OutputLine]) -> bool {
-    if app.scroll_offset > 0 || !app.active_input_is_passthrough() {
+    let InputState::Passthrough(active_channel) = app.active_input_state() else {
+        return false;
+    };
+    if app.scroll_offset > 0 {
         return false;
     }
 
-    let active_channel = u32::from(app.active_input_channel());
+    let active_channel = u32::from(active_channel);
     match filtered
         .iter()
         .rev()
@@ -896,7 +979,11 @@ fn rendered_output_lines<'a>(
     start: usize,
     end: usize,
 ) -> Vec<RenderOutputLine<'a>> {
-    let active_channel = u32::from(app.active_input_channel());
+    let active_channel = app
+        .active_input_state()
+        .channel()
+        .map(u32::from)
+        .unwrap_or_default();
     (start..end)
         .filter_map(|index| {
             if index < filtered.len() {
@@ -924,10 +1011,10 @@ fn set_cursor_position(
     visible: &[RenderOutputLine<'_>],
     input_area: Rect,
 ) {
-    if app.active_input_is_passthrough() {
-        set_passthrough_cursor(frame, app, output_area, visible);
-    } else {
-        set_line_input_cursor(frame, app, input_area);
+    match app.active_input_state() {
+        InputState::ReadOnly => {}
+        InputState::Line(_) => set_line_input_cursor(frame, app, input_area),
+        InputState::Passthrough(_) => set_passthrough_cursor(frame, app, output_area, visible),
     }
 }
 
@@ -960,7 +1047,10 @@ fn set_passthrough_cursor(
 
     let content_width = output_area.width.saturating_sub(2);
     let max_offset = content_width.saturating_sub(1);
-    let active_channel = u32::from(app.active_input_channel());
+    let InputState::Passthrough(active_channel) = app.active_input_state() else {
+        return;
+    };
+    let active_channel = u32::from(active_channel);
     let cursor = visible
         .iter()
         .enumerate()
@@ -1105,7 +1195,9 @@ fn empty_as_dash(value: &str) -> &str {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
-    use wiremux::host_session::{ChannelDescriptor, CHANNEL_INTERACTION_PASSTHROUGH};
+    use wiremux::host_session::{
+        ChannelDescriptor, CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_OUTPUT,
+    };
 
     #[test]
     fn visible_window_follows_tail_when_offset_is_zero() {
@@ -1330,9 +1422,58 @@ mod tests {
     #[test]
     fn active_input_mode_uses_manifest_passthrough_metadata() {
         let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
 
         assert!(app.active_input_is_passthrough());
+    }
+
+    #[test]
+    fn unfiltered_input_is_read_only_even_when_channel_one_supports_passthrough() {
+        let mut app = App::new("diag.log".to_string());
+        app.manifest = Some(passthrough_manifest(1));
+
+        assert_eq!(app.active_input_state(), InputState::ReadOnly);
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
+        )
+        .expect("handle read-only key");
+
+        assert!(app.input.is_empty());
+        assert_eq!(app.status, "input is read-only");
+    }
+
+    #[test]
+    fn output_only_channel_input_is_read_only() {
+        let mut app = App::new("diag.log".to_string());
+        app.filter = Some(2);
+        app.manifest = Some(output_only_manifest(2));
+
+        assert_eq!(app.active_input_state(), InputState::ReadOnly);
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()),
+        )
+        .expect("handle output-only key");
+
+        assert!(app.input.is_empty());
+        assert_eq!(app.status, "input is read-only");
+    }
+
+    #[test]
+    fn input_channel_without_passthrough_uses_line_mode() {
+        let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
+        app.manifest = Some(line_manifest(1));
+
+        assert_eq!(app.active_input_state(), InputState::Line(1));
     }
 
     #[test]
@@ -1530,7 +1671,8 @@ mod tests {
 
     #[test]
     fn passthrough_input_restores_live_tail() {
-        let mut app = app_with_lines(10);
+        let mut app = app_with_channel_lines(1, 10);
+        app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
         app.scroll_up(4);
         assert!(app.scroll_offset > 0);
@@ -1553,7 +1695,8 @@ mod tests {
 
     #[test]
     fn passthrough_output_on_active_input_channel_restores_live_tail() {
-        let mut app = app_with_lines(10);
+        let mut app = app_with_channel_lines(1, 10);
+        app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
         app.scroll_up(4);
         assert!(app.scroll_offset > 0);
@@ -1645,6 +1788,8 @@ mod tests {
     #[test]
     fn render_sets_input_cursor_after_prompt_and_text() {
         let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
+        app.manifest = Some(line_manifest(1));
         app.input = "help".to_string();
         let area = Rect::new(0, 0, 80, 12);
         let input_area = main_layout(area)[2];
@@ -1662,6 +1807,7 @@ mod tests {
     #[test]
     fn render_keeps_passthrough_prompt_for_empty_stream_line() {
         let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
         app.push_record(&MuxEnvelope {
             channel_id: 1,
@@ -1683,6 +1829,7 @@ mod tests {
     #[test]
     fn render_sets_passthrough_cursor_in_output_pane_after_echo() {
         let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
         app.push_record(&MuxEnvelope {
             channel_id: 1,
@@ -1714,6 +1861,7 @@ mod tests {
     #[test]
     fn render_appends_virtual_passthrough_prompt_after_completed_output() {
         let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
         app.push_record(&MuxEnvelope {
             channel_id: 1,
@@ -1743,6 +1891,7 @@ mod tests {
     #[test]
     fn render_appends_virtual_passthrough_prompt_after_empty_enter() {
         let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
         app.push_record(&MuxEnvelope {
             channel_id: 1,
@@ -1786,6 +1935,28 @@ mod tests {
     }
 
     fn passthrough_manifest(channel_id: u32) -> DeviceManifest {
+        manifest_with_channel(
+            channel_id,
+            vec![DIRECTION_INPUT],
+            vec![CHANNEL_INTERACTION_PASSTHROUGH],
+            CHANNEL_INTERACTION_PASSTHROUGH,
+        )
+    }
+
+    fn line_manifest(channel_id: u32) -> DeviceManifest {
+        manifest_with_channel(channel_id, vec![DIRECTION_INPUT], Vec::new(), 0)
+    }
+
+    fn output_only_manifest(channel_id: u32) -> DeviceManifest {
+        manifest_with_channel(channel_id, vec![DIRECTION_OUTPUT], Vec::new(), 0)
+    }
+
+    fn manifest_with_channel(
+        channel_id: u32,
+        directions: Vec<u32>,
+        interaction_modes: Vec<u32>,
+        default_interaction_mode: u32,
+    ) -> DeviceManifest {
         DeviceManifest {
             device_name: String::new(),
             firmware_version: String::new(),
@@ -1795,13 +1966,13 @@ mod tests {
                 channel_id,
                 name: "console".to_string(),
                 description: String::new(),
-                directions: Vec::new(),
+                directions,
                 payload_kinds: Vec::new(),
                 payload_types: Vec::new(),
                 flags: 0,
                 default_payload_kind: 0,
-                interaction_modes: vec![CHANNEL_INTERACTION_PASSTHROUGH],
-                default_interaction_mode: CHANNEL_INTERACTION_PASSTHROUGH,
+                interaction_modes,
+                default_interaction_mode,
                 passthrough_policy: Default::default(),
             }],
             native_endianness: 0,
@@ -1817,6 +1988,14 @@ mod tests {
         let mut app = App::new("diag.log".to_string());
         for index in 0..line_count {
             app.push_line(None, format!("line {index}\n"));
+        }
+        app
+    }
+
+    fn app_with_channel_lines(channel: u32, line_count: usize) -> App {
+        let mut app = App::new("diag.log".to_string());
+        for index in 0..line_count {
+            app.push_line(Some(channel), format!("line {index}\n"));
         }
         app
     }
