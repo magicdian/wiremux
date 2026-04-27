@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -11,7 +12,10 @@ use wiremux::frame::{
     build_frame_payload_with_max, BuildFrameError, FrameError, FrameScanner, StreamEvent,
     DEFAULT_MAX_PAYLOAD_LEN,
 };
-use wiremux::manifest::{encode_manifest_request, MANIFEST_REQUEST_PAYLOAD_TYPE};
+use wiremux::manifest::{
+    decode_manifest, display_channel_name, encode_manifest_request, DeviceManifest,
+    MANIFEST_PAYLOAD_TYPE, MANIFEST_REQUEST_PAYLOAD_TYPE,
+};
 
 mod tui;
 
@@ -55,6 +59,7 @@ struct DisplayOutput<W: Write> {
     channel_filter: Option<u32>,
     line_open: bool,
     line_channel: Option<u32>,
+    channel_names: HashMap<u32, String>,
 }
 
 impl<W: Write> DisplayOutput<W> {
@@ -64,6 +69,7 @@ impl<W: Write> DisplayOutput<W> {
             channel_filter,
             line_open: false,
             line_channel: None,
+            channel_names: HashMap::new(),
         }
     }
 
@@ -91,12 +97,28 @@ impl<W: Write> DisplayOutput<W> {
         }
 
         self.prepare_unfiltered_record(envelope.channel_id)?;
-        write!(self.out, "ch{}> ", envelope.channel_id)?;
+        write!(self.out, "{}> ", self.channel_prefix(envelope.channel_id))?;
         self.line_open = true;
         self.line_channel = Some(envelope.channel_id);
         self.out.write_all(&envelope.payload)?;
         self.update_line_state(&envelope.payload, Some(envelope.channel_id));
         Ok(())
+    }
+
+    fn update_manifest(&mut self, manifest: &DeviceManifest) {
+        self.channel_names.clear();
+        for channel in &manifest.channels {
+            if let Some(name) = display_channel_name(&channel.name) {
+                self.channel_names.insert(channel.channel_id, name);
+            }
+        }
+    }
+
+    fn channel_prefix(&self, channel_id: u32) -> String {
+        match self.channel_names.get(&channel_id) {
+            Some(name) => format!("ch{channel_id}({name})"),
+            None => format!("ch{channel_id}"),
+        }
     }
 
     fn write_marker_line(&mut self, message: &str) -> io::Result<()> {
@@ -443,6 +465,9 @@ fn write_event<W: Write, D: Write>(
         StreamEvent::Terminal(bytes) => display.write_terminal(&bytes),
         StreamEvent::Frame(frame) => match decode_envelope(&frame.payload) {
             Ok(envelope) => {
+                if envelope.payload_type == MANIFEST_PAYLOAD_TYPE {
+                    return write_manifest_event(display, diagnostics, &envelope);
+                }
                 if envelope.payload_type == BATCH_PAYLOAD_TYPE {
                     return write_batch_event(display, diagnostics, &envelope);
                 }
@@ -482,6 +507,30 @@ fn write_event<W: Write, D: Write>(
             Ok(())
         }
     }
+}
+
+fn write_manifest_event<W: Write, D: Write>(
+    display: &mut DisplayOutput<W>,
+    diagnostics: &mut D,
+    envelope: &MuxEnvelope,
+) -> io::Result<()> {
+    match decode_manifest(&envelope.payload) {
+        Ok(manifest) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] manifest received: {} channels",
+                manifest.channels.len()
+            )?;
+            display.update_manifest(&manifest);
+        }
+        Err(err) => {
+            writeln!(diagnostics, "[wiremux] manifest_decode_error={err:?}")?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line("manifest decode error; details in diagnostics")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn write_batch_event<W: Write, D: Write>(
@@ -787,7 +836,9 @@ mod tests {
         PAYLOAD_KIND_BATCH, PAYLOAD_KIND_CONTROL, PAYLOAD_KIND_TEXT,
     };
     use wiremux::frame::{FrameScanner, MuxFrame, StreamEvent};
-    use wiremux::manifest::MANIFEST_REQUEST_PAYLOAD_TYPE;
+    use wiremux::manifest::{
+        ChannelDescriptor, DeviceManifest, MANIFEST_PAYLOAD_TYPE, MANIFEST_REQUEST_PAYLOAD_TYPE,
+    };
 
     fn output_envelope(channel_id: u32, payload: &[u8]) -> MuxEnvelope {
         MuxEnvelope {
@@ -799,6 +850,33 @@ mod tests {
             payload_type: String::new(),
             payload: payload.to_vec(),
             flags: 0,
+        }
+    }
+
+    fn manifest_with_channel_name(channel_id: u32, name: &str) -> DeviceManifest {
+        DeviceManifest {
+            device_name: String::new(),
+            firmware_version: String::new(),
+            protocol_version: 1,
+            max_channels: 8,
+            channels: vec![ChannelDescriptor {
+                channel_id,
+                name: name.to_string(),
+                description: String::new(),
+                directions: Vec::new(),
+                payload_kinds: Vec::new(),
+                payload_types: Vec::new(),
+                flags: 0,
+                default_payload_kind: 0,
+                interaction_modes: Vec::new(),
+                default_interaction_mode: 0,
+            }],
+            native_endianness: 0,
+            max_payload_len: 512,
+            transport: String::new(),
+            feature_flags: 0,
+            sdk_name: String::new(),
+            sdk_version: String::new(),
         }
     }
 
@@ -1047,6 +1125,35 @@ mod tests {
     }
 
     #[test]
+    fn unfiltered_display_uses_manifest_channel_names() {
+        let mut display = DisplayOutput::new(Vec::new(), None);
+        let manifest = manifest_with_channel_name(4, "🚗🎒😄🔥");
+        display.update_manifest(&manifest);
+
+        display
+            .write_record(&output_envelope(4, "你好 UTF-8 😄\n".as_bytes()))
+            .expect("write record");
+
+        assert_eq!(
+            String::from_utf8(display.out).expect("utf8 output"),
+            "ch4(🚗🎒😄)> 你好 UTF-8 😄\n"
+        );
+    }
+
+    #[test]
+    fn unfiltered_display_ignores_empty_manifest_channel_names() {
+        let mut display = DisplayOutput::new(Vec::new(), None);
+        let manifest = manifest_with_channel_name(4, "\n\r");
+        display.update_manifest(&manifest);
+
+        display
+            .write_record(&output_envelope(4, b"plain\n"))
+            .expect("write record");
+
+        assert_eq!(display.out, b"ch4> plain\n");
+    }
+
+    #[test]
     fn unfiltered_display_marks_channel_switch_after_partial_line() {
         let mut display = DisplayOutput::new(Vec::new(), None);
 
@@ -1124,6 +1231,61 @@ mod tests {
         assert!(diagnostics.contains("[wiremux] batch records=2 compression=0"));
         assert!(diagnostics.contains("[wiremux] ch=3"));
         assert!(diagnostics.contains("[wiremux] ch=2"));
+    }
+
+    #[test]
+    fn listen_manifest_event_updates_labels_without_displaying_payload() {
+        let mut channel = Vec::new();
+        write_test_varint_field(&mut channel, 1, 4);
+        write_test_bytes_field(&mut channel, 2, "🚗🎒😄".as_bytes());
+
+        let mut manifest = Vec::new();
+        write_test_bytes_field(&mut manifest, 5, &channel);
+
+        let manifest_envelope = MuxEnvelope {
+            channel_id: 0,
+            direction: DIRECTION_OUTPUT,
+            sequence: 1,
+            timestamp_us: 10,
+            kind: PAYLOAD_KIND_CONTROL,
+            payload_type: MANIFEST_PAYLOAD_TYPE.to_string(),
+            payload: manifest,
+            flags: 0,
+        };
+        let record = output_envelope(4, "demo 😄\n".as_bytes());
+        let mut display = DisplayOutput::new(Vec::new(), None);
+        let mut diagnostics = Vec::new();
+
+        write_event(
+            &mut display,
+            &mut diagnostics,
+            StreamEvent::Frame(MuxFrame {
+                version: 1,
+                flags: 0,
+                payload: encode_envelope(&manifest_envelope),
+            }),
+        )
+        .expect("manifest event");
+        assert!(display.out.is_empty());
+
+        write_event(
+            &mut display,
+            &mut diagnostics,
+            StreamEvent::Frame(MuxFrame {
+                version: 1,
+                flags: 0,
+                payload: encode_envelope(&record),
+            }),
+        )
+        .expect("record event");
+
+        assert_eq!(
+            String::from_utf8(display.out).expect("utf8 output"),
+            "ch4(🚗🎒😄)> demo 😄\n"
+        );
+        assert!(String::from_utf8(diagnostics)
+            .expect("utf8 diagnostics")
+            .contains("manifest received: 1 channels"));
     }
 
     #[test]
@@ -1213,5 +1375,24 @@ mod tests {
         assert_eq!(envelope.kind, PAYLOAD_KIND_CONTROL);
         assert_eq!(envelope.payload_type, MANIFEST_REQUEST_PAYLOAD_TYPE);
         assert!(envelope.payload.is_empty());
+    }
+
+    fn write_test_varint(out: &mut Vec<u8>, mut value: u64) {
+        while value >= 0x80 {
+            out.push((value as u8) | 0x80);
+            value >>= 7;
+        }
+        out.push(value as u8);
+    }
+
+    fn write_test_varint_field(out: &mut Vec<u8>, field_number: u32, value: u64) {
+        write_test_varint(out, u64::from(field_number) << 3);
+        write_test_varint(out, value);
+    }
+
+    fn write_test_bytes_field(out: &mut Vec<u8>, field_number: u32, value: &[u8]) {
+        write_test_varint(out, (u64::from(field_number) << 3) | 2);
+        write_test_varint(out, value.len() as u64);
+        out.extend_from_slice(value);
     }
 }

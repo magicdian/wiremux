@@ -322,6 +322,13 @@ interaction mode. Native endianness is diagnostic metadata for tools and binary
 payload interpretation; it does not change the `WMUX` frame layout or protobuf
 wire encoding.
 
+`ChannelDescriptor.name` is the host display label. Manifest encoders must emit
+at most 15 bytes for this field and must clamp at a UTF-8 codepoint boundary.
+C-side buffers that materialize the display name should be 16 bytes to reserve
+space for `\0`, but the protobuf string payload itself does not carry the NUL
+byte. `ChannelDescriptor.description` remains long-form human metadata and must
+not be used as the compact prompt label.
+
 Host tools may request a fresh manifest by sending a system-channel input
 envelope:
 
@@ -354,8 +361,10 @@ Required behavior:
 - The diagnostics filename must include a timestamp and sanitized requested port,
   for example `wiremux-1777220326-422658-dev_cu.usbmodem2101.log`.
 - Without `--channel`, print ordinary terminal bytes and decoded mux record
-  payloads. Each decoded mux record is displayed as `chN> ` followed by raw
-  payload bytes; batch summaries and full record metadata go to diagnostics.
+  payloads. Each decoded mux record is displayed as `chN> `, or `chN(name)> `
+  after the host has learned a non-empty channel name from a manifest, followed
+  by raw payload bytes; batch summaries and full record metadata go to
+  diagnostics.
 - With `--channel <id>`, suppress ordinary terminal bytes and print only raw
   payload bytes for decoded mux records from that channel. Do not add a channel
   prefix or force a trailing newline in filtered mode.
@@ -369,10 +378,18 @@ Required behavior:
 - `listen --line <text>` must write one host-to-device input frame after each successful serial connection, then keep listening on the same serial handle. This is the preferred single-process hardware verification path because most serial devices are exclusively opened.
 - `listen --line <text>` defaults to input channel 1. `--send-channel <id>` overrides the input target while `--channel <id>` keeps its output-filter meaning.
 - `send --channel <id> --line <text>` is a non-interactive one-shot path for scripts and tests, but it should not be used concurrently with a listener on the same serial device.
+- `listen` passively consumes manifest responses when they appear and updates a
+  channel-name cache. It must not proactively send `DeviceManifestRequest`; if
+  it misses the device boot manifest, it falls back to `chN> ` until another
+  manifest is received.
+- ESP demos that rely on passive `listen` label discovery should emit an
+  immediate manifest and a short delayed manifest after boot, because USB serial
+  reset/reconnect can make the host miss the first manifest.
 - `tui` owns one serial handle, requests a manifest after connect, displays
-  decoded output in a ratatui interface, and sends bottom-line input through mux
-  input frames. In unfiltered mode TUI input targets channel 1; in channel
-  filter mode it targets the active channel.
+  decoded output in a ratatui interface using `chN(name)> ` when manifest names
+  are available, and sends bottom-line input through mux input frames. In
+  unfiltered mode TUI input targets channel 1; in channel filter mode it targets
+  the active channel.
 - TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
   channel filters 1 through 9.
 - TUI output scrollback is an in-memory viewport over the existing bounded
@@ -424,8 +441,9 @@ Required behavior:
   tests current, and should add ESP inbound dispatch tests or demo-level manual
   verification steps when ESP behavior changes.
 - Host display changes must test filtered raw payload output, unfiltered `chN> `
-  display, CRLF/CR/LF preservation, partial-line channel switch markers, and
-  batch summary routing to diagnostics.
+  and `chN(name)> ` display, CRLF/CR/LF preservation, partial-line channel
+  switch markers, passive manifest label caching for `listen`, and batch
+  summary routing to diagnostics.
 - Host TUI scrollback changes must test visible window calculation, frozen view
   behavior when matching lines are appended, empty-Enter recovery, filtered-line
   scroll counts, scrollbar row-to-offset mapping, drag behavior after leaving
@@ -489,4 +507,104 @@ This assumes two processes can reliably own the same serial port.
 
 ```bash
 wiremux listen --port /dev/cu.usbmodem2101 --channel 1 --line help
+```
+
+## Scenario: Manifest Channel Name Display Labels
+
+### 1. Scope / Trigger
+
+Trigger: changing manifest channel metadata, host output prefixes, or ESP demo
+channel registration. This spans portable C manifest encoding, ESP component
+manifest emission, Rust manifest decoding, non-TUI display, and TUI rendering.
+
+### 2. Signatures
+
+C core:
+
+```c
+#define WIREMUX_CHANNEL_NAME_MAX_BYTES 15u
+
+typedef struct {
+    uint32_t channel_id;
+    const char *name;
+    const char *description;
+    /* remaining descriptor fields */
+} wiremux_channel_descriptor_t;
+```
+
+Rust host:
+
+```rust
+pub const CHANNEL_NAME_MAX_BYTES: usize = 15;
+pub fn display_channel_name(name: &str) -> Option<String>;
+```
+
+CLI/TUI output:
+
+```text
+chN> payload
+chN(name)> payload
+```
+
+### 3. Contracts
+
+- `wiremux_device_manifest_encode()` is the source of truth for the wire
+  `ChannelDescriptor.name` bound. It writes the longest valid UTF-8 prefix that
+  fits within `WIREMUX_CHANNEL_NAME_MAX_BYTES`.
+- Invalid UTF-8 source bytes in a C string must not be emitted as invalid
+  protobuf strings. Emit the valid prefix before the invalid sequence, or omit
+  the name if no valid prefix exists.
+- Host display must treat channel names as optional. Empty, control-only, or
+  missing names fall back to `chN> `.
+- Host display must remove control characters from names before rendering to a
+  terminal. Valid non-control UTF-8, including emoji, is allowed.
+- `listen --channel N` remains raw payload output and must not add channel
+  prefixes or manifest labels.
+- Non-TUI `listen` only learns labels from manifest frames it receives. TUI
+  actively requests manifest after connect and then renders names when present.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| ASCII name `console` | manifest carries `console`; host displays `ch1(console)> ` |
+| ASCII name longer than 15 bytes | manifest carries first 15 bytes |
+| UTF-8 name `🚗🎒😄🔥` | manifest carries `🚗🎒😄`, not a partial fourth emoji |
+| invalid UTF-8 bytes before any valid prefix | manifest omits channel name |
+| host receives empty/control-only name | host displays `chN> ` |
+| unfiltered listen receives manifest then channel record | manifest is cached and hidden; later record displays `chN(name)> ` |
+| unfiltered listen misses manifest | records continue displaying `chN> ` |
+| filtered listen receives matching record | output remains raw payload bytes only |
+| USB serial reset makes host miss immediate boot manifest | demo delayed manifest lets passive listen learn labels after reconnect |
+
+### 5. Good/Base/Bad Cases
+
+- Good: ESP demo configures channel 4 name as `🚗🎒😄🔥`; host sees
+  `ch4(🚗🎒😄)> UTF-8 ...`.
+- Base: older firmware emits no names; host output remains `chN> `.
+- Bad: core emits 15 raw bytes that split a UTF-8 codepoint; Rust manifest
+  decode fails or terminal output shows replacement characters.
+
+### 6. Tests Required
+
+- Portable C tests cover ASCII 15-byte clamp, UTF-8 boundary clamp, and invalid
+  UTF-8 omission for manifest channel names.
+- Rust manifest tests cover `display_channel_name()` UTF-8 boundary clamp and
+  control character removal.
+- Rust CLI display tests cover manifest label cache, hidden manifest payload,
+  `chN(name)> ` unfiltered output, and raw filtered output preservation.
+- TUI tests cover `App::channel_prefix()` with manifest names and fallback.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Encode the first 15 bytes of "🚗🎒😄🔥" directly, producing invalid UTF-8.
+```
+
+#### Correct
+
+```text
+Encode only "🚗🎒😄" because it is the longest valid UTF-8 prefix within 15 bytes.
 ```

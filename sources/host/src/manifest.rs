@@ -2,6 +2,7 @@ use crate::envelope::{read_len_delimited, read_varint, DecodeError};
 
 pub const MANIFEST_PAYLOAD_TYPE: &str = "wiremux.v1.DeviceManifest";
 pub const MANIFEST_REQUEST_PAYLOAD_TYPE: &str = "wiremux.v1.DeviceManifestRequest";
+pub const CHANNEL_NAME_MAX_BYTES: usize = 15;
 
 pub const INTERACTION_MODE_UNSPECIFIED: u32 = 0;
 pub const INTERACTION_MODE_LINE: u32 = 1;
@@ -38,6 +39,19 @@ pub struct DeviceManifest {
 
 pub fn encode_manifest_request() -> Vec<u8> {
     Vec::new()
+}
+
+pub fn display_channel_name(name: &str) -> Option<String> {
+    let len = utf8_prefix_len(name, CHANNEL_NAME_MAX_BYTES);
+    let label = name[..len]
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>();
+    if label.is_empty() {
+        None
+    } else {
+        Some(label)
+    }
 }
 
 pub fn decode_manifest(bytes: &[u8]) -> Result<DeviceManifest, DecodeError> {
@@ -143,10 +157,26 @@ fn read_string(bytes: &[u8], cursor: &mut usize) -> Result<String, DecodeError> 
     String::from_utf8(read_len_delimited(bytes, cursor)?).map_err(|_| DecodeError::InvalidUtf8)
 }
 
+fn utf8_prefix_len(value: &str, max_len: usize) -> usize {
+    if value.len() <= max_len {
+        return value.len();
+    }
+
+    let mut len = 0;
+    for (index, ch) in value.char_indices() {
+        let next = index + ch.len_utf8();
+        if next > max_len {
+            break;
+        }
+        len = next;
+    }
+    len
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_manifest, encode_manifest_request, INTERACTION_MODE_LINE,
+        decode_manifest, display_channel_name, encode_manifest_request, INTERACTION_MODE_LINE,
         INTERACTION_MODE_PASSTHROUGH,
     };
     use crate::envelope::{write_bytes_field, write_varint_field};
@@ -191,5 +221,15 @@ mod tests {
             decoded.channels[0].default_interaction_mode,
             INTERACTION_MODE_LINE
         );
+    }
+
+    #[test]
+    fn display_channel_name_clamps_at_utf8_boundary_and_removes_controls() {
+        assert_eq!(display_channel_name("🚗🎒😄🔥").as_deref(), Some("🚗🎒😄"));
+        assert_eq!(
+            display_channel_name("console\nbad").as_deref(),
+            Some("consolebad")
+        );
+        assert_eq!(display_channel_name("\n\r\t"), None);
     }
 }

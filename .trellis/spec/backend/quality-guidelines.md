@@ -207,12 +207,15 @@ the demo, and host verification commands in the same task.
   counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
   drag continuation when the pointer leaves the scrollbar column, and scrollbar
   bottom alignment at `scroll_offset = 0`.
-- Portable C tests cover manifest encoding of channel interaction modes.
+- Portable C tests cover manifest encoding of channel interaction modes and
+  channel-name UTF-8-safe truncation.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.
 - ESP unit or review-level validation covers `esp_wiremux_write()` rejecting
   combined direction flags and input callbacks receiving payload data that does
   not alias the shared RX buffer.
-- Demo-level verification documents the exact commands used to run `help` through channel 1, trigger `mux_log` on channel 2, and trigger `mux_hello` on channel 3.
+- Demo-level verification documents the exact commands used to run `help`
+  through channel 1, trigger `mux_log` on channel 2, trigger `mux_hello` on
+  channel 3, and trigger `mux_utf8` on channel 4.
 
 ### 7. Wrong vs Correct
 

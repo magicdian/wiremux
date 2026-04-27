@@ -18,7 +18,8 @@ wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
 - 校验 version、length、CRC32。
 - C core 侧也提供同等的单帧 decode/validate API，ESP 入站路径复用该公共规则。
 - 默认终端输出保持简洁：有 `--channel` 时只显示该 channel 的原始 payload；无
-  `--channel` 时普通终端字节原样保留，mux record 以 `chN> ` 标识来源。
+  `--channel` 时普通终端字节原样保留，mux record 以 `chN> ` 或 manifest channel
+  name 可用时的 `chN(name)> ` 标识来源。
 - 完整 mux frame 诊断写入系统临时目录下的 `wiremux` 日志文件；启动时 host 会打印
   一行 `wiremux> diagnostics: <path>` 指出文件位置。
 - 诊断日志包含 frame metadata 和 `payload_type`；manifest 会以
@@ -43,10 +44,14 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --lin
 不会被打印成 `\r` 或 `\n` 字符串。
 
 不指定 `--channel` 时，host 会保留普通 terminal bytes，并用 `chN> ` 标识 decoded mux
-record 的 channel：
+record 的 channel。如果 listen 被动收到设备启动时或命令触发的 manifest，后续输出会用
+manifest 里的 channel `name` 显示为 `chN(name)> `；listen 不会主动请求 manifest，
+没抓到 manifest 时保持 `chN> `。
+ESP32 demo 会在 mux 初始化时和启动后短延迟各输出一次 manifest，方便 macOS USB
+serial reset/reconnect 后的被动 listen 捕获 channel name。
 
 ```text
-ch3> mock stress seq=090 component=wiremux
+ch3(telemetry)> mock stress seq=090 component=wiremux
 ```
 
 如果一个 channel 的可见行尚未结束就切换到另一个 channel，host 会为可读性插入一个独占
@@ -119,6 +124,7 @@ cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_manifest
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_hello
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_log
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_utf8
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_stress
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_diag
 ```
@@ -128,9 +134,11 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --lin
 ```bash
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 --channel 2 --line mux_log
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 --channel 3 --line mux_hello
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 --channel 4 --line mux_utf8
 ```
 
-`--channel 2` 应看到 log adapter 输出，`--channel 3` 应看到 telemetry 输出。
+`--channel 2` 应看到 log adapter 输出，`--channel 3` 应看到 telemetry 输出，
+`--channel 4` 应看到 UTF-8/emoji demo 输出。
 `mux_manifest` 会触发 channel 0 的 protobuf manifest 输出。TUI 也会在连接后主动请求
 manifest。
 `mux_diag` 会输出 batch/compression 统计，包含 raw bytes、encoded bytes、

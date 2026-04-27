@@ -24,7 +24,9 @@ use wiremux::batch::{decode_batch, decode_batch_records, BATCH_PAYLOAD_TYPE, COM
 use wiremux::codec::decompress;
 use wiremux::envelope::{decode_envelope, MuxEnvelope};
 use wiremux::frame::{FrameError, FrameScanner, StreamEvent};
-use wiremux::manifest::{decode_manifest, DeviceManifest, MANIFEST_PAYLOAD_TYPE};
+use wiremux::manifest::{
+    decode_manifest, display_channel_name, DeviceManifest, MANIFEST_PAYLOAD_TYPE,
+};
 
 use super::{
     build_frame_error_to_io, build_input_frame, build_manifest_request_frame,
@@ -133,6 +135,20 @@ impl App {
                 manifest.max_payload_len
             ),
             None => "manifest pending".to_string(),
+        }
+    }
+
+    fn channel_prefix(&self, channel_id: u32) -> String {
+        let name = self.manifest.as_ref().and_then(|manifest| {
+            manifest
+                .channels
+                .iter()
+                .find(|channel| channel.channel_id == channel_id)
+                .and_then(|channel| display_channel_name(&channel.name))
+        });
+        match name {
+            Some(name) => format!("ch{channel_id}({name})"),
+            None => format!("ch{channel_id}"),
         }
     }
 
@@ -587,7 +603,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             if let Some(channel) = line.channel {
                 Line::from(vec![
                     Span::styled(
-                        format!("ch{channel}> "),
+                        format!("{}> ", app.channel_prefix(channel)),
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
@@ -766,6 +782,7 @@ fn empty_as_dash(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremux::manifest::ChannelDescriptor;
 
     #[test]
     fn visible_window_follows_tail_when_offset_is_zero() {
@@ -952,6 +969,38 @@ mod tests {
         assert_eq!(app.filtered_line_count(), 2);
         app.scroll_up(1);
         assert_eq!(app.scroll_offset, 1);
+    }
+
+    #[test]
+    fn channel_prefix_uses_manifest_name_and_clamps_utf8() {
+        let mut app = App::new("diag.log".to_string());
+        app.manifest = Some(DeviceManifest {
+            device_name: String::new(),
+            firmware_version: String::new(),
+            protocol_version: 1,
+            max_channels: 8,
+            channels: vec![ChannelDescriptor {
+                channel_id: 4,
+                name: "🚗🎒😄🔥".to_string(),
+                description: String::new(),
+                directions: Vec::new(),
+                payload_kinds: Vec::new(),
+                payload_types: Vec::new(),
+                flags: 0,
+                default_payload_kind: 0,
+                interaction_modes: Vec::new(),
+                default_interaction_mode: 0,
+            }],
+            native_endianness: 0,
+            max_payload_len: 512,
+            transport: String::new(),
+            feature_flags: 0,
+            sdk_name: String::new(),
+            sdk_version: String::new(),
+        });
+
+        assert_eq!(app.channel_prefix(4), "ch4(🚗🎒😄)");
+        assert_eq!(app.channel_prefix(5), "ch5");
     }
 
     fn app_with_lines(line_count: usize) -> App {

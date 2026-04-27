@@ -605,6 +605,149 @@ TEST(WiremuxManifestTest, EncodesChannelInteractionMode)
     EXPECT_NE(it, encoded.end());
 }
 
+TEST(WiremuxManifestTest, ClampsChannelNameToFifteenAsciiBytes)
+{
+    const wiremux_channel_descriptor_t channel = {
+        1,
+        "0123456789abcdef",
+        nullptr,
+        WIREMUX_DIRECTION_OUTPUT,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        0,
+        nullptr,
+        0,
+        WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+    };
+    const wiremux_device_manifest_t manifest = {
+        nullptr,
+        nullptr,
+        WIREMUX_FRAME_VERSION,
+        8,
+        &channel,
+        1,
+        WIREMUX_ENDIANNESS_LITTLE,
+        128,
+        nullptr,
+        WIREMUX_FEATURE_MANIFEST_PROTOBUF,
+        WIREMUX_SDK_NAME_ESP,
+        "0.1.0",
+    };
+    std::vector<uint8_t> encoded(wiremux_device_manifest_encoded_len(&manifest));
+    size_t written = 0;
+
+    ASSERT_EQ(wiremux_device_manifest_encode(&manifest, encoded.data(), encoded.size(), &written),
+              WIREMUX_STATUS_OK);
+
+    const std::vector<uint8_t> expected_name = {
+        0x12, 0x0f, '0', '1', '2', '3', '4', '5', '6', '7',
+        '8', '9', 'a', 'b', 'c', 'd', 'e',
+    };
+    auto it = std::search(encoded.begin(), encoded.end(), expected_name.begin(), expected_name.end());
+    EXPECT_NE(it, encoded.end());
+    EXPECT_EQ(std::find(encoded.begin(), encoded.end(), 'f'), encoded.end());
+}
+
+TEST(WiremuxManifestTest, ClampsChannelNameAtUtf8Boundary)
+{
+    const wiremux_channel_descriptor_t channel = {
+        4,
+        "🚗🎒😄🔥",
+        nullptr,
+        WIREMUX_DIRECTION_OUTPUT,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        0,
+        nullptr,
+        0,
+        WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+    };
+    const wiremux_device_manifest_t manifest = {
+        nullptr,
+        nullptr,
+        WIREMUX_FRAME_VERSION,
+        8,
+        &channel,
+        1,
+        WIREMUX_ENDIANNESS_LITTLE,
+        128,
+        nullptr,
+        WIREMUX_FEATURE_MANIFEST_PROTOBUF,
+        WIREMUX_SDK_NAME_ESP,
+        "0.1.0",
+    };
+    std::vector<uint8_t> encoded(wiremux_device_manifest_encoded_len(&manifest));
+    size_t written = 0;
+
+    ASSERT_EQ(wiremux_device_manifest_encode(&manifest, encoded.data(), encoded.size(), &written),
+              WIREMUX_STATUS_OK);
+
+    const std::vector<uint8_t> expected_name = {
+        0x12, 0x0c,
+        0xf0, 0x9f, 0x9a, 0x97,
+        0xf0, 0x9f, 0x8e, 0x92,
+        0xf0, 0x9f, 0x98, 0x84,
+    };
+    auto it = std::search(encoded.begin(), encoded.end(), expected_name.begin(), expected_name.end());
+    EXPECT_NE(it, encoded.end());
+}
+
+TEST(WiremuxManifestTest, OmitsInvalidUtf8ChannelName)
+{
+    const char invalid_name[] = {
+        (char)0xf0,
+        (char)0x9f,
+        (char)0x9a,
+        '\0',
+    };
+    const wiremux_channel_descriptor_t channel = {
+        1,
+        invalid_name,
+        nullptr,
+        WIREMUX_DIRECTION_OUTPUT,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        0,
+        nullptr,
+        0,
+        WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+    };
+    const wiremux_device_manifest_t manifest = {
+        nullptr,
+        nullptr,
+        WIREMUX_FRAME_VERSION,
+        8,
+        &channel,
+        1,
+        WIREMUX_ENDIANNESS_LITTLE,
+        128,
+        nullptr,
+        WIREMUX_FEATURE_MANIFEST_PROTOBUF,
+        WIREMUX_SDK_NAME_ESP,
+        "0.1.0",
+    };
+    std::vector<uint8_t> encoded(wiremux_device_manifest_encoded_len(&manifest));
+    size_t written = 0;
+
+    ASSERT_EQ(wiremux_device_manifest_encode(&manifest, encoded.data(), encoded.size(), &written),
+              WIREMUX_STATUS_OK);
+
+    const std::vector<uint8_t> invalid_field = {
+        0x12, 0x03, 0xf0, 0x9f, 0x9a,
+    };
+    auto it = std::search(encoded.begin(), encoded.end(), invalid_field.begin(), invalid_field.end());
+    EXPECT_EQ(it, encoded.end());
+}
+
 TEST(WiremuxManifestTest, OmitsOptionalEmptyStrings)
 {
     const wiremux_device_manifest_t manifest = {

@@ -93,6 +93,11 @@ channel 的名称、描述、方向、可选 payload kind/type 列表、默认 p
 channel interaction mode。interaction mode 当前用于区分 line-mode console 和后续
 passthrough/key-stream 输入能力。
 
+channel `name` 是 host prompt 使用的短标签，manifest 输出时最多保留 15 bytes。
+允许 UTF-8；如果配置值超过 15 bytes，core 会截到 15 bytes 内最长的有效 UTF-8
+前缀，避免 host 看到乱码或无效字符串。`description` 继续作为较长的人类说明，不承担
+prompt 标签职责。
+
 host 可以在 system channel 0 发送 `payload_type =
 "wiremux.v1.DeviceManifestRequest"` 的空 `MuxEnvelope(direction=input)` 来请求设备重新
 输出 manifest。设备仍然以 `payload_type = "wiremux.v1.DeviceManifest"` 回复。
