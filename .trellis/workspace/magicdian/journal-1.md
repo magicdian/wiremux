@@ -390,3 +390,51 @@ Kept ESP_WIREMUX public aliases and documented that they intentionally mirror co
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Manifest channel name labels
+
+**Date**: 2026-04-27
+**Task**: Manifest channel name labels
+**Branch**: `dev`
+
+### Summary
+
+Implemented manifest-backed channel display labels using the existing
+`ChannelDescriptor.name` field. Host `listen` and TUI now render `chN(name)>`
+when manifest metadata is available, while filtered listen output remains raw.
+
+### Main Changes
+
+- Added UTF-8-safe 15-byte channel-name truncation in the portable C manifest
+  encoder, with C tests for ASCII, emoji, and invalid UTF-8 cases.
+- Added Rust host display label handling for passive `listen` manifest frames
+  and TUI manifest state.
+- Added ESP32 demo channel 4 with an overlong emoji name and UTF-8 payloads,
+  plus a delayed manifest emission so passive listen can learn labels after USB
+  serial reset/reconnect.
+- Updated docs, backend specs, and `.gitignore`; removed the tracked local
+  `.vscode/settings.json`.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4328303` | (see git log) |
+
+### Testing
+
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test`
+- [OK] `ctest --test-dir sources/core/c/build --output-on-failure`
+- [OK] Human ESP32 reset/listen verification passed
+- [WARN] `idf.py build` not run in Codex shell because `idf.py` was unavailable
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
