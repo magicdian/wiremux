@@ -13,6 +13,7 @@
 #include "wiremux_batch.h"
 #include "wiremux_compression.h"
 #include "wiremux_manifest.h"
+#include "wiremux_version.h"
 
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 #include "driver/usb_serial_jtag.h"
@@ -420,7 +421,7 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
     const wiremux_device_manifest_t manifest = {
         .device_name = "esp-wiremux",
         .firmware_version = ESP_WIREMUX_VERSION,
-        .protocol_version = ESP_WIREMUX_FRAME_VERSION,
+        .protocol_version = WIREMUX_PROTOCOL_API_VERSION_CURRENT,
         .max_channels = ESP_WIREMUX_MAX_CHANNELS,
         .channels = channels,
         .channel_count = channel_count,

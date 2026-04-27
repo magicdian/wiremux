@@ -12,7 +12,9 @@ add_library(wiremux_core_c STATIC
     src/wiremux_compression.c
     src/wiremux_envelope.c
     src/wiremux_frame.c
+    src/wiremux_host_session.c
     src/wiremux_manifest.c
+    src/wiremux_version.c
 )
 
 target_include_directories(wiremux_core_c
@@ -47,6 +49,11 @@ target_link_libraries(wiremux_core_tests
     PRIVATE
         wiremux_core_c
         GTest::gmock_main
+)
+
+target_compile_definitions(wiremux_core_tests
+    PRIVATE
+        WIREMUX_CORE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

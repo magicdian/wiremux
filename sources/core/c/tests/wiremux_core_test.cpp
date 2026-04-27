@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -11,12 +14,16 @@ extern "C" {
 #include "wiremux_compression.h"
 #include "wiremux_envelope.h"
 #include "wiremux_frame.h"
+#include "wiremux_host_session.h"
 #include "wiremux_manifest.h"
+#include "wiremux_version.h"
 }
 
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::MockFunction;
+using ::testing::AtLeast;
 
 std::vector<uint8_t> EncodeFrame(const wiremux_frame_header_t &header,
                                  const std::vector<uint8_t> &payload)
@@ -32,6 +39,38 @@ std::vector<uint8_t> EncodeFrame(const wiremux_frame_header_t &header,
               WIREMUX_STATUS_OK);
     EXPECT_EQ(written, frame.size());
     return frame;
+}
+
+std::vector<uint8_t> EncodeEnvelopeFrame(const wiremux_envelope_t &envelope)
+{
+    std::vector<uint8_t> payload(wiremux_envelope_encoded_len(&envelope));
+    size_t written = 0;
+    EXPECT_EQ(wiremux_envelope_encode(&envelope, payload.data(), payload.size(), &written),
+              WIREMUX_STATUS_OK);
+    payload.resize(written);
+    const wiremux_frame_header_t header = {
+        WIREMUX_FRAME_VERSION,
+        0,
+    };
+    return EncodeFrame(header, payload);
+}
+
+std::vector<uint8_t> EncodeManifestBytes(wiremux_device_manifest_t manifest)
+{
+    std::vector<uint8_t> bytes(wiremux_device_manifest_encoded_len(&manifest));
+    size_t written = 0;
+    EXPECT_EQ(wiremux_device_manifest_encode(&manifest, bytes.data(), bytes.size(), &written),
+              WIREMUX_STATUS_OK);
+    bytes.resize(written);
+    return bytes;
+}
+
+std::string ReadFile(const char *path)
+{
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
 }
 
 wiremux_envelope_t SampleEnvelope()
@@ -126,6 +165,109 @@ wiremux_device_manifest_t SampleManifest()
         WIREMUX_SDK_NAME_ESP,
         "0.1.0",
     };
+}
+
+struct CapturedRecord {
+    uint32_t channel_id = 0;
+    std::string payload_type;
+    std::vector<uint8_t> payload;
+};
+
+struct CapturedManifest {
+    std::string device_name;
+    uint32_t protocol_version = 0;
+    uint32_t max_payload_len = 0;
+    std::vector<std::string> channel_names;
+};
+
+struct SessionCapture {
+    std::vector<wiremux_host_event_type_t> event_types;
+    std::vector<uint8_t> terminal;
+    std::vector<CapturedRecord> records;
+    std::vector<wiremux_host_crc_error_t> crc_errors;
+    std::vector<wiremux_host_decode_error_t> decode_errors;
+    std::vector<wiremux_host_protocol_compatibility_event_t> compatibility;
+    std::vector<wiremux_host_batch_summary_t> batch_summaries;
+    CapturedManifest manifest;
+    MockFunction<void(int)> *mock = nullptr;
+};
+
+std::string ViewToString(wiremux_string_view_t view)
+{
+    if (view.data == nullptr || view.len == 0) {
+        return {};
+    }
+    return std::string(view.data, view.len);
+}
+
+void CaptureEvent(const wiremux_host_event_t *event, void *user_ctx)
+{
+    auto *capture = static_cast<SessionCapture *>(user_ctx);
+    capture->event_types.push_back(event->type);
+    if (capture->mock != nullptr) {
+        capture->mock->Call(static_cast<int>(event->type));
+    }
+
+    switch (event->type) {
+    case WIREMUX_HOST_EVENT_TERMINAL:
+        capture->terminal.insert(capture->terminal.end(),
+                                 event->data.terminal.data,
+                                 event->data.terminal.data + event->data.terminal.len);
+        break;
+    case WIREMUX_HOST_EVENT_RECORD: {
+        CapturedRecord record;
+        record.channel_id = event->data.record.channel_id;
+        record.payload.assign(event->data.record.payload,
+                              event->data.record.payload + event->data.record.payload_len);
+        if (event->data.record.payload_type != nullptr) {
+            record.payload_type.assign(event->data.record.payload_type,
+                                       event->data.record.payload_type_len);
+        }
+        capture->records.push_back(record);
+        break;
+    }
+    case WIREMUX_HOST_EVENT_CRC_ERROR:
+        capture->crc_errors.push_back(event->data.crc_error);
+        break;
+    case WIREMUX_HOST_EVENT_DECODE_ERROR:
+        capture->decode_errors.push_back(event->data.decode_error);
+        break;
+    case WIREMUX_HOST_EVENT_MANIFEST_BEGIN:
+        capture->manifest.device_name = ViewToString(event->data.manifest_begin.device_name);
+        capture->manifest.protocol_version = event->data.manifest_begin.protocol_version;
+        capture->manifest.max_payload_len = event->data.manifest_begin.max_payload_len;
+        break;
+    case WIREMUX_HOST_EVENT_MANIFEST_CHANNEL_BEGIN:
+        capture->manifest.channel_names.push_back(ViewToString(event->data.manifest_channel.name));
+        break;
+    case WIREMUX_HOST_EVENT_PROTOCOL_COMPATIBILITY:
+        capture->compatibility.push_back(event->data.protocol_compatibility);
+        break;
+    case WIREMUX_HOST_EVENT_BATCH_SUMMARY:
+        capture->batch_summaries.push_back(event->data.batch_summary);
+        break;
+    default:
+        break;
+    }
+}
+
+wiremux_host_session_t InitSession(SessionCapture *capture,
+                                   std::vector<uint8_t> *buffer,
+                                   std::vector<uint8_t> *scratch,
+                                   size_t max_payload_len = 512)
+{
+    wiremux_host_session_t session = {};
+    const wiremux_host_session_config_t config = {
+        max_payload_len,
+        buffer->data(),
+        buffer->size(),
+        scratch->data(),
+        scratch->size(),
+        CaptureEvent,
+        capture,
+    };
+    EXPECT_EQ(wiremux_host_session_init(&session, &config), WIREMUX_STATUS_OK);
+    return session;
 }
 
 }  // namespace
@@ -863,4 +1005,256 @@ TEST(WiremuxManifestTest, RejectsInvalidChannelDescriptorPointerCounts)
     EXPECT_EQ(wiremux_device_manifest_encoded_len(&manifest), 0u);
     EXPECT_EQ(wiremux_device_manifest_encode(&manifest, out, sizeof(out), &written),
               WIREMUX_STATUS_INVALID_ARG);
+}
+
+TEST(WiremuxVersionTest, ClassifiesCompileTimeSupportedApiRange)
+{
+    EXPECT_EQ(WIREMUX_PROTOCOL_API_VERSION_CURRENT, 1u);
+    EXPECT_EQ(WIREMUX_PROTOCOL_API_VERSION_MIN_SUPPORTED, 1u);
+    EXPECT_EQ(wiremux_protocol_api_compatibility(WIREMUX_PROTOCOL_API_VERSION_CURRENT),
+              WIREMUX_PROTOCOL_COMPAT_SUPPORTED);
+    EXPECT_EQ(wiremux_protocol_api_compatibility(0), WIREMUX_PROTOCOL_COMPAT_UNSUPPORTED_OLD);
+    EXPECT_EQ(wiremux_protocol_api_compatibility(WIREMUX_PROTOCOL_API_VERSION_CURRENT + 1),
+              WIREMUX_PROTOCOL_COMPAT_UNSUPPORTED_NEW);
+}
+
+TEST(WiremuxVersionTest, CurrentAndFrozenInitialApiSnapshotsMatchCanonicalProto)
+{
+    const std::string root = WIREMUX_CORE_SOURCE_DIR;
+    const std::string canonical = ReadFile((root + "/../proto/wiremux.proto").c_str());
+    ASSERT_FALSE(canonical.empty());
+    EXPECT_EQ(ReadFile((root + "/../proto/api/current/wiremux.proto").c_str()), canonical);
+    EXPECT_EQ(ReadFile((root + "/../proto/api/1/wiremux.proto").c_str()), canonical);
+}
+
+TEST(WiremuxHostSessionTest, EmitsTerminalAndRecordEventsInOrder)
+{
+    const uint8_t payload[] = "hello";
+    const wiremux_envelope_t envelope = {
+        2,
+        WIREMUX_DIRECTION_OUTPUT,
+        1,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        nullptr,
+        0,
+        payload,
+        sizeof(payload) - 1,
+        0,
+    };
+    const std::vector<uint8_t> frame = EncodeEnvelopeFrame(envelope);
+    std::vector<uint8_t> input = {'o', 'k', '\n'};
+    input.insert(input.end(), frame.begin(), frame.end());
+
+    SessionCapture capture;
+    MockFunction<void(int)> mock;
+    capture.mock = &mock;
+    EXPECT_CALL(mock, Call(WIREMUX_HOST_EVENT_TERMINAL)).Times(AtLeast(1));
+    EXPECT_CALL(mock, Call(WIREMUX_HOST_EVENT_RECORD));
+    std::vector<uint8_t> buffer(1024);
+    std::vector<uint8_t> scratch(1024);
+    wiremux_host_session_t session = InitSession(&capture, &buffer, &scratch);
+
+    ASSERT_EQ(wiremux_host_session_feed(&session, input.data(), input.size()), WIREMUX_STATUS_OK);
+    ASSERT_EQ(wiremux_host_session_finish(&session), WIREMUX_STATUS_OK);
+
+    EXPECT_THAT(capture.terminal, ElementsAre('o', 'k', '\n'));
+    ASSERT_EQ(capture.records.size(), 1u);
+    EXPECT_EQ(capture.records[0].channel_id, 2u);
+    EXPECT_EQ(capture.records[0].payload, std::vector<uint8_t>({'h', 'e', 'l', 'l', 'o'}));
+}
+
+TEST(WiremuxHostSessionTest, EmitsCrcErrorsWithoutFatalStreamFailure)
+{
+    const wiremux_frame_header_t header = {
+        WIREMUX_FRAME_VERSION,
+        3,
+    };
+    std::vector<uint8_t> frame = EncodeFrame(header, {0x08, 0x01});
+    frame[WIREMUX_FRAME_HEADER_LEN] ^= 0xffu;
+
+    SessionCapture capture;
+    std::vector<uint8_t> buffer(1024);
+    std::vector<uint8_t> scratch(1024);
+    wiremux_host_session_t session = InitSession(&capture, &buffer, &scratch);
+
+    ASSERT_EQ(wiremux_host_session_feed(&session, frame.data(), frame.size()), WIREMUX_STATUS_OK);
+    ASSERT_EQ(capture.crc_errors.size(), 1u);
+    EXPECT_EQ(capture.crc_errors[0].flags, 3u);
+    EXPECT_EQ(capture.crc_errors[0].payload_len, 2u);
+}
+
+TEST(WiremuxHostSessionTest, ParsesManifestAndReportsSupportedCompatibility)
+{
+    wiremux_device_manifest_t manifest = SampleManifest();
+    manifest.protocol_version = WIREMUX_PROTOCOL_API_VERSION_CURRENT;
+    const std::vector<uint8_t> manifest_bytes = EncodeManifestBytes(manifest);
+    const wiremux_envelope_t envelope = {
+        0,
+        WIREMUX_DIRECTION_OUTPUT,
+        1,
+        0,
+        WIREMUX_PAYLOAD_KIND_CONTROL,
+        WIREMUX_MANIFEST_PAYLOAD_TYPE,
+        std::strlen(WIREMUX_MANIFEST_PAYLOAD_TYPE),
+        manifest_bytes.data(),
+        manifest_bytes.size(),
+        0,
+    };
+    const std::vector<uint8_t> frame = EncodeEnvelopeFrame(envelope);
+
+    SessionCapture capture;
+    std::vector<uint8_t> buffer(2048);
+    std::vector<uint8_t> scratch(2048);
+    wiremux_host_session_t session = InitSession(&capture, &buffer, &scratch, 2048);
+
+    ASSERT_EQ(wiremux_host_session_feed(&session, frame.data(), frame.size()), WIREMUX_STATUS_OK);
+    EXPECT_EQ(capture.manifest.device_name, "test-device");
+    EXPECT_EQ(capture.manifest.protocol_version, WIREMUX_PROTOCOL_API_VERSION_CURRENT);
+    EXPECT_EQ(capture.manifest.max_payload_len, 512u);
+    EXPECT_THAT(capture.manifest.channel_names, ElementsAre("system", "console", "telemetry"));
+    ASSERT_EQ(capture.compatibility.size(), 1u);
+    EXPECT_EQ(capture.compatibility[0].compatibility, WIREMUX_PROTOCOL_COMPAT_SUPPORTED);
+}
+
+TEST(WiremuxHostSessionTest, RejectsNewerDeviceApiWithUpgradeHostDiagnosticState)
+{
+    wiremux_device_manifest_t manifest = SampleManifest();
+    manifest.protocol_version = WIREMUX_PROTOCOL_API_VERSION_CURRENT + 1;
+    const std::vector<uint8_t> manifest_bytes = EncodeManifestBytes(manifest);
+    const wiremux_envelope_t envelope = {
+        0,
+        WIREMUX_DIRECTION_OUTPUT,
+        1,
+        0,
+        WIREMUX_PAYLOAD_KIND_CONTROL,
+        WIREMUX_MANIFEST_PAYLOAD_TYPE,
+        std::strlen(WIREMUX_MANIFEST_PAYLOAD_TYPE),
+        manifest_bytes.data(),
+        manifest_bytes.size(),
+        0,
+    };
+    const std::vector<uint8_t> frame = EncodeEnvelopeFrame(envelope);
+
+    SessionCapture capture;
+    std::vector<uint8_t> buffer(2048);
+    std::vector<uint8_t> scratch(2048);
+    wiremux_host_session_t session = InitSession(&capture, &buffer, &scratch, 2048);
+
+    ASSERT_EQ(wiremux_host_session_feed(&session, frame.data(), frame.size()), WIREMUX_STATUS_OK);
+    ASSERT_EQ(capture.compatibility.size(), 1u);
+    EXPECT_EQ(capture.compatibility[0].device_api_version, WIREMUX_PROTOCOL_API_VERSION_CURRENT + 1);
+    EXPECT_EQ(capture.compatibility[0].compatibility, WIREMUX_PROTOCOL_COMPAT_UNSUPPORTED_NEW);
+}
+
+TEST(WiremuxHostSessionTest, ExpandsCompressedBatchesUsingCallerScratch)
+{
+    const uint8_t payload[] = "batch record";
+    const wiremux_record_t record = {
+        3,
+        WIREMUX_DIRECTION_OUTPUT,
+        7,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        nullptr,
+        0,
+        payload,
+        sizeof(payload) - 1,
+        0,
+    };
+    std::vector<uint8_t> records(wiremux_batch_records_encoded_len(&record, 1));
+    size_t records_len = 0;
+    ASSERT_EQ(wiremux_batch_records_encode(&record, 1, records.data(), records.size(), &records_len),
+              WIREMUX_STATUS_OK);
+    records.resize(records_len);
+
+    std::vector<uint8_t> compressed(records.size() * 2);
+    size_t compressed_len = 0;
+    ASSERT_EQ(wiremux_compress(WIREMUX_COMPRESSION_HEATSHRINK,
+                               records.data(),
+                               records.size(),
+                               compressed.data(),
+                               compressed.size(),
+                               &compressed_len),
+              WIREMUX_STATUS_OK);
+    compressed.resize(compressed_len);
+
+    const wiremux_batch_t batch = {
+        WIREMUX_COMPRESSION_HEATSHRINK,
+        compressed.data(),
+        compressed.size(),
+        static_cast<uint32_t>(records.size()),
+    };
+    std::vector<uint8_t> batch_bytes(wiremux_batch_encoded_len(&batch));
+    size_t batch_len = 0;
+    ASSERT_EQ(wiremux_batch_encode(&batch, batch_bytes.data(), batch_bytes.size(), &batch_len),
+              WIREMUX_STATUS_OK);
+    batch_bytes.resize(batch_len);
+
+    const wiremux_envelope_t envelope = {
+        0,
+        WIREMUX_DIRECTION_OUTPUT,
+        1,
+        0,
+        WIREMUX_PAYLOAD_KIND_BATCH,
+        WIREMUX_BATCH_PAYLOAD_TYPE,
+        std::strlen(WIREMUX_BATCH_PAYLOAD_TYPE),
+        batch_bytes.data(),
+        batch_bytes.size(),
+        0,
+    };
+    const std::vector<uint8_t> frame = EncodeEnvelopeFrame(envelope);
+
+    SessionCapture capture;
+    std::vector<uint8_t> buffer(2048);
+    std::vector<uint8_t> scratch(2048);
+    wiremux_host_session_t session = InitSession(&capture, &buffer, &scratch, 2048);
+
+    ASSERT_EQ(wiremux_host_session_feed(&session, frame.data(), frame.size()), WIREMUX_STATUS_OK);
+    ASSERT_EQ(capture.records.size(), 1u);
+    EXPECT_EQ(capture.records[0].channel_id, 3u);
+    EXPECT_EQ(capture.records[0].payload, std::vector<uint8_t>({'b', 'a', 't', 'c', 'h', ' ', 'r', 'e', 'c', 'o', 'r', 'd'}));
+    ASSERT_EQ(capture.batch_summaries.size(), 1u);
+    EXPECT_EQ(capture.batch_summaries[0].compression, WIREMUX_COMPRESSION_HEATSHRINK);
+    EXPECT_EQ(capture.batch_summaries[0].record_count, 1u);
+    EXPECT_EQ(capture.batch_summaries[0].raw_bytes, records.size());
+}
+
+TEST(WiremuxHostSessionTest, ReportsScratchExhaustionDeterministically)
+{
+    const uint8_t fake_compressed[] = {0x00};
+    const wiremux_batch_t batch = {
+        WIREMUX_COMPRESSION_HEATSHRINK,
+        fake_compressed,
+        sizeof(fake_compressed),
+        512,
+    };
+    std::vector<uint8_t> batch_bytes(wiremux_batch_encoded_len(&batch));
+    size_t batch_len = 0;
+    ASSERT_EQ(wiremux_batch_encode(&batch, batch_bytes.data(), batch_bytes.size(), &batch_len),
+              WIREMUX_STATUS_OK);
+    batch_bytes.resize(batch_len);
+    const wiremux_envelope_t envelope = {
+        0,
+        WIREMUX_DIRECTION_OUTPUT,
+        1,
+        0,
+        WIREMUX_PAYLOAD_KIND_BATCH,
+        WIREMUX_BATCH_PAYLOAD_TYPE,
+        std::strlen(WIREMUX_BATCH_PAYLOAD_TYPE),
+        batch_bytes.data(),
+        batch_bytes.size(),
+        0,
+    };
+    const std::vector<uint8_t> frame = EncodeEnvelopeFrame(envelope);
+
+    SessionCapture capture;
+    std::vector<uint8_t> buffer(1024);
+    std::vector<uint8_t> scratch(8);
+    wiremux_host_session_t session = InitSession(&capture, &buffer, &scratch, 1024);
+
+    ASSERT_EQ(wiremux_host_session_feed(&session, frame.data(), frame.size()), WIREMUX_STATUS_OK);
+    ASSERT_EQ(capture.decode_errors.size(), 1u);
+    EXPECT_EQ(capture.decode_errors[0].stage, WIREMUX_HOST_DECODE_BATCH);
+    EXPECT_EQ(capture.decode_errors[0].status, WIREMUX_STATUS_INVALID_SIZE);
 }

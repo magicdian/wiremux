@@ -68,6 +68,15 @@ CLI reporting rules:
   In unfiltered mode stdout may print a concise `wiremux>` marker; in filtered
   mode stdout stays clean unless a future decoder can safely extract a channel ID
   from a partially decoded envelope.
+- When the Rust host uses the C `wiremux_host_session_*` API, the same reporting
+  rules apply to `WIREMUX_HOST_EVENT_CRC_ERROR` and
+  `WIREMUX_HOST_EVENT_DECODE_ERROR`.
+- `WIREMUX_HOST_EVENT_PROTOCOL_COMPATIBILITY` with
+  `WIREMUX_PROTOCOL_COMPAT_UNSUPPORTED_NEW` must be deterministic and actionable:
+  diagnostics record the device and host API versions, and unfiltered UI should
+  tell the user to upgrade the host SDK/tool.
+- Scratch workspace exhaustion during batch decompression is a decode error, not
+  undefined behavior. It must not emit partial decoded records.
 
 ### ESP Producer APIs
 

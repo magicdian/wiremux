@@ -28,6 +28,8 @@ sources/
 │       │   ├── wiremux_manifest.h
 │       │   ├── wiremux_batch.h
 │       │   ├── wiremux_compression.h
+│       │   ├── wiremux_host_session.h
+│       │   ├── wiremux_version.h
 │       │   └── wiremux_status.h
 │       ├── src/
 │           ├── wiremux_batch.c
@@ -35,7 +37,9 @@ sources/
 │           ├── wiremux_proto_internal.h
 │           ├── wiremux_envelope.c
 │           ├── wiremux_frame.c
-│           └── wiremux_manifest.c
+│           ├── wiremux_host_session.c
+│           ├── wiremux_manifest.c
+│           └── wiremux_version.c
 │       └── tests/
 │           └── wiremux_core_test.cpp
 ├── host/
@@ -87,6 +91,11 @@ The portable C core lives under `sources/core/c`.
   contract.
 - `include/wiremux_compression.h`: shared compression/decompression contract for
   Wiremux batch payloads.
+- `include/wiremux_host_session.h`: high-level host session API for mixed-stream
+  scanning, envelope decode, manifest parsing, batch expansion, compression
+  decode, host frame construction, and protocol compatibility events.
+- `include/wiremux_version.h`: protocol API version constants and compatibility
+  classification helpers.
 - `include/wiremux_status.h`: portable status codes used by core APIs before
   platform adapters map them to runtime-specific error types.
 - `src/wiremux_frame.c`: platform-independent frame encode/decode
@@ -99,10 +108,14 @@ The portable C core lives under `sources/core/c`.
   batch-record encode/decode implementation.
 - `src/wiremux_compression.c`: platform-independent heatshrink-style and LZ4
   codec implementation used by ESP and host-compatible tests.
+- `src/wiremux_host_session.c`: platform-independent host session state machine.
+- `src/wiremux_version.c`: platform-independent protocol API compatibility
+  helper.
 - `CMakeLists.txt`: host-side GoogleTest/GoogleMock test project for the
   portable core.
 - `tests/wiremux_core_test.cpp`: host-side GoogleTest coverage for CRC, frame,
-  envelope, manifest, and representative error/status branches.
+  envelope, manifest, host session, API versioning, and representative
+  error/status branches.
 
 Platform adapters must prefer this core for shared protocol primitives instead
 of duplicating frame constants, length checks, CRC implementations, or
@@ -433,8 +446,10 @@ Required behavior:
 
 ### Tests Required
 
-- Rust tests must cover valid frames, partial frames, false magic, bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
-- ESP frame encoder changes must be validated against Rust scanner output before release.
+- Portable C host session tests must cover valid frames, partial frames, false magic,
+  bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
+- ESP frame encoder changes must be validated against core C host session output
+  before release.
 - Portable C core changes must pass `ctest --test-dir sources/core/c/build
   --output-on-failure` after configuring and building `sources/core/c`.
 - Bidirectional changes must keep the existing host frame-building and CLI parser
@@ -448,6 +463,129 @@ Required behavior:
   behavior when matching lines are appended, empty-Enter recovery, filtered-line
   scroll counts, scrollbar row-to-offset mapping, drag behavior after leaving
   the scrollbar column, and scrollbar position at live tail.
+
+## Scenario: Core Host Session and Protocol API Versioning
+
+### 1. Scope / Trigger
+
+Trigger: any change to host protocol decoding, manifest parsing, batch
+expansion, compression decode, protocol API versions, or Rust/C host SDK
+bindings.
+
+The portable C core owns protocol semantics. The Rust host owns serial
+transport, CLI/TUI presentation, and diagnostics formatting.
+
+### 2. Signatures
+
+C core:
+
+```c
+#define WIREMUX_PROTOCOL_API_VERSION_CURRENT 1u
+#define WIREMUX_PROTOCOL_API_VERSION_MIN_SUPPORTED 1u
+
+wiremux_protocol_compatibility_t
+wiremux_protocol_api_compatibility(uint32_t device_api_version);
+
+wiremux_status_t wiremux_host_session_init(
+    wiremux_host_session_t *session,
+    const wiremux_host_session_config_t *config);
+
+wiremux_status_t wiremux_host_session_feed(
+    wiremux_host_session_t *session,
+    const uint8_t *data,
+    size_t len);
+
+wiremux_status_t wiremux_host_session_finish(wiremux_host_session_t *session);
+```
+
+Rust host:
+
+```rust
+pub struct HostSession;
+
+impl HostSession {
+    pub fn new(max_payload_len: usize) -> Result<Self, u32>;
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<HostEvent>, u32>;
+    pub fn finish(&mut self) -> Result<Vec<HostEvent>, u32>;
+}
+```
+
+### 3. Contracts
+
+- `sources/core/proto/api/current/wiremux.proto` is the API used by new device
+  SDK builds.
+- `sources/core/proto/api/<version>/wiremux.proto` directories are frozen API
+  snapshots compiled into host SDK builds.
+- Host-side compatibility is compile-time bounded: a host build supports its
+  compiled current API and all older frozen API versions included in the source
+  tree.
+- A device with `DeviceManifest.protocol_version >
+  WIREMUX_PROTOCOL_API_VERSION_CURRENT` is unsupported. Host tools must emit a
+  deterministic diagnostic that tells the user to upgrade the host SDK/tool.
+- Frame version remains the byte-framing version. Protocol API version is the
+  manifest/schema/semantics version and must not be coupled to
+  `WIREMUX_FRAME_VERSION`.
+- Host session events expose callback-scope views. Core must not return heap
+  event objects or require host-side release/free calls.
+- Callers provide parser buffer and scratch workspace. Core uses scratch for
+  temporary batch decompression/expansion and reports deterministic size errors
+  when scratch is insufficient.
+- Rust FFI wrappers must copy any terminal bytes, record payloads, manifest
+  strings, or channel metadata they keep after the C callback returns.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| terminal bytes before a valid frame | emit terminal event(s), then decoded record/manifest events |
+| unsupported frame version | resynchronize as terminal bytes, not protocol API failure |
+| CRC mismatch | emit CRC error event and continue scanning |
+| envelope decode failure | emit decode error with `WIREMUX_HOST_DECODE_ENVELOPE` |
+| manifest decode failure | emit decode error with `WIREMUX_HOST_DECODE_MANIFEST` |
+| compressed batch fits scratch | decompress and emit inner record/manifest events |
+| compressed batch exceeds scratch | emit deterministic decode error; do not emit partial records |
+| device API version is older but within frozen host support | classify supported/degraded, not fatal |
+| device API version is newer than host current | classify unsupported-new and tell user to upgrade host SDK/tool |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `wiremux_host_session_feed()` receives mixed terminal text, a manifest
+  frame, and a compressed batch; Rust host receives terminal, manifest,
+  compatibility, and inner record events without parsing protobuf itself.
+- Base: current API version is `1`, and `api/current/wiremux.proto` matches
+  `api/1/wiremux.proto`.
+- Bad: Rust host decodes `MuxBatch` or `DeviceManifest` directly in CLI/TUI
+  paths after the core host session API exists.
+- Bad: C core allocates event objects and expects Rust to call a matching free
+  function across FFI.
+
+### 6. Tests Required
+
+- Portable C tests cover API compatibility classification, current/frozen proto
+  snapshot checks, mixed terminal/record event order, CRC errors, manifest
+  parsing, newer-device unsupported diagnostics, compressed batch expansion, and
+  scratch exhaustion.
+- Use GoogleMock when callback ordering matters.
+- Rust host tests must continue to cover CLI/TUI user-visible behavior after
+  migrating protocol internals behind `HostSession`.
+- Host `cargo test`, `cargo check`, and `cargo fmt --check` must pass after any
+  Rust binding change.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Rust CLI decodes DeviceManifest and MuxBatch directly while C core implements a
+separate parser with different compatibility rules.
+```
+
+#### Correct
+
+```text
+Rust CLI feeds bytes to wiremux_host_session_feed(), copies callback-scope
+events into Rust-owned structs, and only owns rendering/diagnostics behavior.
+```
 
 ## Scenario: Single-Process Console Verification
 
@@ -514,8 +652,9 @@ wiremux listen --port /dev/cu.usbmodem2101 --channel 1 --line help
 ### 1. Scope / Trigger
 
 Trigger: changing manifest channel metadata, host output prefixes, or ESP demo
-channel registration. This spans portable C manifest encoding, ESP component
-manifest emission, Rust manifest decoding, non-TUI display, and TUI rendering.
+channel registration. This spans portable C manifest encoding/decoding, ESP
+component manifest emission, the Rust host session wrapper, non-TUI display, and
+TUI rendering.
 
 ### 2. Signatures
 
@@ -589,8 +728,8 @@ chN(name)> payload
 
 - Portable C tests cover ASCII 15-byte clamp, UTF-8 boundary clamp, and invalid
   UTF-8 omission for manifest channel names.
-- Rust manifest tests cover `display_channel_name()` UTF-8 boundary clamp and
-  control character removal.
+- Rust host session/display tests cover `display_channel_name()` UTF-8 boundary
+  clamp and control character removal.
 - Rust CLI display tests cover manifest label cache, hidden manifest payload,
   `chN(name)> ` unfiltered output, and raw filtered output preservation.
 - TUI tests cover `App::channel_prefix()` with manifest names and fallback.

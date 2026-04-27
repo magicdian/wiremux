@@ -20,6 +20,13 @@ operation.
 - Do not duplicate frame constants with different values across host and ESP code.
 - Do not parse mux frames by magic alone; always validate version, length, and CRC.
 - Do not place protocol state machines only in CLI/app entrypoints; keep them unit-testable.
+- Do not add new Rust-side protocol parsers for manifest, batch, compression, or
+  API compatibility in CLI/TUI paths when the C host session API can own the
+  behavior.
+- Do not couple `DeviceManifest.protocol_version` to `WIREMUX_FRAME_VERSION`;
+  frame version and protocol API version are separate contracts.
+- Do not return C heap-owned event objects across the Rust FFI boundary. Host
+  session events are callback-scope views and Rust must copy data it keeps.
 - Do not hard-code `/dev/tty.usbmodem2101` in implementation. It is only a local example path.
 - Do not make console mode a compile-time-only behavior. Public config must preserve line-mode and passthrough mode.
 - Do not call ESP logging APIs from mux internals after installing the log adapter.
@@ -80,6 +87,12 @@ Rules:
 - Portable batch/compression changes must test uncompressed batch records,
   batch metadata, heatshrink round-trip, LZ4 round-trip, unsupported codec, and
   small output errors.
+- Portable host session changes must test callback ordering, callback-scope
+  event copying, CRC errors, manifest parsing, batch expansion, compression
+  decode failures, scratch exhaustion, and API compatibility classification.
+- Protocol API changes must update `sources/core/proto/api/current/`, freeze a
+  numbered API snapshot when shipped, update `wiremux_version.h` constants, and
+  keep snapshot tests current.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.

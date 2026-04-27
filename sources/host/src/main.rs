@@ -5,16 +5,9 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use wiremux::batch::{decode_batch, decode_batch_records, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE};
-use wiremux::codec::decompress;
-use wiremux::envelope::{decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT};
-use wiremux::frame::{
-    build_frame_payload_with_max, BuildFrameError, FrameError, FrameScanner, StreamEvent,
-    DEFAULT_MAX_PAYLOAD_LEN,
-};
-use wiremux::manifest::{
-    decode_manifest, display_channel_name, encode_manifest_request, DeviceManifest,
-    MANIFEST_PAYLOAD_TYPE, MANIFEST_REQUEST_PAYLOAD_TYPE,
+use wiremux::host_session::{
+    self, display_channel_name, BuildFrameError, DeviceManifest, HostDecodeStage, HostEvent,
+    HostSession, MuxEnvelope, ProtocolCompatibilityKind, DEFAULT_MAX_PAYLOAD_LEN,
 };
 
 mod tui;
@@ -244,7 +237,12 @@ fn listen(args: ListenArgs) -> io::Result<()> {
             diagnostics.flush()?;
         }
 
-        let mut scanner = FrameScanner::new(args.max_payload_len);
+        let mut session = HostSession::new(args.max_payload_len).map_err(|status| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("host session init failed: {status}"),
+            )
+        })?;
         let mut buf = [0u8; 4096];
 
         loop {
@@ -254,7 +252,12 @@ fn listen(args: ListenArgs) -> io::Result<()> {
                     break;
                 }
                 Ok(read_len) => {
-                    for event in scanner.push(&buf[..read_len]) {
+                    for event in session.feed(&buf[..read_len]).map_err(|status| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("host session feed failed: {status}"),
+                        )
+                    })? {
                         write_event(&mut display, &mut diagnostics, event)?;
                     }
                     display.flush()?;
@@ -272,7 +275,12 @@ fn listen(args: ListenArgs) -> io::Result<()> {
             }
         }
 
-        for event in scanner.finish() {
+        for event in session.finish().map_err(|status| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("host session finish failed: {status}"),
+            )
+        })? {
             write_event(&mut display, &mut diagnostics, event)?;
         }
         display.flush()?;
@@ -459,38 +467,49 @@ fn sanitize_port_for_filename(port: &Path) -> String {
 fn write_event<W: Write, D: Write>(
     display: &mut DisplayOutput<W>,
     diagnostics: &mut D,
-    event: StreamEvent,
+    event: HostEvent,
 ) -> io::Result<()> {
     match event {
-        StreamEvent::Terminal(bytes) => display.write_terminal(&bytes),
-        StreamEvent::Frame(frame) => match decode_envelope(&frame.payload) {
-            Ok(envelope) => {
-                if envelope.payload_type == MANIFEST_PAYLOAD_TYPE {
-                    return write_manifest_event(display, diagnostics, &envelope);
-                }
-                if envelope.payload_type == BATCH_PAYLOAD_TYPE {
-                    return write_batch_event(display, diagnostics, &envelope);
-                }
-                write_envelope_diagnostics(diagnostics, &envelope)?;
-                display.write_record(&envelope)
+        HostEvent::Terminal(bytes) => display.write_terminal(&bytes),
+        HostEvent::Record(envelope) => {
+            write_envelope_diagnostics(diagnostics, &envelope)?;
+            display.write_record(&envelope)
+        }
+        HostEvent::Manifest(manifest) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] manifest received: {} channels",
+                manifest.channels.len()
+            )?;
+            display.update_manifest(&manifest);
+            Ok(())
+        }
+        HostEvent::ProtocolCompatibility(compatibility) => {
+            write_protocol_compatibility(display, diagnostics, compatibility)
+        }
+        HostEvent::BatchSummary(summary) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
+                summary.record_count, summary.compression, summary.encoded_bytes, summary.raw_bytes
+            )?;
+            Ok(())
+        }
+        HostEvent::DecodeError(err) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] decode_error stage={:?} status={} detail={} payload={}",
+                err.stage,
+                err.status,
+                err.detail,
+                printable_payload(&err.payload)
+            )?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line(decode_error_marker(err.stage))?;
             }
-            Err(err) => {
-                writeln!(
-                    diagnostics,
-                    "[wiremux] frame version={} flags={} payload_len={} envelope_decode_error={:?} payload={}",
-                    frame.version,
-                    frame.flags,
-                    frame.payload.len(),
-                    err,
-                    printable_payload(&frame.payload)
-                )?;
-                if display.channel_filter.is_none() {
-                    display.write_marker_line("envelope decode error; details in diagnostics")?;
-                }
-                Ok(())
-            }
-        },
-        StreamEvent::FrameError(FrameError::CrcMismatch {
+            Ok(())
+        }
+        HostEvent::CrcError(wiremux::host_session::HostCrcError {
             version,
             flags,
             payload_len,
@@ -509,87 +528,60 @@ fn write_event<W: Write, D: Write>(
     }
 }
 
-fn write_manifest_event<W: Write, D: Write>(
+fn write_protocol_compatibility<W: Write, D: Write>(
     display: &mut DisplayOutput<W>,
     diagnostics: &mut D,
-    envelope: &MuxEnvelope,
+    compatibility: wiremux::host_session::ProtocolCompatibility,
 ) -> io::Result<()> {
-    match decode_manifest(&envelope.payload) {
-        Ok(manifest) => {
+    match compatibility.compatibility {
+        ProtocolCompatibilityKind::Supported => {
             writeln!(
                 diagnostics,
-                "[wiremux] manifest received: {} channels",
-                manifest.channels.len()
+                "[wiremux] protocol_api supported device={} host_min={} host_current={}",
+                compatibility.device_api_version,
+                compatibility.host_min_api_version,
+                compatibility.host_current_api_version
             )?;
-            display.update_manifest(&manifest);
         }
-        Err(err) => {
-            writeln!(diagnostics, "[wiremux] manifest_decode_error={err:?}")?;
+        ProtocolCompatibilityKind::UnsupportedNew => {
+            writeln!(
+                diagnostics,
+                "[wiremux] protocol_api unsupported_new device={} host_current={} action=upgrade_host_sdk",
+                compatibility.device_api_version, compatibility.host_current_api_version
+            )?;
             if display.channel_filter.is_none() {
-                display.write_marker_line("manifest decode error; details in diagnostics")?;
+                display.write_marker_line("device protocol is newer; upgrade host SDK/tool")?;
             }
+        }
+        ProtocolCompatibilityKind::UnsupportedOld => {
+            writeln!(
+                diagnostics,
+                "[wiremux] protocol_api unsupported_old device={} host_min={}",
+                compatibility.device_api_version, compatibility.host_min_api_version
+            )?;
+            if display.channel_filter.is_none() {
+                display.write_marker_line("device protocol is too old for this host")?;
+            }
+        }
+        ProtocolCompatibilityKind::Unknown(value) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] protocol_api unknown compatibility={value}"
+            )?;
         }
     }
     Ok(())
 }
 
-fn write_batch_event<W: Write, D: Write>(
-    display: &mut DisplayOutput<W>,
-    diagnostics: &mut D,
-    envelope: &MuxEnvelope,
-) -> io::Result<()> {
-    let batch = match decode_batch(&envelope.payload) {
-        Ok(batch) => batch,
-        Err(err) => {
-            writeln!(diagnostics, "[wiremux] batch_decode_error={err:?}")?;
-            if display.channel_filter.is_none() {
-                display.write_marker_line("batch decode error; details in diagnostics")?;
-            }
-            return Ok(());
-        }
-    };
-    let uncompressed_len = if batch.compression == COMPRESSION_NONE {
-        batch.records.len()
-    } else {
-        batch.uncompressed_len as usize
-    };
-    let records_payload = match decompress(batch.compression, &batch.records, uncompressed_len) {
-        Ok(records_payload) => records_payload,
-        Err(err) => {
-            writeln!(
-                diagnostics,
-                "[wiremux] batch compression={} raw_len={} decode_error={err:?}",
-                batch.compression, batch.uncompressed_len
-            )?;
-            if display.channel_filter.is_none() {
-                display.write_marker_line("batch payload decode error; details in diagnostics")?;
-            }
-            return Ok(());
-        }
-    };
-    let records = match decode_batch_records(&records_payload) {
-        Ok(records) => records,
-        Err(err) => {
-            writeln!(diagnostics, "[wiremux] batch_records_decode_error={err:?}")?;
-            if display.channel_filter.is_none() {
-                display.write_marker_line("batch records decode error; details in diagnostics")?;
-            }
-            return Ok(());
-        }
-    };
-    writeln!(
-        diagnostics,
-        "[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
-        records.len(),
-        batch.compression,
-        batch.records.len(),
-        records_payload.len()
-    )?;
-    for record in records {
-        write_envelope_diagnostics(diagnostics, &record)?;
-        display.write_record(&record)?;
+fn decode_error_marker(stage: HostDecodeStage) -> &'static str {
+    match stage {
+        HostDecodeStage::Envelope => "envelope decode error; details in diagnostics",
+        HostDecodeStage::Manifest => "manifest decode error; details in diagnostics",
+        HostDecodeStage::Batch => "batch decode error; details in diagnostics",
+        HostDecodeStage::BatchRecords => "batch records decode error; details in diagnostics",
+        HostDecodeStage::Compression => "batch payload decode error; details in diagnostics",
+        HostDecodeStage::Unknown(_) => "protocol decode error; details in diagnostics",
     }
-    Ok(())
 }
 
 fn write_envelope_diagnostics<W: Write>(out: &mut W, envelope: &MuxEnvelope) -> io::Result<()> {
@@ -612,51 +604,11 @@ fn build_input_frame(
     payload: &[u8],
     max_payload_len: usize,
 ) -> Result<Vec<u8>, BuildFrameError> {
-    build_input_frame_typed(
-        channel,
-        wiremux::envelope::PAYLOAD_KIND_TEXT,
-        "",
-        payload,
-        max_payload_len,
-    )
+    host_session::build_input_frame(channel, payload, max_payload_len)
 }
 
 fn build_manifest_request_frame(max_payload_len: usize) -> Result<Vec<u8>, BuildFrameError> {
-    build_input_frame_typed(
-        0,
-        wiremux::envelope::PAYLOAD_KIND_CONTROL,
-        MANIFEST_REQUEST_PAYLOAD_TYPE,
-        &encode_manifest_request(),
-        max_payload_len,
-    )
-}
-
-fn build_input_frame_typed(
-    channel: u8,
-    kind: u32,
-    payload_type: &str,
-    payload: &[u8],
-    max_payload_len: usize,
-) -> Result<Vec<u8>, BuildFrameError> {
-    let envelope = MuxEnvelope {
-        channel_id: u32::from(channel),
-        direction: DIRECTION_INPUT,
-        sequence: 1,
-        timestamp_us: now_micros(),
-        kind,
-        payload_type: payload_type.to_string(),
-        payload: payload.to_vec(),
-        flags: 0,
-    };
-    let payload = encode_envelope(&envelope);
-    build_frame_payload_with_max(0, &payload, max_payload_len)
-}
-
-fn now_micros() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_micros() as u64
+    host_session::build_manifest_request_frame(max_payload_len)
 }
 
 fn build_frame_error_to_io(err: BuildFrameError) -> io::Error {
@@ -828,16 +780,10 @@ mod tests {
     };
     use super::{port_candidates, requested_file_name_starts_with};
     use std::path::PathBuf;
-    use wiremux::batch::{
-        encode_batch, encode_batch_records, MuxBatch, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE,
-    };
-    use wiremux::envelope::{
-        decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, DIRECTION_OUTPUT,
-        PAYLOAD_KIND_BATCH, PAYLOAD_KIND_CONTROL, PAYLOAD_KIND_TEXT,
-    };
-    use wiremux::frame::{FrameScanner, MuxFrame, StreamEvent};
-    use wiremux::manifest::{
-        ChannelDescriptor, DeviceManifest, MANIFEST_PAYLOAD_TYPE, MANIFEST_REQUEST_PAYLOAD_TYPE,
+    use wiremux::host_session::{
+        BatchSummary, ChannelDescriptor, DeviceManifest, HostEvent, HostSession, MuxEnvelope,
+        DEFAULT_MAX_PAYLOAD_LEN, DIRECTION_INPUT, DIRECTION_OUTPUT, MANIFEST_REQUEST_PAYLOAD_TYPE,
+        PAYLOAD_KIND_CONTROL, PAYLOAD_KIND_TEXT,
     };
 
     fn output_envelope(channel_id: u32, payload: &[u8]) -> MuxEnvelope {
@@ -891,10 +837,7 @@ mod tests {
 
         assert_eq!(args.port, PathBuf::from("/dev/tty.usbmodem2101"));
         assert_eq!(args.baud, 115_200);
-        assert_eq!(
-            args.max_payload_len,
-            wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN
-        );
+        assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
         assert_eq!(args.reconnect_delay_ms, 500);
         assert_eq!(args.channel, None);
         assert_eq!(args.send_channel, None);
@@ -1024,10 +967,7 @@ mod tests {
 
         assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.baud, 921_600);
-        assert_eq!(
-            args.max_payload_len,
-            wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN
-        );
+        assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
     }
 
     #[test]
@@ -1199,32 +1139,21 @@ mod tests {
             output_envelope(3, b"alpha\n"),
             output_envelope(2, b"beta\n"),
         ];
-        let records_payload = encode_batch_records(&records);
-        let batch = MuxBatch {
-            compression: COMPRESSION_NONE,
-            records: records_payload.clone(),
-            uncompressed_len: records_payload.len() as u32,
-        };
-        let envelope = MuxEnvelope {
-            channel_id: 0,
-            direction: DIRECTION_OUTPUT,
-            sequence: 1,
-            timestamp_us: 10,
-            kind: PAYLOAD_KIND_BATCH,
-            payload_type: BATCH_PAYLOAD_TYPE.to_string(),
-            payload: encode_batch(&batch),
-            flags: 0,
-        };
-        let frame = MuxFrame {
-            version: 1,
-            flags: 0,
-            payload: encode_envelope(&envelope),
-        };
         let mut display = DisplayOutput::new(Vec::new(), None);
         let mut diagnostics = Vec::new();
 
-        write_event(&mut display, &mut diagnostics, StreamEvent::Frame(frame))
-            .expect("write batch event");
+        for event in [
+            HostEvent::Record(records[0].clone()),
+            HostEvent::Record(records[1].clone()),
+            HostEvent::BatchSummary(BatchSummary {
+                compression: 0,
+                encoded_bytes: 0,
+                raw_bytes: 0,
+                record_count: records.len(),
+            }),
+        ] {
+            write_event(&mut display, &mut diagnostics, event).expect("write batch event");
+        }
 
         assert_eq!(display.out, b"ch3> alpha\nch2> beta\n");
         let diagnostics = String::from_utf8(diagnostics).expect("utf8 diagnostics");
@@ -1235,23 +1164,6 @@ mod tests {
 
     #[test]
     fn listen_manifest_event_updates_labels_without_displaying_payload() {
-        let mut channel = Vec::new();
-        write_test_varint_field(&mut channel, 1, 4);
-        write_test_bytes_field(&mut channel, 2, "🚗🎒😄".as_bytes());
-
-        let mut manifest = Vec::new();
-        write_test_bytes_field(&mut manifest, 5, &channel);
-
-        let manifest_envelope = MuxEnvelope {
-            channel_id: 0,
-            direction: DIRECTION_OUTPUT,
-            sequence: 1,
-            timestamp_us: 10,
-            kind: PAYLOAD_KIND_CONTROL,
-            payload_type: MANIFEST_PAYLOAD_TYPE.to_string(),
-            payload: manifest,
-            flags: 0,
-        };
         let record = output_envelope(4, "demo 😄\n".as_bytes());
         let mut display = DisplayOutput::new(Vec::new(), None);
         let mut diagnostics = Vec::new();
@@ -1259,25 +1171,13 @@ mod tests {
         write_event(
             &mut display,
             &mut diagnostics,
-            StreamEvent::Frame(MuxFrame {
-                version: 1,
-                flags: 0,
-                payload: encode_envelope(&manifest_envelope),
-            }),
+            HostEvent::Manifest(manifest_with_channel_name(4, "🚗🎒😄")),
         )
         .expect("manifest event");
         assert!(display.out.is_empty());
 
-        write_event(
-            &mut display,
-            &mut diagnostics,
-            StreamEvent::Frame(MuxFrame {
-                version: 1,
-                flags: 0,
-                payload: encode_envelope(&record),
-            }),
-        )
-        .expect("record event");
+        write_event(&mut display, &mut diagnostics, HostEvent::Record(record))
+            .expect("record event");
 
         assert_eq!(
             String::from_utf8(display.out).expect("utf8 output"),
@@ -1342,16 +1242,15 @@ mod tests {
 
     #[test]
     fn builds_input_frame_that_round_trips_through_scanner() {
-        let frame = build_input_frame(1, b"help", wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN)
-            .expect("valid input frame");
-        let mut scanner = FrameScanner::default();
-        let events = scanner.push(&frame);
+        let frame =
+            build_input_frame(1, b"help", DEFAULT_MAX_PAYLOAD_LEN).expect("valid input frame");
+        let mut session = HostSession::new(DEFAULT_MAX_PAYLOAD_LEN).expect("session");
+        let events = session.feed(&frame).expect("feed");
         assert_eq!(events.len(), 1);
 
-        let StreamEvent::Frame(frame) = &events[0] else {
-            panic!("expected frame event");
+        let HostEvent::Record(envelope) = &events[0] else {
+            panic!("expected record event");
         };
-        let envelope = decode_envelope(&frame.payload).expect("valid envelope");
         assert_eq!(envelope.channel_id, 1);
         assert_eq!(envelope.direction, DIRECTION_INPUT);
         assert_eq!(envelope.kind, PAYLOAD_KIND_TEXT);
@@ -1360,39 +1259,19 @@ mod tests {
 
     #[test]
     fn builds_manifest_request_frame() {
-        let frame = build_manifest_request_frame(wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN)
-            .expect("valid request frame");
-        let mut scanner = FrameScanner::default();
-        let events = scanner.push(&frame);
+        let frame =
+            build_manifest_request_frame(DEFAULT_MAX_PAYLOAD_LEN).expect("valid request frame");
+        let mut session = HostSession::new(DEFAULT_MAX_PAYLOAD_LEN).expect("session");
+        let events = session.feed(&frame).expect("feed");
         assert_eq!(events.len(), 1);
 
-        let StreamEvent::Frame(frame) = &events[0] else {
-            panic!("expected frame event");
+        let HostEvent::Record(envelope) = &events[0] else {
+            panic!("expected record event");
         };
-        let envelope = decode_envelope(&frame.payload).expect("valid envelope");
         assert_eq!(envelope.channel_id, 0);
         assert_eq!(envelope.direction, DIRECTION_INPUT);
         assert_eq!(envelope.kind, PAYLOAD_KIND_CONTROL);
         assert_eq!(envelope.payload_type, MANIFEST_REQUEST_PAYLOAD_TYPE);
         assert!(envelope.payload.is_empty());
-    }
-
-    fn write_test_varint(out: &mut Vec<u8>, mut value: u64) {
-        while value >= 0x80 {
-            out.push((value as u8) | 0x80);
-            value >>= 7;
-        }
-        out.push(value as u8);
-    }
-
-    fn write_test_varint_field(out: &mut Vec<u8>, field_number: u32, value: u64) {
-        write_test_varint(out, u64::from(field_number) << 3);
-        write_test_varint(out, value);
-    }
-
-    fn write_test_bytes_field(out: &mut Vec<u8>, field_number: u32, value: &[u8]) {
-        write_test_varint(out, (u64::from(field_number) << 3) | 2);
-        write_test_varint(out, value.len() as u64);
-        out.extend_from_slice(value);
     }
 }

@@ -5,6 +5,7 @@ idf_component_register(
         "../../../core/c/src/wiremux_frame.c"
         "../../../core/c/src/wiremux_envelope.c"
         "../../../core/c/src/wiremux_manifest.c"
+        "../../../core/c/src/wiremux_version.c"
         "src/esp_wiremux.c"
         "src/esp_wiremux_console.c"
         "src/esp_wiremux_frame.c"

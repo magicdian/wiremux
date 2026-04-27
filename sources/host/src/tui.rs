@@ -20,12 +20,9 @@ use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 use ratatui::Terminal;
-use wiremux::batch::{decode_batch, decode_batch_records, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE};
-use wiremux::codec::decompress;
-use wiremux::envelope::{decode_envelope, MuxEnvelope};
-use wiremux::frame::{FrameError, FrameScanner, StreamEvent};
-use wiremux::manifest::{
-    decode_manifest, display_channel_name, DeviceManifest, MANIFEST_PAYLOAD_TYPE,
+use wiremux::host_session::{
+    display_channel_name, DeviceManifest, HostDecodeStage, HostEvent, HostSession, MuxEnvelope,
+    ProtocolCompatibilityKind,
 };
 
 use super::{
@@ -271,7 +268,12 @@ fn run_loop(
     ));
 
     let mut serial = None;
-    let mut scanner = FrameScanner::new(args.max_payload_len);
+    let mut host_session = HostSession::new(args.max_payload_len).map_err(|status| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("host session init failed: {status}"),
+        )
+    })?;
     let mut last_connect_attempt = Instant::now() - reconnect_delay;
     let mut buf = [0u8; 4096];
 
@@ -288,7 +290,12 @@ fn run_loop(
                     port.write_all(&request)?;
                     port.flush()?;
                     serial = Some(port);
-                    scanner = FrameScanner::new(args.max_payload_len);
+                    host_session = HostSession::new(args.max_payload_len).map_err(|status| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("host session init failed: {status}"),
+                        )
+                    })?;
                     app.push_marker("manifest requested");
                 }
                 Err(err) => {
@@ -309,7 +316,12 @@ fn run_loop(
                     serial = None;
                 }
                 Ok(read_len) => {
-                    for event in scanner.push(&buf[..read_len]) {
+                    for event in host_session.feed(&buf[..read_len]).map_err(|status| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("host session feed failed: {status}"),
+                        )
+                    })? {
                         handle_stream_event(&mut app, &mut diagnostics, event)?;
                     }
                 }
@@ -461,29 +473,69 @@ fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
     }
 }
 
-fn handle_stream_event(
-    app: &mut App,
-    diagnostics: &mut File,
-    event: StreamEvent,
-) -> io::Result<()> {
+fn handle_stream_event(app: &mut App, diagnostics: &mut File, event: HostEvent) -> io::Result<()> {
     match event {
-        StreamEvent::Terminal(bytes) => app.push_terminal(&bytes),
-        StreamEvent::Frame(frame) => match decode_envelope(&frame.payload) {
-            Ok(envelope) => handle_envelope(app, diagnostics, &envelope)?,
-            Err(err) => {
+        HostEvent::Terminal(bytes) => app.push_terminal(&bytes),
+        HostEvent::Record(envelope) => handle_envelope(app, diagnostics, &envelope)?,
+        HostEvent::Manifest(manifest) => {
+            app.push_marker(format!(
+                "manifest received: {} channels",
+                manifest.channels.len()
+            ));
+            app.manifest = Some(manifest);
+        }
+        HostEvent::ProtocolCompatibility(compatibility) => match compatibility.compatibility {
+            ProtocolCompatibilityKind::Supported => {
                 writeln!(
                     diagnostics,
-                    "[wiremux] frame version={} flags={} payload_len={} envelope_decode_error={:?} payload={}",
-                    frame.version,
-                    frame.flags,
-                    frame.payload.len(),
-                    err,
-                    printable_payload(&frame.payload)
+                    "[wiremux] protocol_api supported device={} host_min={} host_current={}",
+                    compatibility.device_api_version,
+                    compatibility.host_min_api_version,
+                    compatibility.host_current_api_version
                 )?;
-                app.push_marker("envelope decode error; details in diagnostics");
+            }
+            ProtocolCompatibilityKind::UnsupportedNew => {
+                writeln!(
+                        diagnostics,
+                        "[wiremux] protocol_api unsupported_new device={} host_current={} action=upgrade_host_sdk",
+                        compatibility.device_api_version, compatibility.host_current_api_version
+                    )?;
+                app.push_marker("device protocol is newer; upgrade host SDK/tool");
+            }
+            ProtocolCompatibilityKind::UnsupportedOld => {
+                writeln!(
+                    diagnostics,
+                    "[wiremux] protocol_api unsupported_old device={} host_min={}",
+                    compatibility.device_api_version, compatibility.host_min_api_version
+                )?;
+                app.push_marker("device protocol is too old for this host");
+            }
+            ProtocolCompatibilityKind::Unknown(value) => {
+                writeln!(
+                    diagnostics,
+                    "[wiremux] protocol_api unknown compatibility={value}"
+                )?;
             }
         },
-        StreamEvent::FrameError(FrameError::CrcMismatch {
+        HostEvent::BatchSummary(summary) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
+                summary.record_count, summary.compression, summary.encoded_bytes, summary.raw_bytes
+            )?;
+        }
+        HostEvent::DecodeError(err) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] decode_error stage={:?} status={} detail={} payload={}",
+                err.stage,
+                err.status,
+                err.detail,
+                printable_payload(&err.payload)
+            )?;
+            app.push_marker(decode_error_marker(err.stage));
+        }
+        HostEvent::CrcError(wiremux::host_session::HostCrcError {
             version,
             flags,
             payload_len,
@@ -506,83 +558,20 @@ fn handle_envelope(
     diagnostics: &mut File,
     envelope: &MuxEnvelope,
 ) -> io::Result<()> {
-    if envelope.payload_type == MANIFEST_PAYLOAD_TYPE {
-        match decode_manifest(&envelope.payload) {
-            Ok(manifest) => {
-                app.push_marker(format!(
-                    "manifest received: {} channels",
-                    manifest.channels.len()
-                ));
-                app.manifest = Some(manifest);
-            }
-            Err(err) => {
-                writeln!(diagnostics, "[wiremux] manifest_decode_error={err:?}")?;
-                app.push_marker("manifest decode error; details in diagnostics");
-            }
-        }
-        return Ok(());
-    }
-
-    if envelope.payload_type == BATCH_PAYLOAD_TYPE {
-        return handle_batch(app, diagnostics, envelope);
-    }
-
     write_envelope_diagnostics(diagnostics, envelope)?;
     app.push_record(envelope);
     Ok(())
 }
 
-fn handle_batch(app: &mut App, diagnostics: &mut File, envelope: &MuxEnvelope) -> io::Result<()> {
-    let batch = match decode_batch(&envelope.payload) {
-        Ok(batch) => batch,
-        Err(err) => {
-            writeln!(diagnostics, "[wiremux] batch_decode_error={err:?}")?;
-            app.push_marker("batch decode error; details in diagnostics");
-            return Ok(());
-        }
-    };
-    let uncompressed_len = if batch.compression == COMPRESSION_NONE {
-        batch.records.len()
-    } else {
-        batch.uncompressed_len as usize
-    };
-    let records_payload = match decompress(batch.compression, &batch.records, uncompressed_len) {
-        Ok(records_payload) => records_payload,
-        Err(err) => {
-            writeln!(
-                diagnostics,
-                "[wiremux] batch compression={} raw_len={} decode_error={err:?}",
-                batch.compression, batch.uncompressed_len
-            )?;
-            app.push_marker("batch payload decode error; details in diagnostics");
-            return Ok(());
-        }
-    };
-    let records = match decode_batch_records(&records_payload) {
-        Ok(records) => records,
-        Err(err) => {
-            writeln!(diagnostics, "[wiremux] batch_records_decode_error={err:?}")?;
-            app.push_marker("batch records decode error; details in diagnostics");
-            return Ok(());
-        }
-    };
-    writeln!(
-        diagnostics,
-        "[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
-        records.len(),
-        batch.compression,
-        batch.records.len(),
-        records_payload.len()
-    )?;
-    for record in records {
-        if record.payload_type == MANIFEST_PAYLOAD_TYPE {
-            handle_envelope(app, diagnostics, &record)?;
-        } else {
-            write_envelope_diagnostics(diagnostics, &record)?;
-            app.push_record(&record);
-        }
+fn decode_error_marker(stage: HostDecodeStage) -> &'static str {
+    match stage {
+        HostDecodeStage::Envelope => "envelope decode error; details in diagnostics",
+        HostDecodeStage::Manifest => "manifest decode error; details in diagnostics",
+        HostDecodeStage::Batch => "batch decode error; details in diagnostics",
+        HostDecodeStage::BatchRecords => "batch records decode error; details in diagnostics",
+        HostDecodeStage::Compression => "batch payload decode error; details in diagnostics",
+        HostDecodeStage::Unknown(_) => "protocol decode error; details in diagnostics",
     }
-    Ok(())
 }
 
 fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
@@ -782,7 +771,7 @@ fn empty_as_dash(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremux::manifest::ChannelDescriptor;
+    use wiremux::host_session::ChannelDescriptor;
 
     #[test]
     fn visible_window_follows_tail_when_offset_is_zero() {
