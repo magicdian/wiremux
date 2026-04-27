@@ -192,8 +192,12 @@ the demo, and host verification commands in the same task.
   live tail, `sources/host/src/tui.rs` may append a virtual current prompt row
   during rendering; this row must not mutate `App::lines` or scrollback history.
   In passthrough mode, place the terminal cursor in the output pane after the
-  active channel prompt/echo. In line mode, place the cursor in the bottom input
-  box.
+  active channel prompt/echo. Cursor placement must account for visual wrapping
+  inside the output pane: previous wrapped rows and the active prompt/echo's
+  wrapped offset both affect the terminal row/column. Output visibility and
+  scrollbar range must use the same wrapped visual row count, not only logical
+  `OutputLine` count, so resizing the TUI narrower cannot hide overflow without
+  a scrollbar. In line mode, place the cursor in the bottom input box.
 - Host manifest requests use system channel 0 with
   `payload_type = "wiremux.v1.DeviceManifestRequest"` and empty request payload.
 - Device manifest responses use `payload_type = "wiremux.v1.DeviceManifest"`
@@ -223,6 +227,7 @@ the demo, and host verification commands in the same task.
 | TUI submits input in channel filter mode for an input-capable channel | host sends mux input frame to active channel |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
 | passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
+| passthrough command output wraps inside a narrow output pane | scrollbar and cursor row/column follow visual wrapped rows, not the logical `OutputLine` index |
 | passthrough empty Enter echoes `CRLF` | TUI stores a completed empty prompt history row and renders the following current prompt row |
 | non-passthrough channel emits partial text then another channel emits output | TUI keeps ordinary line-oriented record display; per-channel stream editing is not applied |
 
@@ -261,7 +266,10 @@ the demo, and host verification commands in the same task.
   records from other channels. Prompt behavior tests must cover empty `CRLF`
   completing a history row, repeated empty newlines stacking prompt history,
   virtual prompt rendering after completed output, virtual prompt rendering after
-  empty Enter, and passthrough cursor placement in the output pane.
+  empty Enter, passthrough cursor placement in the output pane, and cursor
+  placement after narrow-pane wrapping of completed output plus active echo.
+  Scrollback tests must include a narrow-pane case where logical lines fit but
+  wrapped visual rows overflow and therefore require a scrollbar.
 - Portable C tests cover manifest encoding of channel interaction modes and
   channel-name UTF-8-safe truncation.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.

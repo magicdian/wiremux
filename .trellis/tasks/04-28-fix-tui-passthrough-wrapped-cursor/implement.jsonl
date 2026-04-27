@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "TUI passthrough rendering and host Rust test requirements"}
+{"file": "sources/host/src/tui.rs", "reason": "Existing TUI passthrough rendering, cursor placement, and tests"}

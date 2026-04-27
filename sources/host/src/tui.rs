@@ -17,7 +17,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Terminal;
 use wiremux::host_session::{
@@ -45,6 +45,12 @@ struct OutputLine {
 struct RenderOutputLine<'a> {
     channel: Option<u32>,
     text: &'a str,
+}
+
+struct RenderOutputRow {
+    channel: Option<u32>,
+    prefix: Option<String>,
+    text: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -320,6 +326,7 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     fn filtered_line_count(&self) -> usize {
         self.lines
             .iter()
@@ -331,13 +338,15 @@ impl App {
         self.filter.is_none() || line.channel == self.filter
     }
 
-    fn max_scroll_offset(&self, output_height: usize) -> usize {
-        max_scroll_offset(self.filtered_line_count(), output_height)
+    fn max_scroll_offset(&self, output_area: Rect) -> usize {
+        let output_height = output_content_height(output_area);
+        let output_width = output_content_width(output_area);
+        max_scroll_offset(self.filtered_visual_row_count(output_width), output_height)
     }
 
-    fn scroll_up(&mut self, output_height: usize) {
+    fn scroll_up(&mut self, output_area: Rect) {
         self.empty_enter_restore_count = 0;
-        let max_offset = self.max_scroll_offset(output_height);
+        let max_offset = self.max_scroll_offset(output_area);
         if max_offset == 0 {
             self.scroll_offset = 0;
             return;
@@ -352,9 +361,9 @@ impl App {
         );
     }
 
-    fn scroll_down(&mut self, output_height: usize) {
+    fn scroll_down(&mut self, output_area: Rect) {
         self.empty_enter_restore_count = 0;
-        let max_offset = self.max_scroll_offset(output_height);
+        let max_offset = self.max_scroll_offset(output_area);
         self.scroll_offset = self.scroll_offset.min(max_offset);
         self.scroll_offset = self.scroll_offset.saturating_sub(WHEEL_SCROLL_LINES);
         if self.scroll_offset == 0 {
@@ -378,9 +387,9 @@ impl App {
         self.dragging_scrollbar = false;
     }
 
-    fn set_scroll_offset(&mut self, scroll_offset: usize, output_height: usize) {
+    fn set_scroll_offset(&mut self, scroll_offset: usize, output_area: Rect) {
         self.empty_enter_restore_count = 0;
-        self.scroll_offset = scroll_offset.min(self.max_scroll_offset(output_height));
+        self.scroll_offset = scroll_offset.min(self.max_scroll_offset(output_area));
         if self.scroll_offset == 0 {
             self.status = "scrollbar: following live output".to_string();
         } else {
@@ -403,6 +412,18 @@ impl App {
         } else {
             self.status = "scrollback paused: press Enter again to follow live output".to_string();
         }
+    }
+
+    fn filtered_visual_row_count(&self, output_width: usize) -> usize {
+        let filtered = self
+            .lines
+            .iter()
+            .filter(|line| self.line_matches_filter(line))
+            .collect::<Vec<_>>();
+        let append_prompt = should_append_passthrough_prompt(self, &filtered);
+        let total_logical_lines = filtered.len() + usize::from(append_prompt);
+        let logical = rendered_output_lines(self, &filtered, append_prompt, 0, total_logical_lines);
+        output_rows(self, &logical, output_width).len()
     }
 }
 
@@ -715,32 +736,30 @@ fn send_tui_passthrough_key(
 
 fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
     let output_height = output_content_height(output_area);
+    let output_width = output_content_width(output_area);
+    let total_rows = app.filtered_visual_row_count(output_width);
     match mouse.kind {
-        MouseEventKind::ScrollUp => app.scroll_up(output_height),
-        MouseEventKind::ScrollDown => app.scroll_down(output_height),
+        MouseEventKind::ScrollUp => app.scroll_up(output_area),
+        MouseEventKind::ScrollDown => app.scroll_down(output_area),
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(offset) = scrollbar_offset_from_mouse(
                 output_area,
-                app.filtered_line_count(),
+                total_rows,
                 output_height,
                 mouse.column,
                 mouse.row,
             ) {
                 app.dragging_scrollbar = true;
-                app.set_scroll_offset(offset, output_height);
+                app.set_scroll_offset(offset, output_area);
             } else {
                 app.dragging_scrollbar = false;
                 app.reset_empty_enter_restore();
             }
         }
         MouseEventKind::Drag(MouseButton::Left) if app.dragging_scrollbar => {
-            let offset = scrollbar_offset_from_drag_row(
-                output_area,
-                app.filtered_line_count(),
-                output_height,
-                mouse.row,
-            );
-            app.set_scroll_offset(offset, output_height);
+            let offset =
+                scrollbar_offset_from_drag_row(output_area, total_rows, output_height, mouse.row);
+            app.set_scroll_offset(offset, output_area);
         }
         MouseEventKind::Up(MouseButton::Left) => {
             app.dragging_scrollbar = false;
@@ -865,41 +884,43 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
 
     let output_area = chunks[0];
     let height = output_content_height(output_area);
+    let width = output_content_width(output_area);
     let filtered = app
         .lines
         .iter()
         .filter(|line| app.line_matches_filter(line))
         .collect::<Vec<_>>();
     let append_prompt = should_append_passthrough_prompt(app, &filtered);
-    let total_rendered_lines = filtered.len() + usize::from(append_prompt);
+    let total_logical_lines = filtered.len() + usize::from(append_prompt);
+    let logical = rendered_output_lines(app, &filtered, append_prompt, 0, total_logical_lines);
+    let rows = output_rows(app, &logical, width);
+    let total_rendered_lines = rows.len();
     let (start, end) = visible_window(total_rendered_lines, height, app.scroll_offset);
-    let visible = rendered_output_lines(app, &filtered, append_prompt, start, end);
+    let visible = rows[start..end].iter().collect::<Vec<_>>();
     let lines = visible
         .iter()
         .map(|line| {
-            if let Some(channel) = line.channel {
+            if let Some(prefix) = line.prefix.as_deref() {
                 Line::from(vec![
                     Span::styled(
-                        format!("{}> ", app.channel_prefix(channel)),
+                        prefix,
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(line.text),
+                    Span::raw(line.text.as_str()),
                 ])
             } else {
-                Line::from(line.text)
+                Line::from(line.text.as_str())
             }
         })
         .collect::<Vec<_>>();
 
-    let output = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(output_title(app.scroll_offset))
-                .borders(Borders::ALL),
-        )
-        .wrap(Wrap { trim: false });
+    let output = Paragraph::new(lines).block(
+        Block::default()
+            .title(output_title(app.scroll_offset))
+            .borders(Borders::ALL),
+    );
     frame.render_widget(output, output_area);
 
     let max_offset = max_scroll_offset(total_rendered_lines, height);
@@ -1004,11 +1025,108 @@ fn rendered_output_lines<'a>(
         .collect()
 }
 
+fn output_rows(
+    app: &App,
+    lines: &[RenderOutputLine<'_>],
+    output_width: usize,
+) -> Vec<RenderOutputRow> {
+    let output_width = output_width.max(1);
+    let mut rows = Vec::new();
+    for line in lines {
+        let prefix = line
+            .channel
+            .map(|channel| format!("{}> ", app.channel_prefix(channel)));
+        append_output_rows(&mut rows, line.channel, prefix, line.text, output_width);
+    }
+    rows
+}
+
+fn append_output_rows(
+    rows: &mut Vec<RenderOutputRow>,
+    channel: Option<u32>,
+    prefix: Option<String>,
+    text: &str,
+    output_width: usize,
+) {
+    let Some(prefix) = prefix else {
+        append_continuation_rows(rows, channel, text, output_width);
+        return;
+    };
+
+    let prefix_width = display_width_usize(&prefix);
+    let first_text_width = output_width.saturating_sub(prefix_width);
+    if first_text_width == 0 {
+        rows.push(RenderOutputRow {
+            channel,
+            prefix: Some(prefix),
+            text: String::new(),
+        });
+        append_continuation_rows(rows, channel, text, output_width);
+        return;
+    }
+
+    let mut chars = text.chars();
+    let mut first_text = String::new();
+    for _ in 0..first_text_width {
+        let Some(ch) = chars.next() else {
+            break;
+        };
+        first_text.push(ch);
+    }
+    rows.push(RenderOutputRow {
+        channel,
+        prefix: Some(prefix),
+        text: first_text,
+    });
+
+    let rest = chars.collect::<String>();
+    if !rest.is_empty() {
+        append_continuation_rows(rows, channel, &rest, output_width);
+    }
+}
+
+fn append_continuation_rows(
+    rows: &mut Vec<RenderOutputRow>,
+    channel: Option<u32>,
+    text: &str,
+    output_width: usize,
+) {
+    if text.is_empty() {
+        rows.push(RenderOutputRow {
+            channel,
+            prefix: None,
+            text: String::new(),
+        });
+        return;
+    }
+
+    let mut row = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        if width == output_width {
+            rows.push(RenderOutputRow {
+                channel,
+                prefix: None,
+                text: row,
+            });
+            row = String::new();
+            width = 0;
+        }
+        row.push(ch);
+        width = width.saturating_add(1);
+    }
+    rows.push(RenderOutputRow {
+        channel,
+        prefix: None,
+        text: row,
+    });
+}
+
 fn set_cursor_position(
     frame: &mut ratatui::Frame<'_>,
     app: &App,
     output_area: Rect,
-    visible: &[RenderOutputLine<'_>],
+    visible: &[&RenderOutputRow],
     input_area: Rect,
 ) {
     match app.active_input_state() {
@@ -1039,7 +1157,7 @@ fn set_passthrough_cursor(
     frame: &mut ratatui::Frame<'_>,
     app: &App,
     output_area: Rect,
-    visible: &[RenderOutputLine<'_>],
+    visible: &[&RenderOutputRow],
 ) {
     if output_area.width <= 2 || output_area.height <= 2 {
         return;
@@ -1051,21 +1169,7 @@ fn set_passthrough_cursor(
         return;
     };
     let active_channel = u32::from(active_channel);
-    let cursor = visible
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, line)| line.channel == Some(active_channel))
-        .map(|(index, line)| {
-            let prompt = format!("{}> ", app.channel_prefix(active_channel));
-            let offset = display_width(&prompt)
-                .saturating_add(display_width(&line.text))
-                .min(max_offset);
-            Position::new(
-                output_area.x.saturating_add(1).saturating_add(offset),
-                output_area.y.saturating_add(1).saturating_add(index as u16),
-            )
-        })
+    let cursor = passthrough_cursor_position(output_area, visible, active_channel, max_offset)
         .unwrap_or_else(|| {
             Position::new(
                 output_area.x.saturating_add(1),
@@ -1076,8 +1180,54 @@ fn set_passthrough_cursor(
     frame.set_cursor_position(cursor);
 }
 
+fn passthrough_cursor_position(
+    output_area: Rect,
+    visible: &[&RenderOutputRow],
+    active_channel: u32,
+    max_offset: u16,
+) -> Option<Position> {
+    let mut cursor = None;
+    for (visual_row, line) in visible.iter().enumerate() {
+        if line.channel == Some(active_channel) {
+            let line_col = render_row_width(line).min(max_offset as usize);
+            cursor = Some(Position::new(
+                output_area
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(line_col as u16),
+                output_area
+                    .y
+                    .saturating_add(1)
+                    .saturating_add(visual_row.min(u16::MAX as usize) as u16),
+            ));
+        }
+    }
+    cursor
+}
+
+fn render_row_width(line: &RenderOutputRow) -> usize {
+    let prefix_width = line
+        .prefix
+        .as_deref()
+        .map(display_width_usize)
+        .unwrap_or_default();
+    prefix_width.saturating_add(display_width_usize(&line.text))
+}
+
+#[cfg(test)]
+fn wrapped_visual_height(width: usize, content_width: usize) -> usize {
+    if content_width == 0 {
+        return 0;
+    }
+    width.max(1).div_ceil(content_width)
+}
+
 fn display_width(input: &str) -> u16 {
-    input.chars().count().min(u16::MAX as usize) as u16
+    display_width_usize(input).min(u16::MAX as usize) as u16
+}
+
+fn display_width_usize(input: &str) -> usize {
+    input.chars().count()
 }
 
 fn main_layout(area: Rect) -> std::rc::Rc<[Rect]> {
@@ -1105,6 +1255,10 @@ fn output_area_from_terminal_area(area: Rect) -> Rect {
 
 fn output_content_height(output_area: Rect) -> usize {
     output_area.height.saturating_sub(2) as usize
+}
+
+fn output_content_width(output_area: Rect) -> usize {
+    output_area.width.saturating_sub(2) as usize
 }
 
 fn max_scroll_offset(total_lines: usize, output_height: usize) -> usize {
@@ -1271,12 +1425,13 @@ mod tests {
     #[test]
     fn mouse_scroll_up_pauses_and_scroll_down_restores_tail_follow() {
         let mut app = app_with_lines(10);
+        let output_area = output_area_for_content(38, 4);
 
-        app.scroll_up(4);
+        app.scroll_up(output_area);
         assert_eq!(app.scroll_offset, WHEEL_SCROLL_LINES);
         assert_eq!(app.empty_enter_restore_count, 0);
 
-        app.scroll_down(4);
+        app.scroll_down(output_area);
         assert_eq!(app.scroll_offset, 0);
         assert_eq!(app.empty_enter_restore_count, 0);
     }
@@ -1328,14 +1483,26 @@ mod tests {
     fn scroll_up_is_noop_when_everything_fits() {
         let mut app = app_with_lines(2);
 
-        app.scroll_up(4);
+        app.scroll_up(output_area_for_content(38, 4));
         assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn wrapped_output_creates_visual_scrollback_even_when_logical_lines_fit() {
+        let mut app = App::new("diag.log".to_string());
+        for index in 0..3 {
+            app.push_line(None, format!("line {index}: abcdefghijklmnopqrstuvwxyz\n"));
+        }
+        let output_area = output_area_for_content(16, 4);
+
+        assert_eq!(max_scroll_offset(app.filtered_line_count(), 4), 0);
+        assert!(app.max_scroll_offset(output_area) > 0);
     }
 
     #[test]
     fn two_empty_enters_restore_tail_follow() {
         let mut app = app_with_lines(10);
-        app.scroll_up(4);
+        app.scroll_up(output_area_for_content(38, 4));
 
         app.handle_empty_enter_restore();
         assert_eq!(app.scroll_offset, WHEEL_SCROLL_LINES);
@@ -1349,7 +1516,7 @@ mod tests {
     #[test]
     fn non_empty_input_actions_reset_empty_enter_restore_counter() {
         let mut app = app_with_lines(10);
-        app.scroll_up(4);
+        app.scroll_up(output_area_for_content(38, 4));
         app.handle_empty_enter_restore();
 
         app.reset_empty_enter_restore();
@@ -1360,7 +1527,7 @@ mod tests {
     #[test]
     fn appended_matching_lines_do_not_move_scrolled_view() {
         let mut app = app_with_lines(10);
-        app.scroll_up(4);
+        app.scroll_up(output_area_for_content(38, 4));
         assert_eq!(
             visible_window(app.filtered_line_count(), 4, app.scroll_offset),
             (3, 7)
@@ -1382,7 +1549,7 @@ mod tests {
         app.filter = Some(1);
 
         assert_eq!(app.filtered_line_count(), 2);
-        app.scroll_up(1);
+        app.scroll_up(output_area_for_content(38, 1));
         assert_eq!(app.scroll_offset, 1);
     }
 
@@ -1674,7 +1841,7 @@ mod tests {
         let mut app = app_with_channel_lines(1, 10);
         app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
-        app.scroll_up(4);
+        app.scroll_up(output_area_for_content(38, 4));
         assert!(app.scroll_offset > 0);
 
         handle_key(
@@ -1698,7 +1865,7 @@ mod tests {
         let mut app = app_with_channel_lines(1, 10);
         app.filter = Some(1);
         app.manifest = Some(passthrough_manifest(1));
-        app.scroll_up(4);
+        app.scroll_up(output_area_for_content(38, 4));
         assert!(app.scroll_offset > 0);
 
         app.push_record(&MuxEnvelope {
@@ -1889,6 +2056,137 @@ mod tests {
     }
 
     #[test]
+    fn render_sets_passthrough_cursor_after_wrapped_completed_output() {
+        let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
+        app.manifest = Some(passthrough_manifest(1));
+        let response = "available commands: help hello mux_log";
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 1,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: format!("{response}\n").into_bytes(),
+            flags: 0,
+        });
+        let area = Rect::new(0, 0, 34, 12);
+        let output_area = main_layout(area)[0];
+        let content_width = output_area.width.saturating_sub(2) as usize;
+        let prompt = "ch1(console)> ";
+        let wrapped_response_height = wrapped_visual_height(
+            display_width_usize(prompt).saturating_add(display_width_usize(response)),
+            content_width,
+        ) as u16;
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        assert!(buffer_row(
+            terminal.backend().buffer(),
+            output_area.y + 1 + wrapped_response_height,
+            area.width,
+        )
+        .contains(prompt));
+        assert_eq!(
+            terminal.get_cursor_position().expect("cursor position"),
+            Position::new(
+                output_area.x + 1 + display_width(prompt),
+                output_area.y + 1 + wrapped_response_height
+            )
+        );
+    }
+
+    #[test]
+    fn render_sets_passthrough_cursor_after_wrapped_output_and_echo() {
+        let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
+        app.manifest = Some(passthrough_manifest(1));
+        let response = "available commands: help hello mux_log";
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 1,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: format!("{response}\n").into_bytes(),
+            flags: 0,
+        });
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 2,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"hel".to_vec(),
+            flags: 0,
+        });
+        let area = Rect::new(0, 0, 34, 12);
+        let output_area = main_layout(area)[0];
+        let content_width = output_area.width.saturating_sub(2) as usize;
+        let prompt = "ch1(console)> ";
+        let wrapped_response_height = wrapped_visual_height(
+            display_width_usize(prompt).saturating_add(display_width_usize(response)),
+            content_width,
+        ) as u16;
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        assert!(buffer_row(
+            terminal.backend().buffer(),
+            output_area.y + 1 + wrapped_response_height,
+            area.width,
+        )
+        .contains("ch1(console)> hel"));
+        assert_eq!(
+            terminal.get_cursor_position().expect("cursor position"),
+            Position::new(
+                output_area.x + 1 + display_width(prompt) + display_width("hel"),
+                output_area.y + 1 + wrapped_response_height
+            )
+        );
+    }
+
+    #[test]
+    fn render_keeps_passthrough_cursor_inside_output_after_wrapped_scrollback() {
+        let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
+        app.manifest = Some(passthrough_manifest(1));
+        for sequence in 0..6 {
+            app.push_record(&MuxEnvelope {
+                channel_id: 1,
+                direction: 2,
+                sequence,
+                timestamp_us: 0,
+                kind: 1,
+                payload_type: String::new(),
+                payload: b"available commands: help hello mux_manifest mux_console_mode mux_hello mux_log mux_utf8 mux_stress mux_diag\n".to_vec(),
+                flags: 0,
+            });
+        }
+        let area = Rect::new(0, 0, 34, 12);
+        let chunks = main_layout(area);
+        let output_area = chunks[0];
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let cursor = terminal.get_cursor_position().expect("cursor position");
+        assert!(app.max_scroll_offset(output_area) > 0);
+        assert!(cursor.y > output_area.y);
+        assert!(cursor.y < output_area.y + output_area.height - 1);
+        assert!(cursor.x > output_area.x);
+        assert!(cursor.x < output_area.x + output_area.width - 1);
+    }
+
+    #[test]
     fn render_appends_virtual_passthrough_prompt_after_empty_enter() {
         let mut app = App::new("diag.log".to_string());
         app.filter = Some(1);
@@ -1923,6 +2221,10 @@ mod tests {
         (0..width)
             .map(|column| buffer[(column, row)].symbol())
             .collect()
+    }
+
+    fn output_area_for_content(width: u16, height: u16) -> Rect {
+        Rect::new(0, 0, width.saturating_add(2), height.saturating_add(2))
     }
 
     fn tui_args() -> TuiArgs {
