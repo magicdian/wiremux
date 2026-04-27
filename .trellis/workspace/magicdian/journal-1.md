@@ -285,3 +285,42 @@ Implemented generic Wiremux batch records and compression support across core C,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Host ratatui TUI and manifest discovery
+
+**Date**: 2026-04-27
+**Task**: Host ratatui TUI and manifest discovery
+**Branch**: `dev`
+
+### Summary
+
+Added ratatui host TUI, host-initiated DeviceManifestRequest discovery, core channel interaction modes, ESP manifest response mapping, host manifest decode/cache support, docs/spec updates, and tests. Human manually validated the ESP-flashed TUI flow before commit.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3edebfb` | (see git log) |
+| `bc11c69` | (see git log) |
+| `2af4677` | (see git log) |
+| `c40f7e9` | (see git log) |
+| `6aa67ac` | (see git log) |
+| `1e6b44f` | (see git log) |
+| `ca9359d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
