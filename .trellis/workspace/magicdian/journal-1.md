@@ -492,3 +492,51 @@ Added YYMM.DD.BuildNumber versioning, Apache-2.0 metadata, ESP Registry package 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Core host session and protocol API versioning
+
+**Date**: 2026-04-27
+**Task**: Core host session and protocol API versioning
+**Branch**: `dev`
+
+### Summary
+
+Moved host protocol parsing/building into the portable C core, added protocol API version snapshots and compatibility checks, and archived the completed Trellis task.
+
+### Main Changes
+
+| Area | Result |
+|------|--------|
+| Core C | Added `wiremux_host_session_*` API, protocol API version helpers, manifest compatibility events, batch expansion, and gtest/gmock coverage. |
+| Rust host | Statically links the C core via `build.rs`; CLI/TUI runtime now use `HostSession`; old Rust-side frame/envelope/manifest/batch/codec/crc modules were removed. |
+| ESP/package | ESP manifest reports current protocol API version; ESP registry package generation includes the new core sources. |
+| Specs | Updated backend specs for core host session contracts, protocol version policy, memory model, and required tests. |
+
+Testing completed:
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cmake --build sources/core/c/build`
+- `ctest --test-dir sources/core/c/build --output-on-failure`
+- `git diff --check`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e41a832` | (see git log) |
+| `d769242` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

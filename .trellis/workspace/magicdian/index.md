@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-04-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~473 | Active |
+| `journal-1.md` | ~542 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-04-27 | Core host session and protocol API versioning | `e41a832`, `d769242` | `dev` |
 | 12 | 2026-04-27 | Versioning and ESP Registry release setup | `9e4dd0b` | `dev` |
 | 11 | 2026-04-27 | Manifest channel name labels | `4328303` | `dev` |
 | 10 | 2026-04-27 | Clarify ESP enum aliases | `1de0107` | `dev` |
