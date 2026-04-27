@@ -375,6 +375,22 @@ Required behavior:
   filter mode it targets the active channel.
 - TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
   channel filters 1 through 9.
+- TUI output scrollback is an in-memory viewport over the existing bounded
+  `MAX_LINES` buffer in `sources/host/src/tui.rs`. `scroll_offset = 0` means the
+  output pane follows live tail output. Mouse wheel up increases
+  `scroll_offset` and freezes the visible window; matching incoming lines must
+  increase `scroll_offset` while frozen so the same historical rows stay visible.
+- TUI scroll recovery uses explicit user actions only: mouse wheel down to
+  `scroll_offset = 0`, dragging the right-side output scrollbar to the bottom,
+  or pressing `Enter` twice while the input line is empty. `Enter` with
+  non-empty input must preserve the existing send behavior and must not count
+  toward the recovery gesture.
+- The TUI right-side scrollbar represents scrollable positions, not raw content
+  rows: `position = max_scroll_offset - scroll_offset`. At live tail
+  (`scroll_offset = 0`) the thumb must render at the bottom; at the oldest
+  visible position it must render at the top. Mouse dragging must start on the
+  scrollbar column, but once dragging is active, row movement should keep
+  updating the offset even if the pointer leaves the column.
 - On macOS, prefer `/dev/cu.*` over the paired `/dev/tty.*` device when the user passes a USB serial/JTAG path.
 - Use the Rust `serialport` backend for macOS, Linux, and Windows. Do not shell out to `stty` for normal operation.
 - Host transmit commands must reuse `encode_envelope()` and `build_frame_payload_with_max()` rather than duplicating protocol constants in `main.rs`.
@@ -386,8 +402,13 @@ Required behavior:
   unfiltered mode.
 - Good: `listen --channel 1 --line help` emits channel-1 payload bytes directly,
   preserving console newlines and adding no `ch1> ` prefix.
+- Good: `wiremux tui` is scrolled up while new channel-2 log rows arrive. The
+  same historical rows stay visible until the user scrolls back to the bottom,
+  drags the scrollbar to the bottom, or presses empty `Enter` twice.
 - Base: frame arrives one byte at a time. Host emits no partial frame until length and CRC are complete.
 - Bad: ordinary text contains `WMUX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
+- Bad: a TUI scrollbar uses the raw first visible row as its position; at live
+  tail the thumb appears above the bottom and misrepresents scroll progress.
 - Bad: a candidate frame has valid magic/version/length but bad CRC. Host writes
   a full `crc_error` diagnostic event to the diagnostics file, emits only a
   concise stdout marker in unfiltered mode, drains the invalid candidate, and
@@ -405,6 +426,10 @@ Required behavior:
 - Host display changes must test filtered raw payload output, unfiltered `chN> `
   display, CRLF/CR/LF preservation, partial-line channel switch markers, and
   batch summary routing to diagnostics.
+- Host TUI scrollback changes must test visible window calculation, frozen view
+  behavior when matching lines are appended, empty-Enter recovery, filtered-line
+  scroll counts, scrollbar row-to-offset mapping, drag behavior after leaving
+  the scrollbar column, and scrollbar position at live tail.
 
 ## Scenario: Single-Process Console Verification
 

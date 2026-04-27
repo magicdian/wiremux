@@ -4,16 +4,21 @@ use std::io::{self, Read, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 use ratatui::Terminal;
 use wiremux::batch::{decode_batch, decode_batch_records, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE};
 use wiremux::codec::decompress;
@@ -28,6 +33,7 @@ use super::{
 };
 
 const MAX_LINES: usize = 1000;
+const WHEEL_SCROLL_LINES: usize = 3;
 
 struct OutputLine {
     channel: Option<u32>,
@@ -44,6 +50,9 @@ struct App {
     diagnostics_path: String,
     manifest: Option<DeviceManifest>,
     should_quit: bool,
+    scroll_offset: usize,
+    empty_enter_restore_count: u8,
+    dragging_scrollbar: bool,
 }
 
 impl App {
@@ -58,6 +67,9 @@ impl App {
             diagnostics_path,
             manifest: None,
             should_quit: false,
+            scroll_offset: 0,
+            empty_enter_restore_count: 0,
+            dragging_scrollbar: false,
         }
     }
 
@@ -77,10 +89,14 @@ impl App {
     fn push_line(&mut self, channel: Option<u32>, text: String) {
         for line in text.split_inclusive(['\n', '\r']) {
             let line = line.trim_end_matches(['\n', '\r']).to_string();
-            self.lines.push_back(OutputLine {
+            let output_line = OutputLine {
                 channel,
                 text: line,
-            });
+            };
+            if self.scroll_offset > 0 && self.line_matches_filter(&output_line) {
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+            }
+            self.lines.push_back(output_line);
         }
         if text.is_empty() || !text.ends_with(['\n', '\r']) {
             if let Some(last) = self.lines.back() {
@@ -119,6 +135,87 @@ impl App {
             None => "manifest pending".to_string(),
         }
     }
+
+    fn filtered_line_count(&self) -> usize {
+        self.lines
+            .iter()
+            .filter(|line| self.line_matches_filter(line))
+            .count()
+    }
+
+    fn line_matches_filter(&self, line: &OutputLine) -> bool {
+        self.filter.is_none() || line.channel == self.filter
+    }
+
+    fn max_scroll_offset(&self, output_height: usize) -> usize {
+        max_scroll_offset(self.filtered_line_count(), output_height)
+    }
+
+    fn scroll_up(&mut self, output_height: usize) {
+        self.empty_enter_restore_count = 0;
+        let max_offset = self.max_scroll_offset(output_height);
+        if max_offset == 0 {
+            self.scroll_offset = 0;
+            return;
+        }
+        self.scroll_offset = self
+            .scroll_offset
+            .saturating_add(WHEEL_SCROLL_LINES)
+            .min(max_offset);
+        self.status = format!(
+            "scrollback paused: {} lines from bottom",
+            self.scroll_offset
+        );
+    }
+
+    fn scroll_down(&mut self, output_height: usize) {
+        self.empty_enter_restore_count = 0;
+        let max_offset = self.max_scroll_offset(output_height);
+        self.scroll_offset = self.scroll_offset.min(max_offset);
+        self.scroll_offset = self.scroll_offset.saturating_sub(WHEEL_SCROLL_LINES);
+        if self.scroll_offset == 0 {
+            self.status = "scrollback: following live output".to_string();
+        } else {
+            self.status = format!(
+                "scrollback paused: {} lines from bottom",
+                self.scroll_offset
+            );
+        }
+    }
+
+    fn restore_auto_follow(&mut self) {
+        self.scroll_offset = 0;
+        self.empty_enter_restore_count = 0;
+        self.dragging_scrollbar = false;
+        self.status = "scrollback: following live output".to_string();
+    }
+
+    fn set_scroll_offset(&mut self, scroll_offset: usize, output_height: usize) {
+        self.empty_enter_restore_count = 0;
+        self.scroll_offset = scroll_offset.min(self.max_scroll_offset(output_height));
+        if self.scroll_offset == 0 {
+            self.status = "scrollbar: following live output".to_string();
+        } else {
+            self.status = format!("scrollbar: {} lines from bottom", self.scroll_offset);
+        }
+    }
+
+    fn reset_empty_enter_restore(&mut self) {
+        self.empty_enter_restore_count = 0;
+    }
+
+    fn handle_empty_enter_restore(&mut self) {
+        if self.scroll_offset == 0 {
+            self.empty_enter_restore_count = 0;
+            return;
+        }
+        self.empty_enter_restore_count = self.empty_enter_restore_count.saturating_add(1);
+        if self.empty_enter_restore_count >= 2 {
+            self.restore_auto_follow();
+        } else {
+            self.status = "scrollback paused: press Enter again to follow live output".to_string();
+        }
+    }
 }
 
 pub fn run(args: TuiArgs) -> io::Result<()> {
@@ -127,14 +224,18 @@ pub fn run(args: TuiArgs) -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_loop(args, &mut terminal, diagnostics, diagnostics_path_label);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -206,8 +307,13 @@ fn run_loop(
         }
 
         while event::poll(Duration::from_millis(1))? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(&mut app, serial.as_mut(), &args, key)?;
+            match event::read()? {
+                Event::Key(key) => handle_key(&mut app, serial.as_mut(), &args, key)?,
+                Event::Mouse(mouse) => {
+                    let output_area = output_area_from_terminal_area(terminal.size()?.into());
+                    handle_mouse(&mut app, output_area, mouse);
+                }
+                _ => {}
             }
         }
 
@@ -246,11 +352,13 @@ fn handle_key(
         match key.code {
             KeyCode::Char('0') => {
                 app.filter = None;
+                app.restore_auto_follow();
                 app.status = "filter: all".to_string();
             }
             KeyCode::Char(ch @ '1'..='9') => {
                 let channel = ch.to_digit(10).unwrap_or(0);
                 app.filter = Some(channel);
+                app.restore_auto_follow();
                 app.status = format!("filter: ch{channel}");
             }
             KeyCode::Esc => {
@@ -264,14 +372,20 @@ fn handle_key(
     }
 
     match key.code {
-        KeyCode::Char(ch) => app.input.push(ch),
+        KeyCode::Char(ch) => {
+            app.reset_empty_enter_restore();
+            app.input.push(ch);
+        }
         KeyCode::Backspace => {
+            app.reset_empty_enter_restore();
             app.input.pop();
         }
         KeyCode::Enter => {
             if app.input.is_empty() {
+                app.handle_empty_enter_restore();
                 return Ok(());
             }
+            app.reset_empty_enter_restore();
             let channel = app.active_input_channel();
             let frame = build_input_frame(channel, app.input.as_bytes(), args.max_payload_len)
                 .map_err(build_frame_error_to_io)?;
@@ -285,12 +399,50 @@ fn handle_key(
             }
         }
         KeyCode::Esc => {
+            app.reset_empty_enter_restore();
             app.input.clear();
         }
         _ => {}
     }
 
     Ok(())
+}
+
+fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
+    let output_height = output_content_height(output_area);
+    match mouse.kind {
+        MouseEventKind::ScrollUp => app.scroll_up(output_height),
+        MouseEventKind::ScrollDown => app.scroll_down(output_height),
+        MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(offset) = scrollbar_offset_from_mouse(
+                output_area,
+                app.filtered_line_count(),
+                output_height,
+                mouse.column,
+                mouse.row,
+            ) {
+                app.dragging_scrollbar = true;
+                app.set_scroll_offset(offset, output_height);
+            } else {
+                app.dragging_scrollbar = false;
+                app.reset_empty_enter_restore();
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.dragging_scrollbar => {
+            let offset = scrollbar_offset_from_drag_row(
+                output_area,
+                app.filtered_line_count(),
+                output_height,
+                mouse.row,
+            );
+            app.set_scroll_offset(offset, output_height);
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            app.dragging_scrollbar = false;
+            app.reset_empty_enter_restore();
+        }
+        _ => app.reset_empty_enter_restore(),
+    }
 }
 
 fn handle_stream_event(
@@ -418,26 +570,19 @@ fn handle_batch(app: &mut App, diagnostics: &mut File, envelope: &MuxEnvelope) -
 }
 
 fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-        ])
-        .split(frame.area());
+    let chunks = main_layout(frame.area());
 
-    let height = chunks[0].height.saturating_sub(2) as usize;
-    let visible = app
+    let output_area = chunks[0];
+    let height = output_content_height(output_area);
+    let filtered = app
         .lines
         .iter()
-        .filter(|line| app.filter.is_none() || line.channel == app.filter)
-        .rev()
-        .take(height)
+        .filter(|line| app.line_matches_filter(line))
         .collect::<Vec<_>>();
+    let (start, end) = visible_window(filtered.len(), height, app.scroll_offset);
+    let visible = &filtered[start..end];
     let lines = visible
-        .into_iter()
-        .rev()
+        .iter()
         .map(|line| {
             if let Some(channel) = line.channel {
                 Line::from(vec![
@@ -456,9 +601,25 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         .collect::<Vec<_>>();
 
     let output = Paragraph::new(lines)
-        .block(Block::default().title("wiremux").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(output_title(app.scroll_offset))
+                .borders(Borders::ALL),
+        )
         .wrap(Wrap { trim: false });
-    frame.render_widget(output, chunks[0]);
+    frame.render_widget(output, output_area);
+
+    let max_offset = max_scroll_offset(filtered.len(), height);
+    if max_offset > 0 {
+        let mut scrollbar_state = ScrollbarState::new(max_offset + 1)
+            .position(scrollbar_position(max_offset, app.scroll_offset))
+            .viewport_content_length(1);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            output_area,
+            &mut scrollbar_state,
+        );
+    }
 
     let status = Paragraph::new(vec![
         Line::from(vec![
@@ -491,10 +652,313 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     frame.render_widget(input, chunks[2]);
 }
 
+fn main_layout(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+        ])
+        .split(area)
+}
+
+fn output_title(scroll_offset: usize) -> String {
+    if scroll_offset == 0 {
+        "wiremux".to_string()
+    } else {
+        format!("wiremux - scrollback +{scroll_offset}")
+    }
+}
+
+fn output_area_from_terminal_area(area: Rect) -> Rect {
+    main_layout(area)[0]
+}
+
+fn output_content_height(output_area: Rect) -> usize {
+    output_area.height.saturating_sub(2) as usize
+}
+
+fn max_scroll_offset(total_lines: usize, output_height: usize) -> usize {
+    if output_height == 0 {
+        return 0;
+    }
+    total_lines.saturating_sub(output_height)
+}
+
+fn visible_window(
+    total_lines: usize,
+    output_height: usize,
+    scroll_offset: usize,
+) -> (usize, usize) {
+    if output_height == 0 || total_lines == 0 {
+        return (0, 0);
+    }
+    let offset = scroll_offset.min(max_scroll_offset(total_lines, output_height));
+    let end = total_lines.saturating_sub(offset);
+    let start = end.saturating_sub(output_height);
+    (start, end)
+}
+
+fn scrollbar_position(max_offset: usize, scroll_offset: usize) -> usize {
+    max_offset.saturating_sub(scroll_offset.min(max_offset))
+}
+
+fn scrollbar_offset_from_mouse(
+    output_area: Rect,
+    total_lines: usize,
+    output_height: usize,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    if output_area.width == 0 || output_area.height == 0 {
+        return None;
+    }
+
+    let scrollbar_column = output_area.x + output_area.width - 1;
+    let row_end = output_area.y + output_area.height;
+    if column != scrollbar_column || row < output_area.y || row >= row_end {
+        return None;
+    }
+
+    Some(scrollbar_offset_from_drag_row(
+        output_area,
+        total_lines,
+        output_height,
+        row,
+    ))
+}
+
+fn scrollbar_offset_from_drag_row(
+    output_area: Rect,
+    total_lines: usize,
+    output_height: usize,
+    row: u16,
+) -> usize {
+    let max_offset = max_scroll_offset(total_lines, output_height);
+    if max_offset == 0 || output_height == 0 {
+        return 0;
+    }
+
+    let track_len = output_area.height.saturating_sub(2);
+    if track_len <= 1 {
+        return 0;
+    }
+
+    let first_track_row = output_area.y.saturating_add(1);
+    let last_track_row = first_track_row.saturating_add(track_len - 1);
+    let clamped_row = row.clamp(first_track_row, last_track_row);
+    let track_row = clamped_row.saturating_sub(first_track_row) as usize;
+    let max_position = max_offset;
+    let position =
+        (track_row * max_position + (track_len as usize - 1) / 2) / (track_len as usize - 1);
+    max_position.saturating_sub(position)
+}
+
 fn empty_as_dash(value: &str) -> &str {
     if value.is_empty() {
         "-"
     } else {
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_window_follows_tail_when_offset_is_zero() {
+        assert_eq!(visible_window(10, 4, 0), (6, 10));
+    }
+
+    #[test]
+    fn visible_window_moves_back_by_scroll_offset() {
+        assert_eq!(visible_window(10, 4, 3), (3, 7));
+    }
+
+    #[test]
+    fn visible_window_clamps_to_oldest_lines() {
+        assert_eq!(visible_window(10, 4, 50), (0, 4));
+    }
+
+    #[test]
+    fn visible_window_handles_empty_or_zero_height() {
+        assert_eq!(visible_window(0, 4, 0), (0, 0));
+        assert_eq!(visible_window(10, 0, 0), (0, 0));
+    }
+
+    #[test]
+    fn scrollbar_position_reaches_last_position_at_tail() {
+        assert_eq!(scrollbar_position(20, 0), 20);
+        assert_eq!(scrollbar_position(20, 11), 9);
+        assert_eq!(scrollbar_position(20, 20), 0);
+        assert_eq!(scrollbar_position(20, 50), 0);
+    }
+
+    #[test]
+    fn scrollbar_mouse_maps_top_middle_and_bottom_to_offsets() {
+        let output_area = Rect::new(0, 0, 40, 12);
+
+        assert_eq!(
+            scrollbar_offset_from_mouse(output_area, 30, 10, 39, 1),
+            Some(20)
+        );
+        assert_eq!(
+            scrollbar_offset_from_mouse(output_area, 30, 10, 39, 10),
+            Some(0)
+        );
+        assert_eq!(
+            scrollbar_offset_from_mouse(output_area, 30, 10, 39, 5),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn scrollbar_mouse_ignores_non_scrollbar_cells() {
+        let output_area = Rect::new(0, 0, 40, 12);
+
+        assert_eq!(
+            scrollbar_offset_from_mouse(output_area, 30, 10, 38, 1),
+            None
+        );
+        assert_eq!(
+            scrollbar_offset_from_mouse(output_area, 30, 10, 39, 12),
+            None
+        );
+    }
+
+    #[test]
+    fn scrollbar_drag_row_clamps_outside_output_area() {
+        let output_area = Rect::new(0, 10, 40, 12);
+
+        assert_eq!(scrollbar_offset_from_drag_row(output_area, 30, 10, 0), 20);
+        assert_eq!(scrollbar_offset_from_drag_row(output_area, 30, 10, 99), 0);
+    }
+
+    #[test]
+    fn mouse_scroll_up_pauses_and_scroll_down_restores_tail_follow() {
+        let mut app = app_with_lines(10);
+
+        app.scroll_up(4);
+        assert_eq!(app.scroll_offset, WHEEL_SCROLL_LINES);
+        assert_eq!(app.empty_enter_restore_count, 0);
+
+        app.scroll_down(4);
+        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.empty_enter_restore_count, 0);
+    }
+
+    #[test]
+    fn scrollbar_drag_sets_offset_until_mouse_release() {
+        let mut app = app_with_lines(30);
+        let output_area = Rect::new(0, 0, 40, 12);
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 39,
+                row: 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert!(app.dragging_scrollbar);
+        assert_eq!(app.scroll_offset, 20);
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: 20,
+                row: 10,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert_eq!(app.scroll_offset, 0);
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: 39,
+                row: 10,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert!(!app.dragging_scrollbar);
+    }
+
+    #[test]
+    fn scroll_up_is_noop_when_everything_fits() {
+        let mut app = app_with_lines(2);
+
+        app.scroll_up(4);
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn two_empty_enters_restore_tail_follow() {
+        let mut app = app_with_lines(10);
+        app.scroll_up(4);
+
+        app.handle_empty_enter_restore();
+        assert_eq!(app.scroll_offset, WHEEL_SCROLL_LINES);
+        assert_eq!(app.empty_enter_restore_count, 1);
+
+        app.handle_empty_enter_restore();
+        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.empty_enter_restore_count, 0);
+    }
+
+    #[test]
+    fn non_empty_input_actions_reset_empty_enter_restore_counter() {
+        let mut app = app_with_lines(10);
+        app.scroll_up(4);
+        app.handle_empty_enter_restore();
+
+        app.reset_empty_enter_restore();
+        assert_eq!(app.scroll_offset, WHEEL_SCROLL_LINES);
+        assert_eq!(app.empty_enter_restore_count, 0);
+    }
+
+    #[test]
+    fn appended_matching_lines_do_not_move_scrolled_view() {
+        let mut app = app_with_lines(10);
+        app.scroll_up(4);
+        assert_eq!(
+            visible_window(app.filtered_line_count(), 4, app.scroll_offset),
+            (3, 7)
+        );
+
+        app.push_line(None, "new\n".to_string());
+        assert_eq!(
+            visible_window(app.filtered_line_count(), 4, app.scroll_offset),
+            (3, 7)
+        );
+    }
+
+    #[test]
+    fn filtered_scroll_uses_matching_lines_only() {
+        let mut app = App::new("diag.log".to_string());
+        app.push_line(Some(1), "one\n".to_string());
+        app.push_line(Some(2), "two\n".to_string());
+        app.push_line(Some(1), "three\n".to_string());
+        app.filter = Some(1);
+
+        assert_eq!(app.filtered_line_count(), 2);
+        app.scroll_up(1);
+        assert_eq!(app.scroll_offset, 1);
+    }
+
+    fn app_with_lines(line_count: usize) -> App {
+        let mut app = App::new("diag.log".to_string());
+        for index in 0..line_count {
+            app.push_line(None, format!("line {index}\n"));
+        }
+        app
     }
 }

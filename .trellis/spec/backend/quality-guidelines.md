@@ -202,6 +202,11 @@ the demo, and host verification commands in the same task.
 - Host unit tests cover `listen --line`, `--send-channel`, invalid channel, missing line for one-shot `send`, and macOS `tty` to `cu` preference.
 - Host unit tests cover `tui` parser behavior, manifest request frame
   construction, and manifest decode with channel interaction modes.
+- Host unit tests cover TUI scrollback behavior: live-tail visible-window math,
+  mouse wheel pause/resume, append-while-frozen stability, filtered scroll
+  counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
+  drag continuation when the pointer leaves the scrollbar column, and scrollbar
+  bottom alignment at `scroll_offset = 0`.
 - Portable C tests cover manifest encoding of channel interaction modes.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.
 - ESP unit or review-level validation covers `esp_wiremux_write()` rejecting
