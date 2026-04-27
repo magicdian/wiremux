@@ -324,3 +324,36 @@ Added ratatui host TUI, host-initiated DeviceManifestRequest discovery, core cha
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Host TUI Log Scrollback
+
+**Date**: 2026-04-27
+**Task**: Host TUI Log Scrollback
+**Branch**: `dev`
+
+### Summary
+
+Added host TUI mouse-wheel log scrollback with frozen historical views, right-side draggable scrollbar, empty-Enter live-follow recovery, docs, specs, and tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6454642` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
