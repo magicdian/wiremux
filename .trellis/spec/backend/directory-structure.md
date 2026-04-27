@@ -412,6 +412,13 @@ Required behavior:
   latest incomplete line for the same channel, not merely to the global last
   rendered line. Non-passthrough channels continue to use line-oriented record
   display and must not inherit this per-channel stream editing behavior.
+- TUI passthrough prompt rendering is terminal-like. Empty `CR`, `LF`, or
+  `CRLF` from the active passthrough channel must complete a visible empty
+  prompt history row, so empty Enter behaves like a shell and advances history.
+  At live tail, render may append a virtual current prompt row after the latest
+  completed active-channel row; that row is presentation-only and must not be
+  stored in `App::lines`. The TUI cursor belongs in the upper output pane for
+  passthrough mode and in the bottom input box for line mode.
 - TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
   channel filters 1 through 9.
 - TUI output scrollback is an in-memory viewport over the existing bounded
@@ -448,6 +455,11 @@ Required behavior:
   echoes `help`, telemetry/log channels interleave records before the device
   echoes backspace and `p`; TUI still renders one completed ch1 line `help`,
   not a separate ch1 line containing only `p`.
+- Good: `wiremux tui` is filtered to a passthrough console channel, the device
+  completes `available commands...\n`, and no new echo has arrived. At live tail
+  TUI shows a current `ch1(console)> ` prompt row with the cursor after the
+  prompt. If the user sends empty Enter and the device echoes `CRLF`, the empty
+  prompt remains in history and TUI shows the next current prompt row.
 - Base: frame arrives one byte at a time. Host emits no partial frame until length and CRC are complete.
 - Bad: ordinary text contains `WMUX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
 - Bad: a TUI scrollbar uses the raw first visible row as its position; at live
@@ -479,7 +491,9 @@ Required behavior:
 - Host TUI passthrough changes must test single-channel stream append,
   split-record backspace echo, active-channel live-tail restoration, and stream
   continuation when other channel records interleave before the passthrough line
-  is completed.
+  is completed. Prompt UX changes must also test terminal-like empty `CRLF`
+  history rows, virtual live-tail prompt rendering after completed output, and
+  cursor placement in the output pane for passthrough mode.
 
 ## Scenario: Core Host Session and Protocol API Versioning
 

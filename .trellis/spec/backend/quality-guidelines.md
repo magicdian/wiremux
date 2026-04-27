@@ -184,6 +184,14 @@ the demo, and host verification commands in the same task.
   latest incomplete `OutputLine` for the same channel. Do not use only
   `lines.back_mut()` for passthrough stream editing, because interleaved log or
   telemetry records from other channels can otherwise split a console echo line.
+- TUI passthrough prompt rendering must preserve terminal semantics. Empty
+  `CR`, `LF`, or `CRLF` echoes are completed prompt history rows, not reusable
+  input buffers. If the latest active-channel row is complete and the view is at
+  live tail, `sources/host/src/tui.rs` may append a virtual current prompt row
+  during rendering; this row must not mutate `App::lines` or scrollback history.
+  In passthrough mode, place the terminal cursor in the output pane after the
+  active channel prompt/echo. In line mode, place the cursor in the bottom input
+  box.
 - Host manifest requests use system channel 0 with
   `payload_type = "wiremux.v1.DeviceManifestRequest"` and empty request payload.
 - Device manifest responses use `payload_type = "wiremux.v1.DeviceManifest"`
@@ -211,6 +219,8 @@ the demo, and host verification commands in the same task.
 | TUI submits input in unfiltered mode | host sends channel-1 mux input frame |
 | TUI submits input in channel filter mode | host sends mux input frame to active channel |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
+| passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
+| passthrough empty Enter echoes `CRLF` | TUI stores a completed empty prompt history row and renders the following current prompt row |
 | non-passthrough channel emits partial text then another channel emits output | TUI keeps ordinary line-oriented record display; per-channel stream editing is not applied |
 
 ### 5. Good/Base/Bad Cases
@@ -218,10 +228,16 @@ the demo, and host verification commands in the same task.
 - Good: `listen --channel 1 --line help` executes the ESP console help command and returns console text through channel 1.
 - Good: in TUI passthrough mode, device echo `h e l p`, interleaved telemetry,
   backspace echo, `p`, and `CRLF` renders as one ch1 `help` line.
+- Good: in TUI passthrough mode, a completed `available commands...\n` response
+  is followed visually by a current `ch1(console)> ` prompt row. Empty Enter
+  creates a completed empty prompt history row and advances to the next current
+  prompt, matching terminal behavior.
 - Base: telemetry and log channels continue emitting while console input is used.
 - Bad: TUI passthrough append logic edits only the global last line, causing an
   interleaved telemetry record to split a single console input echo into two
   ch1 rows.
+- Bad: treating empty `CRLF` as a reusable incomplete prompt suppresses terminal
+  Enter semantics and makes prompt history diverge from shell-like behavior.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
 - Bad: `listen` in one process and `send` in another process race on the same serial device; use `listen --line` for single-device verification.
 
@@ -239,7 +255,10 @@ the demo, and host verification commands in the same task.
 - Host unit tests cover TUI passthrough stream behavior: append until newline,
   split backspace echo, active passthrough output restoring live tail, and
   continuation of an incomplete passthrough channel line across interleaved
-  records from other channels.
+  records from other channels. Prompt behavior tests must cover empty `CRLF`
+  completing a history row, repeated empty newlines stacking prompt history,
+  virtual prompt rendering after completed output, virtual prompt rendering after
+  empty Enter, and passthrough cursor placement in the output pane.
 - Portable C tests cover manifest encoding of channel interaction modes and
   channel-name UTF-8-safe truncation.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.

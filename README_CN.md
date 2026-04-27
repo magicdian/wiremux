@@ -135,7 +135,7 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 - `listen --channel N`：只输出指定 channel 的 decoded payload。
 - `listen --line TEXT`：连接后发送一次 host-to-device input frame，然后继续用同一个串口 handle 监听。
 - `send`：发送一次 input frame 后退出。
-- `tui`：打开 ratatui 交互界面，支持 channel 过滤、滚动历史、manifest 展示和 line-mode 输入。
+- `tui`：打开 ratatui 交互界面，支持 channel 过滤、滚动历史、manifest 展示、原生输入光标以及 manifest 驱动的 line/passthrough 输入；`Ctrl-C`、`Ctrl-]` 或先按 `Esc` 再按 `x` 退出。
 
 macOS 上可以传入 `/dev/tty.usbmodem*`，host 工具会优先尝试配对的 `/dev/cu.usbmodem*`。
 

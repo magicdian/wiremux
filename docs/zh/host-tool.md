@@ -96,13 +96,14 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 - 拖动输出窗口右侧滚动条：按当前位置查看历史输出或回到底部。
 - 输入行为空时连续按两次 `Enter`：恢复自动跟随最新日志。
 - `Enter`：发送底部输入行。
-- `Esc`：清空底部输入行。
-- `Ctrl-C`：退出 TUI。
+- `Esc`：清空底部输入行；passthrough 输入下会在短暂等待后转发为 `Esc`。
+- `Ctrl-C`、`Ctrl-]`、或先按 `Esc` 再按 `x`：退出 TUI。
 
 输入路由：
 
 - 无过滤模式下，输入行默认通过 mux channel 1 发送，和 `listen --line` 的默认行为一致。
 - channel 过滤模式下，输入行通过当前过滤 channel 发送。
+- 底部输入行默认显示终端原生光标，方便定位 line-mode 输入和 passthrough 输入。
 - TUI 不会把用户输入作为 raw serial bytes 直接写入串口；host-to-device 输入仍然封装为
   `WMUX` frame + `MuxEnvelope(direction=input)`。
 - 如果 manifest 声明当前输入 channel 的 `default_interaction_mode = PASSTHROUGH`，

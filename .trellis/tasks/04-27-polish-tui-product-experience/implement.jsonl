@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host TUI CLI contract and required TUI passthrough tests"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Host Rust quality gates and TUI passthrough coverage"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing passthrough exit behavior instead of duplicating logic"}

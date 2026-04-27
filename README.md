@@ -139,7 +139,7 @@ Common commands:
 - `listen --line TEXT`: send one host-to-device input frame after connecting, then continue listening on the same serial handle.
 - `send`: send one input frame and exit.
 - `passthrough --channel N`: attach to one mux channel and forward key bytes immediately; `Ctrl-]` exits when supported by the terminal, and `Esc` then `x` is the portable exit sequence.
-- `tui`: open a ratatui interface for channel filtering, scrollback, manifest display, and manifest-driven line/passthrough input.
+- `tui`: open a ratatui interface for channel filtering, scrollback, manifest display, and manifest-driven line/passthrough input with a native input cursor; `Ctrl-C`, `Ctrl-]`, or `Esc` then `x` exits.
 
 On macOS, passing `/dev/tty.usbmodem*` is accepted, but the host tool prefers the paired `/dev/cu.usbmodem*` path for application-side connections.
 
