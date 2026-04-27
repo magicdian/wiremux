@@ -316,10 +316,24 @@ System channel manifest frames must use:
 
 `DeviceManifest` must include protocol version, max channels, max payload length,
 native endianness, transport name, SDK name/version, feature flags, and channel
-descriptors. Channel descriptors may include repeated payload kinds and payload
-types in addition to the default payload kind. Native endianness is diagnostic
-metadata for tools and binary payload interpretation; it does not change the
-`WMUX` frame layout or protobuf wire encoding.
+descriptors. Channel descriptors may include repeated payload kinds, payload
+types, and interaction modes in addition to the default payload kind and default
+interaction mode. Native endianness is diagnostic metadata for tools and binary
+payload interpretation; it does not change the `WMUX` frame layout or protobuf
+wire encoding.
+
+Host tools may request a fresh manifest by sending a system-channel input
+envelope:
+
+- `channel_id = 0`
+- `direction = input`
+- `kind = control`
+- `payload_type = "wiremux.v1.DeviceManifestRequest"`
+- `payload = wiremux.v1.DeviceManifestRequest` bytes, currently empty
+
+The device replies with the existing `wiremux.v1.DeviceManifest` payload type.
+This focused request is the current control-plane contract and may later be
+wrapped by a general control request/response protocol.
 
 ### Host CLI Contract
 
@@ -329,6 +343,7 @@ Current listener:
 wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]
 wiremux listen --port <path> [--channel output_id] [--send-channel input_id] [--line text]
 wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]
+wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500]
 ```
 
 Required behavior:
@@ -354,6 +369,12 @@ Required behavior:
 - `listen --line <text>` must write one host-to-device input frame after each successful serial connection, then keep listening on the same serial handle. This is the preferred single-process hardware verification path because most serial devices are exclusively opened.
 - `listen --line <text>` defaults to input channel 1. `--send-channel <id>` overrides the input target while `--channel <id>` keeps its output-filter meaning.
 - `send --channel <id> --line <text>` is a non-interactive one-shot path for scripts and tests, but it should not be used concurrently with a listener on the same serial device.
+- `tui` owns one serial handle, requests a manifest after connect, displays
+  decoded output in a ratatui interface, and sends bottom-line input through mux
+  input frames. In unfiltered mode TUI input targets channel 1; in channel
+  filter mode it targets the active channel.
+- TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
+  channel filters 1 through 9.
 - On macOS, prefer `/dev/cu.*` over the paired `/dev/tty.*` device when the user passes a USB serial/JTAG path.
 - Use the Rust `serialport` backend for macOS, Linux, and Windows. Do not shell out to `stty` for normal operation.
 - Host transmit commands must reuse `encode_envelope()` and `build_frame_payload_with_max()` rather than duplicating protocol constants in `main.rs`.

@@ -109,7 +109,7 @@ pub(crate) fn varint_len(mut value: u64) -> usize {
 }
 
 pub(crate) fn varint_field_len(field_number: u32, value: u64) -> usize {
-    varint_len((u64::from(field_number) << 3) | 0) + varint_len(value)
+    varint_len(u64::from(field_number) << 3) + varint_len(value)
 }
 
 pub(crate) fn bytes_field_len(field_number: u32, len: usize) -> usize {
@@ -125,7 +125,7 @@ pub(crate) fn write_varint(out: &mut Vec<u8>, mut value: u64) {
 }
 
 pub(crate) fn write_varint_field(out: &mut Vec<u8>, field_number: u32, value: u64) {
-    write_varint(out, (u64::from(field_number) << 3) | 0);
+    write_varint(out, u64::from(field_number) << 3);
     write_varint(out, value);
 }
 

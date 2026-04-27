@@ -246,7 +246,7 @@ static void init_mux(void)
         .channel_id = ESP_WIREMUX_CHANNEL_SYSTEM,
         .name = "system",
         .description = "System manifest and control messages",
-        .directions = ESP_WIREMUX_DIRECTION_OUTPUT,
+        .directions = ESP_WIREMUX_DIRECTION_INPUT | ESP_WIREMUX_DIRECTION_OUTPUT,
         .default_payload_kind = ESP_WIREMUX_PAYLOAD_KIND_CONTROL,
         .flush_policy = ESP_WIREMUX_FLUSH_IMMEDIATE,
         .backpressure_policy = ESP_WIREMUX_BACKPRESSURE_BLOCK_WITH_TIMEOUT,

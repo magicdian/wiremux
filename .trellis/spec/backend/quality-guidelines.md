@@ -127,6 +127,7 @@ Host:
 wiremux listen --port <path> [--channel id]
 wiremux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
 wiremux send --port <path> --channel <id> [--line text]
+wiremux tui --port <path>
 ```
 
 ESP:
@@ -158,6 +159,13 @@ the demo, and host verification commands in the same task.
 - Host input frames use the same magic/version/length/CRC wrapper as device output frames.
 - Host input envelopes set `direction = input`.
 - Console line-mode sends complete command lines to the console channel.
+- TUI MVP input is line-based. Unfiltered TUI input targets channel 1; filtered
+  TUI input targets the active channel. It must not raw-write user text to the
+  serial stream.
+- Host manifest requests use system channel 0 with
+  `payload_type = "wiremux.v1.DeviceManifestRequest"` and empty request payload.
+- Device manifest responses use `payload_type = "wiremux.v1.DeviceManifest"`
+  and include core-defined channel interaction modes.
 - Hardware manual verification should use `listen --line` to send and receive through one serial handle. Most serial devices do not support a separate `listen` process and `send` process at the same time.
 - `--send-channel` selects the input channel independently from the output filter `--channel`.
 - ESP line-mode console dispatch calls `esp_console_run()` or an equivalent registered dispatcher, not a hard-coded demo command table in the mux core.
@@ -177,6 +185,9 @@ the demo, and host verification commands in the same task.
 | console command fails | host can observe command error text or return status |
 | default USB Serial/JTAG driver missing | mux init installs driver before RX task starts |
 | serial disconnects during send/listen | host reconnect behavior remains deterministic |
+| host requests manifest on channel 0 | ESP emits a DeviceManifest response |
+| TUI submits input in unfiltered mode | host sends channel-1 mux input frame |
+| TUI submits input in channel filter mode | host sends mux input frame to active channel |
 
 ### 5. Good/Base/Bad Cases
 
@@ -189,6 +200,9 @@ the demo, and host verification commands in the same task.
 
 - Host unit test builds an input frame and verifies the scanner decodes it back into the expected envelope fields.
 - Host unit tests cover `listen --line`, `--send-channel`, invalid channel, missing line for one-shot `send`, and macOS `tty` to `cu` preference.
+- Host unit tests cover `tui` parser behavior, manifest request frame
+  construction, and manifest decode with channel interaction modes.
+- Portable C tests cover manifest encoding of channel interaction modes.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.
 - ESP unit or review-level validation covers `esp_wiremux_write()` rejecting
   combined direction flags and input callbacks receiving payload data that does

@@ -43,10 +43,11 @@ console API 不写死 line-mode：
 
 ```c
 typedef enum {
-    ESP_WIREMUX_CONSOLE_MODE_DISABLED = 0,
-    ESP_WIREMUX_CONSOLE_MODE_LINE = 1,
-    ESP_WIREMUX_CONSOLE_MODE_PASSTHROUGH = 2,
+    ESP_WIREMUX_CONSOLE_MODE_DISABLED = WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+    ESP_WIREMUX_CONSOLE_MODE_LINE = WIREMUX_CHANNEL_INTERACTION_LINE,
+    ESP_WIREMUX_CONSOLE_MODE_PASSTHROUGH = WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH,
 } esp_wiremux_console_mode_t;
 ```
 
-`PASSTHROUGH` 首期返回 `ESP_ERR_NOT_SUPPORTED`，但 public API 已经为后续全透传保留位置，避免后续破坏用户项目。
+interaction mode 由 core/proto 定义，ESP console API 只映射这些通用能力。
+`PASSTHROUGH` 首期返回 `ESP_ERR_NOT_SUPPORTED`，但 public API 和 manifest 已经为后续全透传保留位置，避免后续破坏用户项目。

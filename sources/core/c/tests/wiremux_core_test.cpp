@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -61,6 +62,9 @@ wiremux_device_manifest_t SampleManifest()
     static const char *const telemetry_types[] = {
         "wiremux.test.Telemetry",
     };
+    static const uint32_t console_modes[] = {
+        WIREMUX_CHANNEL_INTERACTION_LINE,
+    };
     static const wiremux_channel_descriptor_t channels[] = {
         {
             0,
@@ -73,6 +77,24 @@ wiremux_device_manifest_t SampleManifest()
             0,
             WIREMUX_PAYLOAD_KIND_CONTROL,
             0,
+            nullptr,
+            0,
+            WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+        },
+        {
+            1,
+            "console",
+            "line console",
+            WIREMUX_DIRECTION_INPUT | WIREMUX_DIRECTION_OUTPUT,
+            nullptr,
+            0,
+            nullptr,
+            0,
+            WIREMUX_PAYLOAD_KIND_TEXT,
+            0,
+            console_modes,
+            sizeof(console_modes) / sizeof(console_modes[0]),
+            WIREMUX_CHANNEL_INTERACTION_LINE,
         },
         {
             3,
@@ -85,6 +107,9 @@ wiremux_device_manifest_t SampleManifest()
             sizeof(telemetry_types) / sizeof(telemetry_types[0]),
             WIREMUX_PAYLOAD_KIND_TEXT,
             0,
+            nullptr,
+            0,
+            WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
         },
     };
     return {
@@ -522,6 +547,64 @@ TEST(WiremuxManifestTest, EncodesManifest)
     EXPECT_GT(written, 0u);
 }
 
+TEST(WiremuxManifestTest, EncodesChannelInteractionMode)
+{
+    static const uint32_t modes[] = {
+        WIREMUX_CHANNEL_INTERACTION_LINE,
+        WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH,
+    };
+    const wiremux_channel_descriptor_t channel = {
+        1,
+        "console",
+        nullptr,
+        WIREMUX_DIRECTION_INPUT | WIREMUX_DIRECTION_OUTPUT,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        0,
+        modes,
+        sizeof(modes) / sizeof(modes[0]),
+        WIREMUX_CHANNEL_INTERACTION_LINE,
+    };
+    const wiremux_device_manifest_t manifest = {
+        nullptr,
+        nullptr,
+        WIREMUX_FRAME_VERSION,
+        8,
+        &channel,
+        1,
+        WIREMUX_ENDIANNESS_LITTLE,
+        128,
+        nullptr,
+        WIREMUX_FEATURE_MANIFEST_PROTOBUF | WIREMUX_FEATURE_MANIFEST_REQUEST,
+        WIREMUX_SDK_NAME_ESP,
+        "0.1.0",
+    };
+    const size_t len = wiremux_device_manifest_encoded_len(&manifest);
+    std::vector<uint8_t> encoded(len);
+    size_t written = 0;
+
+    ASSERT_EQ(wiremux_device_manifest_encode(&manifest, encoded.data(), encoded.size(), &written),
+              WIREMUX_STATUS_OK);
+    EXPECT_EQ(written, len);
+
+    const std::vector<uint8_t> expected_channel = {
+        0x08, 0x01,
+        0x12, 0x07, 'c', 'o', 'n', 's', 'o', 'l', 'e',
+        0x20, 0x01,
+        0x20, 0x02,
+        0x28, 0x01,
+        0x40, 0x01,
+        0x48, 0x01,
+        0x48, 0x02,
+        0x50, 0x01,
+    };
+    auto it = std::search(encoded.begin(), encoded.end(), expected_channel.begin(), expected_channel.end());
+    EXPECT_NE(it, encoded.end());
+}
+
 TEST(WiremuxManifestTest, OmitsOptionalEmptyStrings)
 {
     const wiremux_device_manifest_t manifest = {
@@ -587,6 +670,9 @@ TEST(WiremuxManifestTest, RejectsInvalidChannelDescriptorPointerCounts)
         0,
         WIREMUX_PAYLOAD_KIND_TEXT,
         0,
+        nullptr,
+        0,
+        WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
     };
     manifest = SampleManifest();
     manifest.channels = &invalid_payload_kinds;
@@ -606,8 +692,31 @@ TEST(WiremuxManifestTest, RejectsInvalidChannelDescriptorPointerCounts)
         1,
         WIREMUX_PAYLOAD_KIND_TEXT,
         0,
+        nullptr,
+        0,
+        WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
     };
     manifest.channels = &invalid_payload_types;
+    EXPECT_EQ(wiremux_device_manifest_encoded_len(&manifest), 0u);
+    EXPECT_EQ(wiremux_device_manifest_encode(&manifest, out, sizeof(out), &written),
+              WIREMUX_STATUS_INVALID_ARG);
+
+    const wiremux_channel_descriptor_t invalid_interaction_modes = {
+        1,
+        "invalid",
+        nullptr,
+        WIREMUX_DIRECTION_INPUT,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        0,
+        nullptr,
+        1,
+        WIREMUX_CHANNEL_INTERACTION_LINE,
+    };
+    manifest.channels = &invalid_interaction_modes;
     EXPECT_EQ(wiremux_device_manifest_encoded_len(&manifest), 0u);
     EXPECT_EQ(wiremux_device_manifest_encode(&manifest, out, sizeof(out), &written),
               WIREMUX_STATUS_INVALID_ARG);

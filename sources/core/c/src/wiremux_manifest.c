@@ -102,7 +102,8 @@ static bool channel_descriptor_is_valid(const wiremux_channel_descriptor_t *chan
 {
     return channel != NULL &&
            (channel->payload_kind_count == 0 || channel->payload_kinds != NULL) &&
-           (channel->payload_type_count == 0 || channel->payload_types != NULL);
+           (channel->payload_type_count == 0 || channel->payload_types != NULL) &&
+           (channel->interaction_mode_count == 0 || channel->interaction_modes != NULL);
 }
 
 static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t *channel)
@@ -132,6 +133,16 @@ static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t 
     }
     if (channel->flags != 0) {
         len += wiremux_varint_field_len(7, channel->flags);
+    }
+    if (channel->interaction_mode_count > 0) {
+        for (size_t i = 0; i < channel->interaction_mode_count; ++i) {
+            len += wiremux_varint_field_len(9, channel->interaction_modes[i]);
+        }
+    } else if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        len += wiremux_varint_field_len(9, channel->default_interaction_mode);
+    }
+    if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        len += wiremux_varint_field_len(10, channel->default_interaction_mode);
     }
 
     return len;
@@ -163,6 +174,16 @@ static uint8_t *write_channel_descriptor(uint8_t *out, const wiremux_channel_des
     }
     if (channel->flags != 0) {
         out = wiremux_write_varint_field(out, 7, channel->flags);
+    }
+    if (channel->interaction_mode_count > 0) {
+        for (size_t i = 0; i < channel->interaction_mode_count; ++i) {
+            out = wiremux_write_varint_field(out, 9, channel->interaction_modes[i]);
+        }
+    } else if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 9, channel->default_interaction_mode);
+    }
+    if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 10, channel->default_interaction_mode);
     }
 
     return out;

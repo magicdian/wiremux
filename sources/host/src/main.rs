@@ -6,18 +6,20 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wiremux::batch::{decode_batch, decode_batch_records, BATCH_PAYLOAD_TYPE, COMPRESSION_NONE};
 use wiremux::codec::decompress;
-use wiremux::envelope::{
-    decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, PAYLOAD_KIND_TEXT,
-};
+use wiremux::envelope::{decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT};
 use wiremux::frame::{
     build_frame_payload_with_max, BuildFrameError, FrameError, FrameScanner, StreamEvent,
     DEFAULT_MAX_PAYLOAD_LEN,
 };
+use wiremux::manifest::{encode_manifest_request, MANIFEST_REQUEST_PAYLOAD_TYPE};
+
+mod tui;
 
 #[derive(Debug)]
 enum CliCommand {
     Listen(ListenArgs),
     Send(SendArgs),
+    Tui(TuiArgs),
 }
 
 #[derive(Debug)]
@@ -38,6 +40,14 @@ struct SendArgs {
     max_payload_len: usize,
     channel: u8,
     line: String,
+}
+
+#[derive(Debug, Clone)]
+struct TuiArgs {
+    port: PathBuf,
+    baud: u32,
+    max_payload_len: usize,
+    reconnect_delay_ms: u64,
 }
 
 struct DisplayOutput<W: Write> {
@@ -159,6 +169,7 @@ fn run() -> Result<(), String> {
     match command {
         CliCommand::Listen(args) => listen(args).map_err(|err| err.to_string()),
         CliCommand::Send(args) => send(args).map_err(|err| err.to_string()),
+        CliCommand::Tui(args) => tui::run(args).map_err(|err| err.to_string()),
     }
 }
 
@@ -552,13 +563,39 @@ fn build_input_frame(
     payload: &[u8],
     max_payload_len: usize,
 ) -> Result<Vec<u8>, BuildFrameError> {
+    build_input_frame_typed(
+        channel,
+        wiremux::envelope::PAYLOAD_KIND_TEXT,
+        "",
+        payload,
+        max_payload_len,
+    )
+}
+
+fn build_manifest_request_frame(max_payload_len: usize) -> Result<Vec<u8>, BuildFrameError> {
+    build_input_frame_typed(
+        0,
+        wiremux::envelope::PAYLOAD_KIND_CONTROL,
+        MANIFEST_REQUEST_PAYLOAD_TYPE,
+        &encode_manifest_request(),
+        max_payload_len,
+    )
+}
+
+fn build_input_frame_typed(
+    channel: u8,
+    kind: u32,
+    payload_type: &str,
+    payload: &[u8],
+    max_payload_len: usize,
+) -> Result<Vec<u8>, BuildFrameError> {
     let envelope = MuxEnvelope {
         channel_id: u32::from(channel),
         direction: DIRECTION_INPUT,
         sequence: 1,
         timestamp_us: now_micros(),
-        kind: PAYLOAD_KIND_TEXT,
-        payload_type: String::new(),
+        kind,
+        payload_type: payload_type.to_string(),
         payload: payload.to_vec(),
         flags: 0,
     };
@@ -614,6 +651,10 @@ where
         Some("send") => {
             args.next();
             "send"
+        }
+        Some("tui") => {
+            args.next();
+            "tui"
         }
         Some("-h" | "--help") => return Ok(None),
         _ => "listen",
@@ -700,6 +741,20 @@ where
             channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
             line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
         }))),
+        "tui" => {
+            if channel.is_some() || send_channel.is_some() || line.is_some() {
+                return Err(format!(
+                    "tui does not accept --channel, --send-channel, or --line\n{}",
+                    usage()
+                ));
+            }
+            Ok(Some(CliCommand::Tui(TuiArgs {
+                port,
+                baud,
+                max_payload_len,
+                reconnect_delay_ms,
+            })))
+        }
         _ => unreachable!("command is normalized before parsing"),
     }
 }
@@ -712,14 +767,15 @@ fn parse_channel(value: &str) -> Result<u8, String> {
 }
 
 fn usage() -> String {
-    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]".to_string()
+    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500]".to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_input_frame, paired_tty_cu_path, parse_args, printable_payload,
-        sanitize_port_for_filename, usbmodem_fragment, write_event, CliCommand, DisplayOutput,
+        build_input_frame, build_manifest_request_frame, paired_tty_cu_path, parse_args,
+        printable_payload, sanitize_port_for_filename, usbmodem_fragment, write_event, CliCommand,
+        DisplayOutput,
     };
     use super::{port_candidates, requested_file_name_starts_with};
     use std::path::PathBuf;
@@ -728,9 +784,10 @@ mod tests {
     };
     use wiremux::envelope::{
         decode_envelope, encode_envelope, MuxEnvelope, DIRECTION_INPUT, DIRECTION_OUTPUT,
-        PAYLOAD_KIND_BATCH, PAYLOAD_KIND_TEXT,
+        PAYLOAD_KIND_BATCH, PAYLOAD_KIND_CONTROL, PAYLOAD_KIND_TEXT,
     };
     use wiremux::frame::{FrameScanner, MuxFrame, StreamEvent};
+    use wiremux::manifest::MANIFEST_REQUEST_PAYLOAD_TYPE;
 
     fn output_envelope(channel_id: u32, payload: &[u8]) -> MuxEnvelope {
         MuxEnvelope {
@@ -874,6 +931,35 @@ mod tests {
         assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.channel, 1);
         assert_eq!(args.line, "help");
+    }
+
+    #[test]
+    fn parses_tui_subcommand() {
+        let command = parse_args(
+            ["tui", "--port", "/dev/cu.usbmodem2101", "--baud", "921600"].map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Tui(args) = command else {
+            panic!("expected tui command");
+        };
+
+        assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(args.baud, 921_600);
+        assert_eq!(
+            args.max_payload_len,
+            wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN
+        );
+    }
+
+    #[test]
+    fn rejects_tui_channel_filter_args() {
+        let err = parse_args(
+            ["tui", "--port", "/dev/cu.usbmodem2101", "--channel", "1"].map(String::from),
+        )
+        .expect_err("invalid tui args");
+
+        assert!(err.contains("tui does not accept"));
     }
 
     #[test]
@@ -1108,5 +1194,24 @@ mod tests {
         assert_eq!(envelope.direction, DIRECTION_INPUT);
         assert_eq!(envelope.kind, PAYLOAD_KIND_TEXT);
         assert_eq!(envelope.payload, b"help");
+    }
+
+    #[test]
+    fn builds_manifest_request_frame() {
+        let frame = build_manifest_request_frame(wiremux::frame::DEFAULT_MAX_PAYLOAD_LEN)
+            .expect("valid request frame");
+        let mut scanner = FrameScanner::default();
+        let events = scanner.push(&frame);
+        assert_eq!(events.len(), 1);
+
+        let StreamEvent::Frame(frame) = &events[0] else {
+            panic!("expected frame event");
+        };
+        let envelope = decode_envelope(&frame.payload).expect("valid envelope");
+        assert_eq!(envelope.channel_id, 0);
+        assert_eq!(envelope.direction, DIRECTION_INPUT);
+        assert_eq!(envelope.kind, PAYLOAD_KIND_CONTROL);
+        assert_eq!(envelope.payload_type, MANIFEST_REQUEST_PAYLOAD_TYPE);
+        assert!(envelope.payload.is_empty());
     }
 }

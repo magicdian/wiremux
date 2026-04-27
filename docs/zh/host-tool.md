@@ -8,6 +8,7 @@ Host 侧首期使用 Rust 实现，目标是单文件可执行程序。
 wiremux listen --port /dev/tty.usbmodem2101 --baud 115200
 wiremux send --port /dev/tty.usbmodem2101 --channel 1 --line help
 wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
+wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
 ```
 
 当前能力：
@@ -27,6 +28,8 @@ wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
   diagnostics 日志。
 - 非 mux 字节按普通终端输出保留。
 - 构造 host-to-device input `MuxEnvelope`，并通过同一个 `WMUX` frame 格式发送到指定 channel。
+- `wiremux tui` 提供 ratatui 交互界面，用同一个串口 handle 读取输出、发送输入、请求
+  manifest，并在界面内切换 channel 过滤。
 
 ## 输出格式
 
@@ -57,6 +60,36 @@ ch2> sensor ready
 
 这行由 host 生成，只表示 display 为避免跨 channel 混行而补了一次展示换行，不代表设备
 payload 或协议 decode 错误。
+
+## TUI 模式
+
+TUI 用于交互式调试：
+
+```bash
+cd sources/host
+cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
+```
+
+快捷键：
+
+- `Ctrl-B` 后按 `0`：无过滤模式，显示普通 terminal bytes 和所有 mux channel。
+- `Ctrl-B` 后按 `1..9`：切到对应 channel 的过滤视图。
+- `Enter`：发送底部输入行。
+- `Esc`：清空底部输入行。
+- `Ctrl-C`：退出 TUI。
+
+输入路由：
+
+- 无过滤模式下，输入行默认通过 mux channel 1 发送，和 `listen --line` 的默认行为一致。
+- channel 过滤模式下，输入行通过当前过滤 channel 发送。
+- TUI 不会把用户输入作为 raw serial bytes 直接写入串口；host-to-device 输入仍然封装为
+  `WMUX` frame + `MuxEnvelope(direction=input)`。
+
+连接成功后，TUI 会向 system channel 0 发送
+`payload_type = "wiremux.v1.DeviceManifestRequest"` 的 manifest 请求。设备返回
+`wiremux.v1.DeviceManifest` 后，TUI 会缓存并显示设备、channel 和 max payload 摘要。
+当前 MVP 的输入 UI 是 line-mode；proto/core 已经把 channel interaction mode 放到
+manifest 中，后续可以根据设备声明切换到 passthrough/key-stream 模式。
 
 ## 端口选择
 
@@ -94,8 +127,8 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 
 ```
 
 `--channel 2` 应看到 log adapter 输出，`--channel 3` 应看到 telemetry 输出。
-`mux_manifest` 会触发 channel 0 的 protobuf manifest 输出；当前 CLI 会显示
-`payload_type` 和 payload 摘要，后续可增加结构化 manifest decode。
+`mux_manifest` 会触发 channel 0 的 protobuf manifest 输出。TUI 也会在连接后主动请求
+manifest。
 `mux_diag` 会输出 batch/compression 统计，包含 raw bytes、encoded bytes、
 ratio、encode_us、decode_ok、fallback_count 和 heap_peak。
 `mux_stress` 会向 channel 2 和 channel 3 发送相同的高重复 mock payload，便于在
@@ -125,7 +158,8 @@ sources/host/target/release/wiremux
 ## 后续计划
 
 - 添加 capture/replay 子命令。
-- 协议稳定后再加入 `ratatui` TUI。
+- 增加 TUI 全局配置文件、运行时切换 port/baud，以及可配置快捷键。
+- 在设备支持 passthrough 后，让 TUI 根据 manifest 中的 interaction mode 切换输入模式。
 - 增加 service/broker 模式，由一个 host 进程独占真实串口并向多个 frontend 分发 channel。
 - 在 service/broker 基础上支持 Unix PTY 暴露，让用户用 `screen`、`minicom` 等工具打开单独 channel。
 - Windows native virtual COM 支持进入长期 roadmap，短期不作为首期跨平台虚拟设备目标。

@@ -10,12 +10,14 @@
 
 ## Host 侧运行
 
-当前 host 工具是非 TUI CLI，用于验证 mixed stream 解析、channel 过滤和 console line-mode 输入。
+当前 host 工具提供非 TUI CLI 和 ratatui TUI。CLI 适合脚本和回归验证；TUI 适合交互式
+调试、channel 过滤切换和 console line-mode 输入。
 
 ```bash
 cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
+cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 ```
 
 `/dev/tty.usbmodem2101` 是当前开发设备名，实际使用时可以替换成自己的设备路径。macOS 上如果传入 `/dev/tty.usbmodem*`，host 工具会优先尝试配对的 `/dev/cu.usbmodem*`。

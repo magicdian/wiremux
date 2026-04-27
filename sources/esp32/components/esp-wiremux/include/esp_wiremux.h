@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "wiremux_batch.h"
 #include "wiremux_envelope.h"
+#include "wiremux_manifest.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,12 @@ typedef enum {
     ESP_WIREMUX_PAYLOAD_KIND_EVENT = WIREMUX_PAYLOAD_KIND_EVENT,
     ESP_WIREMUX_PAYLOAD_KIND_BATCH = WIREMUX_PAYLOAD_KIND_BATCH,
 } esp_wiremux_payload_kind_t;
+
+typedef enum {
+    ESP_WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED = WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+    ESP_WIREMUX_CHANNEL_INTERACTION_LINE = WIREMUX_CHANNEL_INTERACTION_LINE,
+    ESP_WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH = WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH,
+} esp_wiremux_channel_interaction_mode_t;
 
 typedef enum {
     ESP_WIREMUX_FLUSH_IMMEDIATE = 0,
@@ -100,6 +107,7 @@ typedef struct {
     esp_wiremux_payload_kind_t default_payload_kind;
     esp_wiremux_flush_policy_t flush_policy;
     esp_wiremux_backpressure_policy_t backpressure_policy;
+    esp_wiremux_channel_interaction_mode_t interaction_mode;
     esp_wiremux_direction_policy_t input_policy;
     esp_wiremux_direction_policy_t output_policy;
 } esp_wiremux_channel_config_t;

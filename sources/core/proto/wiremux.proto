@@ -31,6 +31,12 @@ enum Endianness {
   ENDIANNESS_MIXED = 3;
 }
 
+enum ChannelInteractionMode {
+  CHANNEL_INTERACTION_MODE_UNSPECIFIED = 0;
+  CHANNEL_INTERACTION_MODE_LINE = 1;
+  CHANNEL_INTERACTION_MODE_PASSTHROUGH = 2;
+}
+
 message MuxEnvelope {
   uint32 channel_id = 1;
   Direction direction = 2;
@@ -72,6 +78,8 @@ message ChannelDescriptor {
   repeated string payload_types = 6;
   uint32 flags = 7;
   PayloadKind default_payload_kind = 8;
+  repeated ChannelInteractionMode interaction_modes = 9;
+  ChannelInteractionMode default_interaction_mode = 10;
 }
 
 message DeviceManifest {
@@ -86,4 +94,7 @@ message DeviceManifest {
   uint32 feature_flags = 9;
   string sdk_name = 10;
   string sdk_version = 11;
+}
+
+message DeviceManifestRequest {
 }

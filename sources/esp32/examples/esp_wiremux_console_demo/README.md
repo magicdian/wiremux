@@ -2,7 +2,7 @@
 
 This ESP-IDF example demonstrates the first integration shape for `esp_wiremux`:
 
-- channel 0: system/control manifest
+- channel 0: system/control manifest and manifest requests
 - channel 1: console line-mode adapter
 - channel 2: ESP log adapter
 - channel 3: demo telemetry/text output
@@ -58,6 +58,17 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 
 ```
 
 To see every channel in one run, omit `--channel`; `--line` defaults to sending on channel 1.
+
+For interactive channel switching, use the TUI:
+
+```bash
+cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
+```
+
+The TUI sends `DeviceManifestRequest` on channel 0 after connecting, then shows
+the returned manifest summary. Use `Ctrl-B 0` for all channels and `Ctrl-B 1..9`
+to filter a channel. Submitted input goes to channel 1 in all-channel mode and
+to the active channel in filtered mode.
 
 `mux_diag` prints per-codec counters: raw bytes, encoded bytes, ratio in milli-units,
 encode time, decode successes, fallback count, and observed heap low-water mark.
