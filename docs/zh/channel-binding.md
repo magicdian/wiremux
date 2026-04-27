@@ -53,6 +53,11 @@ console_config.mode = ESP_WIREMUX_CONSOLE_MODE_LINE;
 ESP_ERROR_CHECK(esp_wiremux_bind_console(&console_config));
 ```
 
+Passthrough channel 仍然是普通 mux channel：应用可以直接注册
+`ESP_WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH` 加 input handler，也可以使用 ESP console
+adapter 的 passthrough backend。ESP console adapter 的 backend 选择只属于 ESP 适配层，
+manifest 仍只声明通用的 interaction mode 和 passthrough policy。
+
 非法 direction、未注册 channel、output-only channel、CRC 错误和超长 payload 都不会调用 input handler。
 
 ## Backpressure

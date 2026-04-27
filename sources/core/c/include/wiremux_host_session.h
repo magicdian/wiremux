@@ -5,6 +5,7 @@
 
 #include "wiremux_envelope.h"
 #include "wiremux_frame.h"
+#include "wiremux_manifest.h"
 #include "wiremux_status.h"
 #include "wiremux_version.h"
 
@@ -84,6 +85,7 @@ typedef struct {
     uint32_t flags;
     uint32_t default_payload_kind;
     uint32_t default_interaction_mode;
+    wiremux_passthrough_policy_t passthrough_policy;
 } wiremux_host_manifest_channel_t;
 
 typedef struct {

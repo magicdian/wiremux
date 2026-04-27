@@ -6,7 +6,7 @@ This project uses one release version for host and SDK artifacts.
 
 Version format: `YYMM.DD.BuildNumber`.
 
-Current release: `2604.27.2`.
+Current release: `2604.27.3`.
 
 When publishing another release on the same date, increment `BuildNumber`. When
 publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
@@ -14,6 +14,7 @@ publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
 Examples:
 
 - `2604.27.1`: first release on 2026-04-27.
+- `2604.27.3`: passthrough console release on 2026-04-27.
 - `2604.27.2`: second release on 2026-04-27.
 - `2604.28.1`: first release on 2026-04-28.
 
@@ -175,7 +176,7 @@ Registry setup required before the first CI upload:
 5. Ensure the workflow namespace matches the registry namespace.
 
 GitHub Release events run from tag refs, for example
-`refs/tags/v2604.27.2`. Do not set Trusted Uploader Branch to `main` for this
+`refs/tags/v2604.27.3`. Do not set Trusted Uploader Branch to `main` for this
 workflow, or the registry OIDC authorization will not match. The workflow itself
 still fetches `origin/main` and fails before upload if the tagged release commit
 is not contained in `main`.

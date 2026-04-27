@@ -1,21 +1,28 @@
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use wiremux::host_session::{
     self, display_channel_name, BuildFrameError, DeviceManifest, HostDecodeStage, HostEvent,
-    HostSession, MuxEnvelope, ProtocolCompatibilityKind, DEFAULT_MAX_PAYLOAD_LEN,
+    HostSession, MuxEnvelope, PassthroughPolicy, ProtocolCompatibilityKind,
+    CHANNEL_INTERACTION_PASSTHROUGH, DEFAULT_MAX_PAYLOAD_LEN, NEWLINE_POLICY_CR,
+    NEWLINE_POLICY_CRLF, NEWLINE_POLICY_LF,
 };
 
 mod tui;
+
+const PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS: u64 = 750;
 
 #[derive(Debug)]
 enum CliCommand {
     Listen(ListenArgs),
     Send(SendArgs),
+    Passthrough(PassthroughArgs),
     Tui(TuiArgs),
 }
 
@@ -37,6 +44,14 @@ struct SendArgs {
     max_payload_len: usize,
     channel: u8,
     line: String,
+}
+
+#[derive(Debug)]
+struct PassthroughArgs {
+    port: PathBuf,
+    baud: u32,
+    max_payload_len: usize,
+    channel: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +199,7 @@ fn run() -> Result<(), String> {
     match command {
         CliCommand::Listen(args) => listen(args).map_err(|err| err.to_string()),
         CliCommand::Send(args) => send(args).map_err(|err| err.to_string()),
+        CliCommand::Passthrough(args) => passthrough(args).map_err(|err| err.to_string()),
         CliCommand::Tui(args) => tui::run(args).map_err(|err| err.to_string()),
     }
 }
@@ -305,6 +321,235 @@ fn send(args: SendArgs) -> io::Result<()> {
         connected_port.display()
     )?;
     Ok(())
+}
+
+fn passthrough(args: PassthroughArgs) -> io::Result<()> {
+    let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.port)?;
+    let (connected_port, mut port) = open_available_port(&args.port, args.baud)?;
+    writeln!(
+        diagnostics,
+        "[wiremux] passthrough connected: {} channel={}",
+        connected_port.display(),
+        args.channel
+    )?;
+
+    let request =
+        build_manifest_request_frame(args.max_payload_len).map_err(build_frame_error_to_io)?;
+    port.write_all(&request)?;
+    port.flush()?;
+
+    {
+        let mut stdout = io::stdout().lock();
+        writeln!(
+            stdout,
+            "wiremux> diagnostics: {}; passthrough ch{}; Ctrl-] or Esc x quits",
+            diagnostics_path.display(),
+            args.channel
+        )?;
+        stdout.flush()?;
+    }
+
+    enable_raw_mode()?;
+    let result = passthrough_loop(args, &mut port, &mut diagnostics);
+    disable_raw_mode()?;
+    result
+}
+
+fn passthrough_loop(
+    args: PassthroughArgs,
+    port: &mut Box<dyn serialport::SerialPort>,
+    diagnostics: &mut File,
+) -> io::Result<()> {
+    let mut session = HostSession::new(args.max_payload_len).map_err(|status| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("host session init failed: {status}"),
+        )
+    })?;
+    let mut manifest = None;
+    let mut stdout = io::stdout().lock();
+    let mut buf = [0u8; 4096];
+    let mut exit_escape_started_at = None;
+
+    loop {
+        match port.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(read_len) => {
+                for event in session.feed(&buf[..read_len]).map_err(|status| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("host session feed failed: {status}"),
+                    )
+                })? {
+                    handle_passthrough_event(
+                        &mut stdout,
+                        diagnostics,
+                        &mut manifest,
+                        u32::from(args.channel),
+                        event,
+                    )?;
+                }
+                stdout.flush()?;
+                diagnostics.flush()?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
+            Err(err) => return Err(err),
+        }
+
+        if exit_escape_started_at.is_some_and(|started_at: Instant| {
+            started_at.elapsed() >= Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
+        }) {
+            send_passthrough_key(
+                args.channel,
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+                manifest.as_ref(),
+                port,
+                args.max_payload_len,
+            )?;
+            exit_escape_started_at = None;
+        }
+
+        while event::poll(Duration::from_millis(1))? {
+            let Event::Key(key) = event::read()? else {
+                continue;
+            };
+            if is_passthrough_exit_key(key) || is_passthrough_meta_exit_key(key) {
+                return Ok(());
+            }
+
+            if exit_escape_started_at.take().is_some() {
+                if is_passthrough_escape_exit_suffix(key) {
+                    return Ok(());
+                }
+                send_passthrough_key(
+                    args.channel,
+                    KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+                    manifest.as_ref(),
+                    port,
+                    args.max_payload_len,
+                )?;
+            }
+
+            if key.code == KeyCode::Esc {
+                exit_escape_started_at = Some(Instant::now());
+                continue;
+            }
+
+            send_passthrough_key(
+                args.channel,
+                key,
+                manifest.as_ref(),
+                port,
+                args.max_payload_len,
+            )?;
+        }
+    }
+}
+
+fn send_passthrough_key(
+    channel: u8,
+    key: KeyEvent,
+    manifest: Option<&DeviceManifest>,
+    port: &mut Box<dyn serialport::SerialPort>,
+    max_payload_len: usize,
+) -> io::Result<()> {
+    let policy = manifest
+        .and_then(|manifest| passthrough_policy_for_channel(manifest, u32::from(channel)))
+        .unwrap_or_default();
+    if let Some(payload) = passthrough_key_payload(key, policy) {
+        let frame = build_input_frame(channel, &payload, max_payload_len)
+            .map_err(build_frame_error_to_io)?;
+        port.write_all(&frame)?;
+        port.flush()?;
+    }
+    Ok(())
+}
+
+fn handle_passthrough_event<W: Write, D: Write>(
+    stdout: &mut W,
+    diagnostics: &mut D,
+    manifest_state: &mut Option<DeviceManifest>,
+    channel_id: u32,
+    event: HostEvent,
+) -> io::Result<()> {
+    match event {
+        HostEvent::Terminal(bytes) => {
+            writeln!(diagnostics, "[wiremux] terminal {}", printable_payload(&bytes))
+        }
+        HostEvent::Record(envelope) => {
+            write_envelope_diagnostics(diagnostics, &envelope)?;
+            if envelope.channel_id == channel_id {
+                stdout.write_all(&envelope.payload)?;
+            }
+            Ok(())
+        }
+        HostEvent::Manifest(manifest) => {
+            writeln!(
+                diagnostics,
+                "[wiremux] manifest received: {} channels",
+                manifest.channels.len()
+            )?;
+            if !channel_supports_passthrough(&manifest, channel_id) {
+                writeln!(
+                    diagnostics,
+                    "[wiremux] channel {} does not advertise passthrough; continuing by explicit command",
+                    channel_id
+                )?;
+            }
+            *manifest_state = Some(manifest);
+            Ok(())
+        }
+        HostEvent::ProtocolCompatibility(compatibility) => {
+            match compatibility.compatibility {
+                ProtocolCompatibilityKind::Supported => writeln!(
+                    diagnostics,
+                    "[wiremux] protocol_api supported device={} host_min={} host_current={}",
+                    compatibility.device_api_version,
+                    compatibility.host_min_api_version,
+                    compatibility.host_current_api_version
+                ),
+                ProtocolCompatibilityKind::UnsupportedNew => writeln!(
+                    diagnostics,
+                    "[wiremux] protocol_api unsupported_new device={} host_current={} action=upgrade_host_sdk",
+                    compatibility.device_api_version,
+                    compatibility.host_current_api_version
+                ),
+                ProtocolCompatibilityKind::UnsupportedOld => writeln!(
+                    diagnostics,
+                    "[wiremux] protocol_api unsupported_old device={} host_min={}",
+                    compatibility.device_api_version,
+                    compatibility.host_min_api_version
+                ),
+                ProtocolCompatibilityKind::Unknown(value) => writeln!(
+                    diagnostics,
+                    "[wiremux] protocol_api unknown compatibility={value}"
+                ),
+            }
+        }
+        HostEvent::BatchSummary(summary) => writeln!(
+            diagnostics,
+            "[wiremux] batch records={} compression={} encoded_bytes={} raw_bytes={}",
+            summary.record_count, summary.compression, summary.encoded_bytes, summary.raw_bytes
+        ),
+        HostEvent::DecodeError(err) => writeln!(
+            diagnostics,
+            "[wiremux] decode_error stage={:?} status={} detail={} payload={}",
+            err.stage,
+            err.status,
+            err.detail,
+            printable_payload(&err.payload)
+        ),
+        HostEvent::CrcError(wiremux::host_session::HostCrcError {
+            version,
+            flags,
+            payload_len,
+            expected_crc,
+            actual_crc,
+        }) => writeln!(
+            diagnostics,
+            "[wiremux] crc_error version={version} flags={flags} payload_len={payload_len} expected=0x{expected_crc:08x} actual=0x{actual_crc:08x}"
+        ),
+    }
 }
 
 fn open_available_port(
@@ -639,6 +884,88 @@ fn printable_payload_type(payload_type: &str) -> &str {
     }
 }
 
+fn channel_supports_passthrough(manifest: &DeviceManifest, channel_id: u32) -> bool {
+    manifest
+        .channels
+        .iter()
+        .find(|channel| channel.channel_id == channel_id)
+        .is_some_and(|channel| {
+            channel.default_interaction_mode == CHANNEL_INTERACTION_PASSTHROUGH
+                || channel
+                    .interaction_modes
+                    .contains(&CHANNEL_INTERACTION_PASSTHROUGH)
+        })
+}
+
+fn passthrough_policy_for_channel(
+    manifest: &DeviceManifest,
+    channel_id: u32,
+) -> Option<PassthroughPolicy> {
+    manifest
+        .channels
+        .iter()
+        .find(|channel| channel.channel_id == channel_id)
+        .map(|channel| channel.passthrough_policy)
+}
+
+fn passthrough_key_payload(key: KeyEvent, policy: PassthroughPolicy) -> Option<Vec<u8>> {
+    match key.code {
+        KeyCode::Char(ch) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            ascii_control_byte(ch).map(|byte| vec![byte])
+        }
+        KeyCode::Char(ch) => {
+            let mut out = [0; 4];
+            Some(ch.encode_utf8(&mut out).as_bytes().to_vec())
+        }
+        KeyCode::Enter => Some(newline_bytes(policy.input_newline_policy).to_vec()),
+        KeyCode::Backspace => Some(vec![0x7f]),
+        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
+        KeyCode::Tab => Some(vec![b'\t']),
+        KeyCode::Esc => Some(vec![0x1b]),
+        KeyCode::Left => Some(b"\x1b[D".to_vec()),
+        KeyCode::Right => Some(b"\x1b[C".to_vec()),
+        KeyCode::Up => Some(b"\x1b[A".to_vec()),
+        KeyCode::Down => Some(b"\x1b[B".to_vec()),
+        KeyCode::Home => Some(b"\x1b[H".to_vec()),
+        KeyCode::End => Some(b"\x1b[F".to_vec()),
+        _ => None,
+    }
+}
+
+fn is_passthrough_exit_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('\u{1d}'))
+        || (key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('}')))
+}
+
+fn is_passthrough_meta_exit_key(key: KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::ALT) && is_passthrough_escape_exit_suffix(key)
+}
+
+fn is_passthrough_escape_exit_suffix(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+}
+
+fn newline_bytes(policy: u32) -> &'static [u8] {
+    match policy {
+        NEWLINE_POLICY_LF => b"\n",
+        NEWLINE_POLICY_CR => b"\r",
+        NEWLINE_POLICY_CRLF => b"\r\n",
+        _ => b"\r",
+    }
+}
+
+fn ascii_control_byte(ch: char) -> Option<u8> {
+    let lower = ch.to_ascii_lowercase();
+    if lower.is_ascii_lowercase() {
+        Some((lower as u8) & 0x1f)
+    } else if matches!(ch, '[' | '\\' | ']' | '^' | '_') {
+        Some((ch as u8) & 0x1f)
+    } else {
+        None
+    }
+}
+
 fn parse_args<I>(args: I) -> Result<Option<CliCommand>, String>
 where
     I: IntoIterator<Item = String>,
@@ -652,6 +979,10 @@ where
         Some("send") => {
             args.next();
             "send"
+        }
+        Some("passthrough" | "attach") => {
+            args.next();
+            "passthrough"
         }
         Some("tui") => {
             args.next();
@@ -742,6 +1073,21 @@ where
             channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
             line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
         }))),
+        "passthrough" => {
+            if send_channel.is_some() || line.is_some() {
+                return Err(format!(
+                    "passthrough does not accept --send-channel or --line\n{}",
+                    usage()
+                ));
+            }
+            Ok(Some(CliCommand::Passthrough(PassthroughArgs {
+                port,
+                baud,
+                max_payload_len,
+                channel: channel
+                    .ok_or_else(|| "passthrough requires --channel <id>".to_string())?,
+            })))
+        }
         "tui" => {
             if channel.is_some() || send_channel.is_some() || line.is_some() {
                 return Err(format!(
@@ -768,17 +1114,19 @@ fn parse_channel(value: &str) -> Result<u8, String> {
 }
 
 fn usage() -> String {
-    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500]".to_string()
+    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux passthrough --port <path> --channel <id> [--baud 115200] [--max-payload bytes]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500]".to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_input_frame, build_manifest_request_frame, paired_tty_cu_path, parse_args,
+        build_input_frame, build_manifest_request_frame, is_passthrough_exit_key,
+        is_passthrough_meta_exit_key, paired_tty_cu_path, parse_args, passthrough_key_payload,
         printable_payload, sanitize_port_for_filename, usbmodem_fragment, write_event, CliCommand,
         DisplayOutput,
     };
     use super::{port_candidates, requested_file_name_starts_with};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
     use wiremux::host_session::{
         BatchSummary, ChannelDescriptor, DeviceManifest, HostEvent, HostSession, MuxEnvelope,
@@ -816,6 +1164,7 @@ mod tests {
                 default_payload_kind: 0,
                 interaction_modes: Vec::new(),
                 default_interaction_mode: 0,
+                passthrough_policy: Default::default(),
             }],
             native_endianness: 0,
             max_payload_len: 512,
@@ -968,6 +1317,28 @@ mod tests {
         assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.baud, 921_600);
         assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
+    }
+
+    #[test]
+    fn parses_passthrough_subcommand() {
+        let command = parse_args(
+            [
+                "passthrough",
+                "--port",
+                "/dev/cu.usbmodem2101",
+                "--channel",
+                "1",
+            ]
+            .map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Passthrough(args) = command else {
+            panic!("expected passthrough command");
+        };
+
+        assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(args.channel, 1);
     }
 
     #[test]
@@ -1273,5 +1644,62 @@ mod tests {
         assert_eq!(envelope.kind, PAYLOAD_KIND_CONTROL);
         assert_eq!(envelope.payload_type, MANIFEST_REQUEST_PAYLOAD_TYPE);
         assert!(envelope.payload.is_empty());
+    }
+
+    #[test]
+    fn passthrough_key_payload_maps_terminal_keys() {
+        assert_eq!(
+            passthrough_key_payload(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()),
+                Default::default()
+            ),
+            Some(vec![b'a'])
+        );
+        assert_eq!(
+            passthrough_key_payload(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                Default::default()
+            ),
+            Some(vec![0x03])
+        );
+        assert_eq!(
+            passthrough_key_payload(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+                Default::default()
+            ),
+            Some(vec![b'\r'])
+        );
+    }
+
+    #[test]
+    fn passthrough_exit_key_accepts_crossterm_control_variants() {
+        assert!(is_passthrough_exit_key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(is_passthrough_exit_key(KeyEvent::new(
+            KeyCode::Char('\u{1d}'),
+            KeyModifiers::empty()
+        )));
+        assert!(!is_passthrough_exit_key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::empty()
+        )));
+    }
+
+    #[test]
+    fn passthrough_meta_exit_key_accepts_alt_x_variant() {
+        assert!(is_passthrough_meta_exit_key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::ALT
+        )));
+        assert!(is_passthrough_meta_exit_key(KeyEvent::new(
+            KeyCode::Char('X'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT
+        )));
+        assert!(!is_passthrough_meta_exit_key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::empty()
+        )));
     }
 }

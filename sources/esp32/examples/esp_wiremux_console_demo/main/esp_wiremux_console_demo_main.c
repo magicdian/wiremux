@@ -13,13 +13,26 @@
 static const char *TAG = "esp_wiremux_console_demo";
 static const size_t STRESS_SAMPLE_COUNT = 96;
 
+static esp_err_t bind_demo_console(esp_wiremux_console_mode_t mode)
+{
+    esp_wiremux_console_config_t console_config;
+    esp_wiremux_console_config_init(&console_config);
+    console_config.channel_id = 1;
+    console_config.mode = mode;
+    if (mode == ESP_WIREMUX_CONSOLE_MODE_PASSTHROUGH) {
+        console_config.passthrough_backend =
+            ESP_WIREMUX_PASSTHROUGH_BACKEND_CONSOLE_LINE_DISCIPLINE;
+    }
+    return esp_wiremux_bind_console(&console_config);
+}
+
 static int help_command(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
     return esp_wiremux_write_text(1,
                                   ESP_WIREMUX_DIRECTION_OUTPUT,
-                                  "available commands: help hello mux_manifest mux_hello mux_log mux_utf8 mux_stress mux_diag\n",
+                                  "available commands: help hello mux_manifest mux_console_mode mux_hello mux_log mux_utf8 mux_stress mux_diag\n",
                                   20);
 }
 
@@ -45,6 +58,37 @@ static int mux_manifest_command(int argc, char **argv)
                                      20);
     }
     return err;
+}
+
+static int mux_console_mode_command(int argc, char **argv)
+{
+    if (argc != 2 ||
+        (strcmp(argv[1], "line") != 0 && strcmp(argv[1], "passthrough") != 0)) {
+        return esp_wiremux_write_text(1,
+                                      ESP_WIREMUX_DIRECTION_OUTPUT,
+                                      "usage: mux_console_mode line|passthrough\n",
+                                      20);
+    }
+
+    const bool passthrough = strcmp(argv[1], "passthrough") == 0;
+    esp_err_t err = bind_demo_console(passthrough ?
+                                      ESP_WIREMUX_CONSOLE_MODE_PASSTHROUGH :
+                                      ESP_WIREMUX_CONSOLE_MODE_LINE);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = esp_wiremux_emit_manifest(20);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return esp_wiremux_write_text(1,
+                                  ESP_WIREMUX_DIRECTION_OUTPUT,
+                                  passthrough ?
+                                      "console mode: passthrough\n" :
+                                      "console mode: line\n",
+                                  20);
 }
 
 static int mux_hello_command(int argc, char **argv)
@@ -210,6 +254,14 @@ static void register_demo_commands(void)
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&mux_manifest_cmd));
 
+    const esp_console_cmd_t mux_console_mode_cmd = {
+        .command = "mux_console_mode",
+        .help = "Switch console channel between line and passthrough modes",
+        .hint = NULL,
+        .func = mux_console_mode_command,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&mux_console_mode_cmd));
+
     const esp_console_cmd_t mux_hello_cmd = {
         .command = "mux_hello",
         .help = "Emit a sample message on the mux telemetry channel",
@@ -278,11 +330,7 @@ static void init_mux(void)
     };
     ESP_ERROR_CHECK(esp_wiremux_register_channel(&system_channel));
 
-    esp_wiremux_console_config_t console_config;
-    esp_wiremux_console_config_init(&console_config);
-    console_config.channel_id = 1;
-    console_config.mode = ESP_WIREMUX_CONSOLE_MODE_LINE;
-    ESP_ERROR_CHECK(esp_wiremux_bind_console(&console_config));
+    ESP_ERROR_CHECK(bind_demo_console(ESP_WIREMUX_CONSOLE_MODE_LINE));
 
     esp_wiremux_log_config_t log_config;
     esp_wiremux_log_config_init(&log_config);

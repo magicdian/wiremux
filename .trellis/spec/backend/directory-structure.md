@@ -403,6 +403,15 @@ Required behavior:
   are available, and sends bottom-line input through mux input frames. In
   unfiltered mode TUI input targets channel 1; in channel filter mode it targets
   the active channel.
+- TUI passthrough output uses stream semantics only for channels whose manifest
+  advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/src/tui.rs` must
+  keep each passthrough channel's incomplete `OutputLine` independent: when a
+  ch1 console echo line is incomplete, interleaved ch2/ch3/ch4 log or telemetry
+  records must not force later ch1 echo bytes into a new ch1 line. Backspace
+  (`0x08` or `0x7f`) and line completion (`CR`, `LF`, `CRLF`) apply to the
+  latest incomplete line for the same channel, not merely to the global last
+  rendered line. Non-passthrough channels continue to use line-oriented record
+  display and must not inherit this per-channel stream editing behavior.
 - TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
   channel filters 1 through 9.
 - TUI output scrollback is an in-memory viewport over the existing bounded
@@ -435,6 +444,10 @@ Required behavior:
 - Good: `wiremux tui` is scrolled up while new channel-2 log rows arrive. The
   same historical rows stay visible until the user scrolls back to the bottom,
   drags the scrollbar to the bottom, or presses empty `Enter` twice.
+- Good: `wiremux tui` is filtered to a passthrough console channel, the device
+  echoes `help`, telemetry/log channels interleave records before the device
+  echoes backspace and `p`; TUI still renders one completed ch1 line `help`,
+  not a separate ch1 line containing only `p`.
 - Base: frame arrives one byte at a time. Host emits no partial frame until length and CRC are complete.
 - Bad: ordinary text contains `WMUX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
 - Bad: a TUI scrollbar uses the raw first visible row as its position; at live
@@ -463,6 +476,10 @@ Required behavior:
   behavior when matching lines are appended, empty-Enter recovery, filtered-line
   scroll counts, scrollbar row-to-offset mapping, drag behavior after leaving
   the scrollbar column, and scrollbar position at live tail.
+- Host TUI passthrough changes must test single-channel stream append,
+  split-record backspace echo, active-channel live-tail restoration, and stream
+  continuation when other channel records interleave before the passthrough line
+  is completed.
 
 ## Scenario: Core Host Session and Protocol API Versioning
 
@@ -480,7 +497,7 @@ transport, CLI/TUI presentation, and diagnostics formatting.
 C core:
 
 ```c
-#define WIREMUX_PROTOCOL_API_VERSION_CURRENT 1u
+#define WIREMUX_PROTOCOL_API_VERSION_CURRENT 2u
 #define WIREMUX_PROTOCOL_API_VERSION_MIN_SUPPORTED 1u
 
 wiremux_protocol_compatibility_t
@@ -552,8 +569,8 @@ impl HostSession {
 - Good: `wiremux_host_session_feed()` receives mixed terminal text, a manifest
   frame, and a compressed batch; Rust host receives terminal, manifest,
   compatibility, and inner record events without parsing protobuf itself.
-- Base: current API version is `1`, and `api/current/wiremux.proto` matches
-  `api/1/wiremux.proto`.
+- Base: current API version is `2`, and `api/current/wiremux.proto` matches
+  the latest frozen API snapshot.
 - Bad: Rust host decodes `MuxBatch` or `DeviceManifest` directly in CLI/TUI
   paths after the core host session API exists.
 - Bad: C core allocates event objects and expects Rust to call a matching free

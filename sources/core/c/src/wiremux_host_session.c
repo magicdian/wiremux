@@ -54,6 +54,9 @@ static wiremux_status_t emit_manifest_channels(wiremux_host_session_t *session,
 static wiremux_status_t emit_manifest_channel(wiremux_host_session_t *session,
                                               const uint8_t *data,
                                               size_t len);
+static wiremux_status_t decode_passthrough_policy(const uint8_t *data,
+                                                  size_t len,
+                                                  wiremux_passthrough_policy_t *policy);
 static wiremux_status_t handle_batch_payload(wiremux_host_session_t *session,
                                              const uint8_t *data,
                                              size_t len);
@@ -610,6 +613,12 @@ static wiremux_status_t emit_manifest_channel(wiremux_host_session_t *session,
                 channel.description.data = (const char *)field;
                 channel.description.len = field_len;
                 break;
+            case 11:
+                status = decode_passthrough_policy(field, field_len, &channel.passthrough_policy);
+                if (status != WIREMUX_STATUS_OK) {
+                    return status;
+                }
+                break;
             default:
                 break;
             }
@@ -675,6 +684,59 @@ static wiremux_status_t emit_manifest_channel(wiremux_host_session_t *session,
     memset(&event, 0, sizeof(event));
     event.type = WIREMUX_HOST_EVENT_MANIFEST_CHANNEL_END;
     session->config.on_event(&event, session->config.user_ctx);
+    return WIREMUX_STATUS_OK;
+}
+
+static wiremux_status_t decode_passthrough_policy(const uint8_t *data,
+                                                  size_t len,
+                                                  wiremux_passthrough_policy_t *policy)
+{
+    if (policy == NULL) {
+        return WIREMUX_STATUS_INVALID_ARG;
+    }
+
+    size_t cursor = 0;
+    while (cursor < len) {
+        uint64_t key = 0;
+        wiremux_status_t status = wiremux_read_varint(data, len, &cursor, &key);
+        if (status != WIREMUX_STATUS_OK) {
+            return status;
+        }
+        const uint64_t field_number = key >> 3;
+        const uint64_t wire_type = key & 0x07u;
+        if (wire_type == 0) {
+            uint64_t varint = 0;
+            status = wiremux_read_varint(data, len, &cursor, &varint);
+            if (status != WIREMUX_STATUS_OK) {
+                return status;
+            }
+            switch (field_number) {
+            case 1:
+                policy->input_newline_policy = (uint32_t)varint;
+                break;
+            case 2:
+                policy->output_newline_policy = (uint32_t)varint;
+                break;
+            case 3:
+                policy->echo_policy = (uint32_t)varint;
+                break;
+            case 4:
+                policy->control_key_policy = (uint32_t)varint;
+                break;
+            default:
+                break;
+            }
+        } else if (wire_type == 2) {
+            const uint8_t *ignored = NULL;
+            size_t ignored_len = 0;
+            status = wiremux_read_len_delimited(data, len, &cursor, &ignored, &ignored_len);
+            if (status != WIREMUX_STATUS_OK) {
+                return status;
+            }
+        } else {
+            return WIREMUX_STATUS_NOT_SUPPORTED;
+        }
+    }
     return WIREMUX_STATUS_OK;
 }
 

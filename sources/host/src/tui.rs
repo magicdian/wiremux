@@ -27,8 +27,9 @@ use wiremux::host_session::{
 
 use super::{
     build_frame_error_to_io, build_input_frame, build_manifest_request_frame,
-    create_diagnostics_file, open_available_port, printable_payload, write_envelope_diagnostics,
-    TuiArgs,
+    channel_supports_passthrough, create_diagnostics_file, is_passthrough_exit_key,
+    open_available_port, passthrough_key_payload, passthrough_policy_for_channel,
+    printable_payload, write_envelope_diagnostics, TuiArgs,
 };
 
 const MAX_LINES: usize = 1000;
@@ -37,6 +38,7 @@ const WHEEL_SCROLL_LINES: usize = 3;
 struct OutputLine {
     channel: Option<u32>,
     text: String,
+    complete: bool,
 }
 
 struct App {
@@ -52,6 +54,7 @@ struct App {
     scroll_offset: usize,
     empty_enter_restore_count: u8,
     dragging_scrollbar: bool,
+    stream_cr_pending_channel: Option<u32>,
 }
 
 impl App {
@@ -69,6 +72,7 @@ impl App {
             scroll_offset: 0,
             empty_enter_restore_count: 0,
             dragging_scrollbar: false,
+            stream_cr_pending_channel: None,
         }
     }
 
@@ -81,16 +85,26 @@ impl App {
     }
 
     fn push_record(&mut self, envelope: &MuxEnvelope) {
-        let text = String::from_utf8_lossy(&envelope.payload).into_owned();
-        self.push_line(Some(envelope.channel_id), text);
+        if self.channel_is_passthrough(envelope.channel_id) {
+            if u32::from(self.active_input_channel()) == envelope.channel_id {
+                self.follow_live_output();
+            }
+            let text = String::from_utf8_lossy(&envelope.payload).into_owned();
+            self.push_stream(Some(envelope.channel_id), &text);
+        } else {
+            let text = String::from_utf8_lossy(&envelope.payload).into_owned();
+            self.push_line(Some(envelope.channel_id), text);
+        }
     }
 
     fn push_line(&mut self, channel: Option<u32>, text: String) {
         for line in text.split_inclusive(['\n', '\r']) {
+            let complete = line.ends_with(['\n', '\r']);
             let line = line.trim_end_matches(['\n', '\r']).to_string();
             let output_line = OutputLine {
                 channel,
                 text: line,
+                complete,
             };
             if self.scroll_offset > 0 && self.line_matches_filter(&output_line) {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
@@ -109,10 +123,100 @@ impl App {
         }
     }
 
+    fn push_stream(&mut self, channel: Option<u32>, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        for ch in text.chars() {
+            self.push_stream_char(channel, ch);
+        }
+
+        while self.lines.len() > MAX_LINES {
+            self.lines.pop_front();
+        }
+    }
+
+    fn push_stream_char(&mut self, channel: Option<u32>, ch: char) {
+        if ch == '\n' && channel.is_some() && self.stream_cr_pending_channel == channel {
+            self.stream_cr_pending_channel = None;
+            return;
+        }
+
+        if ch == '\r' || ch == '\n' {
+            self.stream_cr_pending_channel = if ch == '\r' { channel } else { None };
+            self.complete_stream_line(channel);
+            return;
+        }
+
+        self.stream_cr_pending_channel = None;
+        if ch == '\u{8}' || ch == '\u{7f}' {
+            self.backspace_stream_line(channel);
+            return;
+        }
+        if ch.is_control() && ch != '\t' {
+            return;
+        }
+
+        let mut buf = [0; 4];
+        self.append_stream_segment(channel, ch.encode_utf8(&mut buf), false);
+    }
+
+    fn complete_stream_line(&mut self, channel: Option<u32>) {
+        if let Some(line) = self.incomplete_stream_line_mut(channel) {
+            line.complete = true;
+            return;
+        }
+        self.append_stream_segment(channel, "", true);
+    }
+
+    fn backspace_stream_line(&mut self, channel: Option<u32>) {
+        if let Some(line) = self.incomplete_stream_line_mut(channel) {
+            line.text.pop();
+        }
+    }
+
+    fn append_stream_segment(&mut self, channel: Option<u32>, segment: &str, complete: bool) {
+        if let Some(line) = self.incomplete_stream_line_mut(channel) {
+            line.text.push_str(segment);
+            line.complete = complete;
+            return;
+        }
+
+        let output_line = OutputLine {
+            channel,
+            text: segment.to_string(),
+            complete,
+        };
+        if self.scroll_offset > 0 && self.line_matches_filter(&output_line) {
+            self.scroll_offset = self.scroll_offset.saturating_add(1);
+        }
+        self.lines.push_back(output_line);
+    }
+
+    fn incomplete_stream_line_mut(&mut self, channel: Option<u32>) -> Option<&mut OutputLine> {
+        self.lines
+            .iter_mut()
+            .rev()
+            .find(|line| line.channel == channel && !line.complete)
+    }
+
     fn active_input_channel(&self) -> u8 {
         self.filter
             .and_then(|channel| u8::try_from(channel).ok())
             .unwrap_or(1)
+    }
+
+    fn active_input_is_passthrough(&self) -> bool {
+        self.manifest.as_ref().is_some_and(|manifest| {
+            channel_supports_passthrough(manifest, u32::from(self.active_input_channel()))
+        })
+    }
+
+    fn channel_is_passthrough(&self, channel_id: u32) -> bool {
+        self.manifest
+            .as_ref()
+            .is_some_and(|manifest| channel_supports_passthrough(manifest, channel_id))
     }
 
     fn filter_label(&self) -> String {
@@ -197,10 +301,14 @@ impl App {
     }
 
     fn restore_auto_follow(&mut self) {
+        self.follow_live_output();
+        self.status = "scrollback: following live output".to_string();
+    }
+
+    fn follow_live_output(&mut self) {
         self.scroll_offset = 0;
         self.empty_enter_restore_count = 0;
         self.dragging_scrollbar = false;
-        self.status = "scrollback: following live output".to_string();
     }
 
     fn set_scroll_offset(&mut self, scroll_offset: usize, output_height: usize) {
@@ -369,6 +477,11 @@ fn handle_key(
         return Ok(());
     }
 
+    if is_passthrough_exit_key(key) {
+        app.should_quit = true;
+        return Ok(());
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('b') {
         app.prefix_pending = true;
         app.status = "prefix: press 0 for all or 1..9 for channel".to_string();
@@ -394,6 +507,29 @@ fn handle_key(
             }
             _ => {
                 app.status = "unknown prefix command".to_string();
+            }
+        }
+        return Ok(());
+    }
+
+    if app.active_input_is_passthrough() {
+        let channel = app.active_input_channel();
+        let policy = app
+            .manifest
+            .as_ref()
+            .and_then(|manifest| passthrough_policy_for_channel(manifest, u32::from(channel)))
+            .unwrap_or_default();
+        if let Some(payload) = passthrough_key_payload(key, policy) {
+            app.restore_auto_follow();
+            let frame = build_input_frame(channel, &payload, args.max_payload_len)
+                .map_err(build_frame_error_to_io)?;
+            if let Some(port) = serial {
+                port.write_all(&frame)?;
+                port.flush()?;
+                app.status = format!("passthrough sent {} bytes to ch{channel}", payload.len());
+                app.input.clear();
+            } else {
+                app.status = "not connected; passthrough input not sent".to_string();
             }
         }
         return Ok(());
@@ -590,6 +726,9 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         .iter()
         .map(|line| {
             if let Some(channel) = line.channel {
+                if app.channel_is_passthrough(channel) && line.text.is_empty() {
+                    return Line::from("");
+                }
                 Line::from(vec![
                     Span::styled(
                         format!("{}> ", app.channel_prefix(channel)),
@@ -632,7 +771,15 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             Span::raw(app.filter_label()),
             Span::raw("  "),
             Span::styled("input ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("ch{}", app.active_input_channel())),
+            Span::raw(format!(
+                "ch{}{}",
+                app.active_input_channel(),
+                if app.active_input_is_passthrough() {
+                    " passthrough"
+                } else {
+                    " line"
+                }
+            )),
             Span::raw("  "),
             Span::styled("device ", Style::default().fg(Color::Yellow)),
             Span::raw(app.manifest_label()),
@@ -651,7 +798,11 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     ]))
     .block(
         Block::default()
-            .title("input: Enter sends, Esc clears, Ctrl-C quits")
+            .title(if app.active_input_is_passthrough() {
+                "input: passthrough, Ctrl-C or Ctrl-] quits"
+            } else {
+                "input: Enter sends, Esc clears, Ctrl-C quits"
+            })
             .borders(Borders::ALL),
     );
     frame.render_widget(input, chunks[2]);
@@ -771,7 +922,7 @@ fn empty_as_dash(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremux::host_session::ChannelDescriptor;
+    use wiremux::host_session::{ChannelDescriptor, CHANNEL_INTERACTION_PASSTHROUGH};
 
     #[test]
     fn visible_window_follows_tail_when_offset_is_zero() {
@@ -979,6 +1130,7 @@ mod tests {
                 default_payload_kind: 0,
                 interaction_modes: Vec::new(),
                 default_interaction_mode: 0,
+                passthrough_policy: Default::default(),
             }],
             native_endianness: 0,
             max_payload_len: 512,
@@ -990,6 +1142,256 @@ mod tests {
 
         assert_eq!(app.channel_prefix(4), "ch4(🚗🎒😄)");
         assert_eq!(app.channel_prefix(5), "ch5");
+    }
+
+    #[test]
+    fn active_input_mode_uses_manifest_passthrough_metadata() {
+        let mut app = App::new("diag.log".to_string());
+        app.manifest = Some(passthrough_manifest(1));
+
+        assert!(app.active_input_is_passthrough());
+    }
+
+    #[test]
+    fn passthrough_records_append_to_stream_line_until_newline() {
+        let mut app = App::new("diag.log".to_string());
+        app.manifest = Some(passthrough_manifest(1));
+
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 1,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"m".to_vec(),
+            flags: 0,
+        });
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 2,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"ux\r\n".to_vec(),
+            flags: 0,
+        });
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 3,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"help".to_vec(),
+            flags: 0,
+        });
+
+        assert_eq!(app.lines.len(), 2);
+        assert_eq!(app.lines[0].text, "mux");
+        assert!(app.lines[0].complete);
+        assert_eq!(app.lines[1].text, "help");
+        assert!(!app.lines[1].complete);
+    }
+
+    #[test]
+    fn passthrough_stream_applies_backspace_echo() {
+        let mut app = App::new("diag.log".to_string());
+        app.manifest = Some(passthrough_manifest(1));
+
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 1,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"hel\x08 \x08lp\r\n".to_vec(),
+            flags: 0,
+        });
+
+        assert_eq!(app.lines.len(), 1);
+        assert_eq!(app.lines[0].text, "help");
+        assert!(app.lines[0].complete);
+    }
+
+    #[test]
+    fn passthrough_stream_applies_split_backspace_echo() {
+        let mut app = App::new("diag.log".to_string());
+        app.manifest = Some(passthrough_manifest(1));
+
+        for (sequence, payload) in [b"hel".as_slice(), b"\x08", b" ", b"\x08", b"lp\r\n"]
+            .into_iter()
+            .enumerate()
+        {
+            app.push_record(&MuxEnvelope {
+                channel_id: 1,
+                direction: 2,
+                sequence: sequence as u32,
+                timestamp_us: 0,
+                kind: 1,
+                payload_type: String::new(),
+                payload: payload.to_vec(),
+                flags: 0,
+            });
+        }
+
+        assert_eq!(app.lines.len(), 1);
+        assert_eq!(app.lines[0].text, "help");
+        assert!(app.lines[0].complete);
+    }
+
+    #[test]
+    fn passthrough_stream_continues_after_interleaved_channel_records() {
+        let mut app = App::new("diag.log".to_string());
+        app.manifest = Some(passthrough_manifest(1));
+
+        for (sequence, payload) in [b"h".as_slice(), b"e", b"l", b"p"].into_iter().enumerate() {
+            app.push_record(&MuxEnvelope {
+                channel_id: 1,
+                direction: 2,
+                sequence: sequence as u32,
+                timestamp_us: 0,
+                kind: 1,
+                payload_type: String::new(),
+                payload: payload.to_vec(),
+                flags: 0,
+            });
+        }
+
+        app.push_record(&MuxEnvelope {
+            channel_id: 3,
+            direction: 2,
+            sequence: 10,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"demo telemetry sample\n".to_vec(),
+            flags: 0,
+        });
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 11,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"\x08 \x08".to_vec(),
+            flags: 0,
+        });
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 12,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"p\r\n".to_vec(),
+            flags: 0,
+        });
+
+        let channel_one_lines = app
+            .lines
+            .iter()
+            .filter(|line| line.channel == Some(1))
+            .collect::<Vec<_>>();
+
+        assert_eq!(channel_one_lines.len(), 1);
+        assert_eq!(channel_one_lines[0].text, "help");
+        assert!(channel_one_lines[0].complete);
+    }
+
+    #[test]
+    fn passthrough_input_restores_live_tail() {
+        let mut app = app_with_lines(10);
+        app.manifest = Some(passthrough_manifest(1));
+        app.scroll_up(4);
+        assert!(app.scroll_offset > 0);
+
+        handle_key(
+            &mut app,
+            None,
+            &TuiArgs {
+                port: "/tmp/fake".into(),
+                baud: 115200,
+                max_payload_len: 512,
+                reconnect_delay_ms: 500,
+            },
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
+        )
+        .expect("handle passthrough key");
+
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn passthrough_output_on_active_input_channel_restores_live_tail() {
+        let mut app = app_with_lines(10);
+        app.manifest = Some(passthrough_manifest(1));
+        app.scroll_up(4);
+        assert!(app.scroll_offset > 0);
+
+        app.push_record(&MuxEnvelope {
+            channel_id: 1,
+            direction: 2,
+            sequence: 1,
+            timestamp_us: 0,
+            kind: 1,
+            payload_type: String::new(),
+            payload: b"h".to_vec(),
+            flags: 0,
+        });
+
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn passthrough_exit_key_quits_tui() {
+        let mut app = App::new("diag.log".to_string());
+
+        handle_key(
+            &mut app,
+            None,
+            &TuiArgs {
+                port: "/tmp/fake".into(),
+                baud: 115200,
+                max_payload_len: 512,
+                reconnect_delay_ms: 500,
+            },
+            KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL),
+        )
+        .expect("handle passthrough exit key");
+
+        assert!(app.should_quit);
+    }
+
+    fn passthrough_manifest(channel_id: u32) -> DeviceManifest {
+        DeviceManifest {
+            device_name: String::new(),
+            firmware_version: String::new(),
+            protocol_version: 2,
+            max_channels: 8,
+            channels: vec![ChannelDescriptor {
+                channel_id,
+                name: "console".to_string(),
+                description: String::new(),
+                directions: Vec::new(),
+                payload_kinds: Vec::new(),
+                payload_types: Vec::new(),
+                flags: 0,
+                default_payload_kind: 0,
+                interaction_modes: vec![CHANNEL_INTERACTION_PASSTHROUGH],
+                default_interaction_mode: CHANNEL_INTERACTION_PASSTHROUGH,
+                passthrough_policy: Default::default(),
+            }],
+            native_endianness: 0,
+            max_payload_len: 512,
+            transport: String::new(),
+            feature_flags: 0,
+            sdk_name: String::new(),
+            sdk_version: String::new(),
+        }
     }
 
     fn app_with_lines(line_count: usize) -> App {

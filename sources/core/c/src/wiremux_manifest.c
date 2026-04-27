@@ -14,6 +14,9 @@ static uint8_t *write_optional_bounded_string_field(uint8_t *out,
                                                     const char *value,
                                                     size_t max_len);
 static bool channel_descriptor_is_valid(const wiremux_channel_descriptor_t *channel);
+static bool passthrough_policy_is_set(const wiremux_passthrough_policy_t *policy);
+static size_t passthrough_policy_encoded_len(const wiremux_passthrough_policy_t *policy);
+static uint8_t *write_passthrough_policy(uint8_t *out, const wiremux_passthrough_policy_t *policy);
 static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t *channel);
 static uint8_t *write_channel_descriptor(uint8_t *out, const wiremux_channel_descriptor_t *channel);
 
@@ -208,6 +211,50 @@ static bool channel_descriptor_is_valid(const wiremux_channel_descriptor_t *chan
            (channel->interaction_mode_count == 0 || channel->interaction_modes != NULL);
 }
 
+static bool passthrough_policy_is_set(const wiremux_passthrough_policy_t *policy)
+{
+    return policy != NULL &&
+           (policy->input_newline_policy != WIREMUX_NEWLINE_POLICY_UNSPECIFIED ||
+            policy->output_newline_policy != WIREMUX_NEWLINE_POLICY_UNSPECIFIED ||
+            policy->echo_policy != WIREMUX_ECHO_POLICY_UNSPECIFIED ||
+            policy->control_key_policy != WIREMUX_CONTROL_KEY_POLICY_UNSPECIFIED);
+}
+
+static size_t passthrough_policy_encoded_len(const wiremux_passthrough_policy_t *policy)
+{
+    size_t len = 0;
+    if (policy->input_newline_policy != WIREMUX_NEWLINE_POLICY_UNSPECIFIED) {
+        len += wiremux_varint_field_len(1, policy->input_newline_policy);
+    }
+    if (policy->output_newline_policy != WIREMUX_NEWLINE_POLICY_UNSPECIFIED) {
+        len += wiremux_varint_field_len(2, policy->output_newline_policy);
+    }
+    if (policy->echo_policy != WIREMUX_ECHO_POLICY_UNSPECIFIED) {
+        len += wiremux_varint_field_len(3, policy->echo_policy);
+    }
+    if (policy->control_key_policy != WIREMUX_CONTROL_KEY_POLICY_UNSPECIFIED) {
+        len += wiremux_varint_field_len(4, policy->control_key_policy);
+    }
+    return len;
+}
+
+static uint8_t *write_passthrough_policy(uint8_t *out, const wiremux_passthrough_policy_t *policy)
+{
+    if (policy->input_newline_policy != WIREMUX_NEWLINE_POLICY_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 1, policy->input_newline_policy);
+    }
+    if (policy->output_newline_policy != WIREMUX_NEWLINE_POLICY_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 2, policy->output_newline_policy);
+    }
+    if (policy->echo_policy != WIREMUX_ECHO_POLICY_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 3, policy->echo_policy);
+    }
+    if (policy->control_key_policy != WIREMUX_CONTROL_KEY_POLICY_UNSPECIFIED) {
+        out = wiremux_write_varint_field(out, 4, policy->control_key_policy);
+    }
+    return out;
+}
+
 static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t *channel)
 {
     size_t len = wiremux_varint_field_len(1, channel->channel_id) +
@@ -245,6 +292,9 @@ static size_t channel_descriptor_encoded_len(const wiremux_channel_descriptor_t 
     }
     if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
         len += wiremux_varint_field_len(10, channel->default_interaction_mode);
+    }
+    if (passthrough_policy_is_set(&channel->passthrough_policy)) {
+        len += wiremux_bytes_field_len(11, passthrough_policy_encoded_len(&channel->passthrough_policy));
     }
 
     return len;
@@ -286,6 +336,12 @@ static uint8_t *write_channel_descriptor(uint8_t *out, const wiremux_channel_des
     }
     if (channel->default_interaction_mode != WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED) {
         out = wiremux_write_varint_field(out, 10, channel->default_interaction_mode);
+    }
+    if (passthrough_policy_is_set(&channel->passthrough_policy)) {
+        const size_t policy_len = passthrough_policy_encoded_len(&channel->passthrough_policy);
+        out = wiremux_write_varint(out, ((uint64_t)11 << 3) | 2u);
+        out = wiremux_write_varint(out, policy_len);
+        out = write_passthrough_policy(out, &channel->passthrough_policy);
     }
 
     return out;

@@ -119,6 +119,7 @@ wiremux_device_manifest_t SampleManifest()
             nullptr,
             0,
             WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+            {},
         },
         {
             1,
@@ -134,6 +135,7 @@ wiremux_device_manifest_t SampleManifest()
             console_modes,
             sizeof(console_modes) / sizeof(console_modes[0]),
             WIREMUX_CHANNEL_INTERACTION_LINE,
+            {},
         },
         {
             3,
@@ -149,6 +151,7 @@ wiremux_device_manifest_t SampleManifest()
             nullptr,
             0,
             WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+            {},
         },
     };
     return {
@@ -178,6 +181,7 @@ struct CapturedManifest {
     uint32_t protocol_version = 0;
     uint32_t max_payload_len = 0;
     std::vector<std::string> channel_names;
+    std::vector<wiremux_passthrough_policy_t> passthrough_policies;
 };
 
 struct SessionCapture {
@@ -239,6 +243,7 @@ void CaptureEvent(const wiremux_host_event_t *event, void *user_ctx)
         break;
     case WIREMUX_HOST_EVENT_MANIFEST_CHANNEL_BEGIN:
         capture->manifest.channel_names.push_back(ViewToString(event->data.manifest_channel.name));
+        capture->manifest.passthrough_policies.push_back(event->data.manifest_channel.passthrough_policy);
         break;
     case WIREMUX_HOST_EVENT_PROTOCOL_COMPATIBILITY:
         capture->compatibility.push_back(event->data.protocol_compatibility);
@@ -709,6 +714,7 @@ TEST(WiremuxManifestTest, EncodesChannelInteractionMode)
         modes,
         sizeof(modes) / sizeof(modes[0]),
         WIREMUX_CHANNEL_INTERACTION_LINE,
+        {},
     };
     const wiremux_device_manifest_t manifest = {
         nullptr,
@@ -747,6 +753,62 @@ TEST(WiremuxManifestTest, EncodesChannelInteractionMode)
     EXPECT_NE(it, encoded.end());
 }
 
+TEST(WiremuxManifestTest, EncodesPassthroughPolicy)
+{
+    const wiremux_channel_descriptor_t channel = {
+        1,
+        "console",
+        nullptr,
+        WIREMUX_DIRECTION_INPUT | WIREMUX_DIRECTION_OUTPUT,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        WIREMUX_PAYLOAD_KIND_TEXT,
+        0,
+        nullptr,
+        0,
+        WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH,
+        {
+            WIREMUX_NEWLINE_POLICY_CR,
+            WIREMUX_NEWLINE_POLICY_PRESERVE,
+            WIREMUX_ECHO_POLICY_REMOTE,
+            WIREMUX_CONTROL_KEY_POLICY_FORWARDED,
+        },
+    };
+    const wiremux_device_manifest_t manifest = {
+        nullptr,
+        nullptr,
+        WIREMUX_PROTOCOL_API_VERSION_CURRENT,
+        8,
+        &channel,
+        1,
+        WIREMUX_ENDIANNESS_LITTLE,
+        128,
+        nullptr,
+        WIREMUX_FEATURE_MANIFEST_PROTOBUF | WIREMUX_FEATURE_MANIFEST_REQUEST,
+        WIREMUX_SDK_NAME_ESP,
+        "0.1.0",
+    };
+    const size_t len = wiremux_device_manifest_encoded_len(&manifest);
+    std::vector<uint8_t> encoded(len);
+    size_t written = 0;
+
+    ASSERT_EQ(wiremux_device_manifest_encode(&manifest, encoded.data(), encoded.size(), &written),
+              WIREMUX_STATUS_OK);
+    EXPECT_EQ(written, len);
+
+    const std::vector<uint8_t> expected_policy = {
+        0x5a, 0x08,
+        0x08, 0x03,
+        0x10, 0x01,
+        0x18, 0x01,
+        0x20, 0x02,
+    };
+    auto it = std::search(encoded.begin(), encoded.end(), expected_policy.begin(), expected_policy.end());
+    EXPECT_NE(it, encoded.end());
+}
+
 TEST(WiremuxManifestTest, ClampsChannelNameToFifteenAsciiBytes)
 {
     const wiremux_channel_descriptor_t channel = {
@@ -763,6 +825,7 @@ TEST(WiremuxManifestTest, ClampsChannelNameToFifteenAsciiBytes)
         nullptr,
         0,
         WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+        {},
     };
     const wiremux_device_manifest_t manifest = {
         nullptr,
@@ -809,6 +872,7 @@ TEST(WiremuxManifestTest, ClampsChannelNameAtUtf8Boundary)
         nullptr,
         0,
         WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+        {},
     };
     const wiremux_device_manifest_t manifest = {
         nullptr,
@@ -862,6 +926,7 @@ TEST(WiremuxManifestTest, OmitsInvalidUtf8ChannelName)
         nullptr,
         0,
         WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+        {},
     };
     const wiremux_device_manifest_t manifest = {
         nullptr,
@@ -958,6 +1023,7 @@ TEST(WiremuxManifestTest, RejectsInvalidChannelDescriptorPointerCounts)
         nullptr,
         0,
         WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+        {},
     };
     manifest = SampleManifest();
     manifest.channels = &invalid_payload_kinds;
@@ -980,6 +1046,7 @@ TEST(WiremuxManifestTest, RejectsInvalidChannelDescriptorPointerCounts)
         nullptr,
         0,
         WIREMUX_CHANNEL_INTERACTION_UNSPECIFIED,
+        {},
     };
     manifest.channels = &invalid_payload_types;
     EXPECT_EQ(wiremux_device_manifest_encoded_len(&manifest), 0u);
@@ -1000,6 +1067,7 @@ TEST(WiremuxManifestTest, RejectsInvalidChannelDescriptorPointerCounts)
         nullptr,
         1,
         WIREMUX_CHANNEL_INTERACTION_LINE,
+        {},
     };
     manifest.channels = &invalid_interaction_modes;
     EXPECT_EQ(wiremux_device_manifest_encoded_len(&manifest), 0u);
@@ -1009,7 +1077,7 @@ TEST(WiremuxManifestTest, RejectsInvalidChannelDescriptorPointerCounts)
 
 TEST(WiremuxVersionTest, ClassifiesCompileTimeSupportedApiRange)
 {
-    EXPECT_EQ(WIREMUX_PROTOCOL_API_VERSION_CURRENT, 1u);
+    EXPECT_EQ(WIREMUX_PROTOCOL_API_VERSION_CURRENT, 2u);
     EXPECT_EQ(WIREMUX_PROTOCOL_API_VERSION_MIN_SUPPORTED, 1u);
     EXPECT_EQ(wiremux_protocol_api_compatibility(WIREMUX_PROTOCOL_API_VERSION_CURRENT),
               WIREMUX_PROTOCOL_COMPAT_SUPPORTED);
@@ -1018,13 +1086,14 @@ TEST(WiremuxVersionTest, ClassifiesCompileTimeSupportedApiRange)
               WIREMUX_PROTOCOL_COMPAT_UNSUPPORTED_NEW);
 }
 
-TEST(WiremuxVersionTest, CurrentAndFrozenInitialApiSnapshotsMatchCanonicalProto)
+TEST(WiremuxVersionTest, CurrentAndFrozenApiSnapshotsMatchCanonicalProto)
 {
     const std::string root = WIREMUX_CORE_SOURCE_DIR;
     const std::string canonical = ReadFile((root + "/../proto/wiremux.proto").c_str());
     ASSERT_FALSE(canonical.empty());
     EXPECT_EQ(ReadFile((root + "/../proto/api/current/wiremux.proto").c_str()), canonical);
-    EXPECT_EQ(ReadFile((root + "/../proto/api/1/wiremux.proto").c_str()), canonical);
+    EXPECT_NE(ReadFile((root + "/../proto/api/1/wiremux.proto").c_str()), canonical);
+    EXPECT_EQ(ReadFile((root + "/../proto/api/2/wiremux.proto").c_str()), canonical);
 }
 
 TEST(WiremuxHostSessionTest, EmitsTerminalAndRecordEventsInOrder)
@@ -1087,6 +1156,16 @@ TEST(WiremuxHostSessionTest, EmitsCrcErrorsWithoutFatalStreamFailure)
 TEST(WiremuxHostSessionTest, ParsesManifestAndReportsSupportedCompatibility)
 {
     wiremux_device_manifest_t manifest = SampleManifest();
+    wiremux_channel_descriptor_t channels[3];
+    std::memcpy(channels, manifest.channels, sizeof(channels));
+    channels[1].default_interaction_mode = WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH;
+    channels[1].passthrough_policy = {
+        WIREMUX_NEWLINE_POLICY_CR,
+        WIREMUX_NEWLINE_POLICY_PRESERVE,
+        WIREMUX_ECHO_POLICY_REMOTE,
+        WIREMUX_CONTROL_KEY_POLICY_FORWARDED,
+    };
+    manifest.channels = channels;
     manifest.protocol_version = WIREMUX_PROTOCOL_API_VERSION_CURRENT;
     const std::vector<uint8_t> manifest_bytes = EncodeManifestBytes(manifest);
     const wiremux_envelope_t envelope = {
@@ -1113,6 +1192,11 @@ TEST(WiremuxHostSessionTest, ParsesManifestAndReportsSupportedCompatibility)
     EXPECT_EQ(capture.manifest.protocol_version, WIREMUX_PROTOCOL_API_VERSION_CURRENT);
     EXPECT_EQ(capture.manifest.max_payload_len, 512u);
     EXPECT_THAT(capture.manifest.channel_names, ElementsAre("system", "console", "telemetry"));
+    ASSERT_EQ(capture.manifest.passthrough_policies.size(), 3u);
+    EXPECT_EQ(capture.manifest.passthrough_policies[1].input_newline_policy, WIREMUX_NEWLINE_POLICY_CR);
+    EXPECT_EQ(capture.manifest.passthrough_policies[1].output_newline_policy, WIREMUX_NEWLINE_POLICY_PRESERVE);
+    EXPECT_EQ(capture.manifest.passthrough_policies[1].echo_policy, WIREMUX_ECHO_POLICY_REMOTE);
+    EXPECT_EQ(capture.manifest.passthrough_policies[1].control_key_policy, WIREMUX_CONTROL_KEY_POLICY_FORWARDED);
     ASSERT_EQ(capture.compatibility.size(), 1u);
     EXPECT_EQ(capture.compatibility[0].compatibility, WIREMUX_PROTOCOL_COMPAT_SUPPORTED);
 }

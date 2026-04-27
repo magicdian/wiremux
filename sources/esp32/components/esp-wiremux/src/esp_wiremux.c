@@ -413,6 +413,12 @@ esp_err_t esp_wiremux_emit_manifest(uint32_t timeout_ms)
             .default_payload_kind = s_mux.channels[i].config.default_payload_kind,
             .flags = 0,
             .default_interaction_mode = s_mux.channels[i].config.interaction_mode,
+            .passthrough_policy = {
+                .input_newline_policy = s_mux.channels[i].config.passthrough_policy.input_newline_policy,
+                .output_newline_policy = s_mux.channels[i].config.passthrough_policy.output_newline_policy,
+                .echo_policy = s_mux.channels[i].config.passthrough_policy.echo_policy,
+                .control_key_policy = s_mux.channels[i].config.passthrough_policy.control_key_policy,
+            },
         };
     }
     const size_t max_payload_len = s_mux.config.max_payload_len;

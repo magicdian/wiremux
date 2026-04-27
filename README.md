@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-[![Version](https://img.shields.io/badge/version-2604.27.2-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2604.27.3-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux is a lightweight channel multiplexer for serial-style byte streams. It lets one UART, USB CDC, USB Serial/JTAG, TCP bridge, or other ordered byte transport carry multiple logical channels at the same time, so logs, console commands, telemetry, and structured diagnostics do not have to fight over one raw stream.
@@ -128,6 +128,7 @@ Build and run the Rust host tool:
 cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
+cargo run -- passthrough --port /dev/tty.usbmodem2101 --baud 115200 --channel 1
 cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 ```
 
@@ -137,7 +138,8 @@ Common commands:
 - `listen --channel N`: print only decoded payload bytes from one channel.
 - `listen --line TEXT`: send one host-to-device input frame after connecting, then continue listening on the same serial handle.
 - `send`: send one input frame and exit.
-- `tui`: open a ratatui interface for channel filtering, scrollback, manifest display, and line-mode input.
+- `passthrough --channel N`: attach to one mux channel and forward key bytes immediately; `Ctrl-]` exits when supported by the terminal, and `Esc` then `x` is the portable exit sequence.
+- `tui`: open a ratatui interface for channel filtering, scrollback, manifest display, and manifest-driven line/passthrough input.
 
 On macOS, passing `/dev/tty.usbmodem*` is accepted, but the host tool prefers the paired `/dev/cu.usbmodem*` path for application-side connections.
 

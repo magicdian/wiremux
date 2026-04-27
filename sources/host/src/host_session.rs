@@ -11,6 +11,13 @@ pub const DIRECTION_INPUT: u32 = 1;
 pub const DIRECTION_OUTPUT: u32 = 2;
 pub const PAYLOAD_KIND_TEXT: u32 = 1;
 pub const PAYLOAD_KIND_CONTROL: u32 = 4;
+pub const CHANNEL_INTERACTION_PASSTHROUGH: u32 = 2;
+pub const NEWLINE_POLICY_PRESERVE: u32 = 1;
+pub const NEWLINE_POLICY_LF: u32 = 2;
+pub const NEWLINE_POLICY_CR: u32 = 3;
+pub const NEWLINE_POLICY_CRLF: u32 = 4;
+pub const ECHO_POLICY_REMOTE: u32 = 1;
+pub const CONTROL_KEY_POLICY_FORWARDED: u32 = 2;
 pub const MANIFEST_REQUEST_PAYLOAD_TYPE: &str = "wiremux.v1.DeviceManifestRequest";
 pub const CHANNEL_NAME_MAX_BYTES: usize = 15;
 
@@ -68,6 +75,15 @@ pub struct ChannelDescriptor {
     pub default_payload_kind: u32,
     pub interaction_modes: Vec<u32>,
     pub default_interaction_mode: u32,
+    pub passthrough_policy: PassthroughPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PassthroughPolicy {
+    pub input_newline_policy: u32,
+    pub output_newline_policy: u32,
+    pub echo_policy: u32,
+    pub control_key_policy: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,6 +374,7 @@ unsafe extern "C" fn capture_event(event: *const CWiremuxHostEvent, user_ctx: *m
                 default_payload_kind: channel.default_payload_kind,
                 interaction_modes: Vec::new(),
                 default_interaction_mode: channel.default_interaction_mode,
+                passthrough_policy: channel.passthrough_policy.into(),
             });
         }
         EVENT_MANIFEST_CHANNEL_DIRECTION => {
@@ -562,6 +579,27 @@ struct CWiremuxHostManifestChannel {
     flags: u32,
     default_payload_kind: u32,
     default_interaction_mode: u32,
+    passthrough_policy: CWiremuxPassthroughPolicy,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CWiremuxPassthroughPolicy {
+    input_newline_policy: u32,
+    output_newline_policy: u32,
+    echo_policy: u32,
+    control_key_policy: u32,
+}
+
+impl From<CWiremuxPassthroughPolicy> for PassthroughPolicy {
+    fn from(value: CWiremuxPassthroughPolicy) -> Self {
+        Self {
+            input_newline_policy: value.input_newline_policy,
+            output_newline_policy: value.output_newline_policy,
+            echo_policy: value.echo_policy,
+            control_key_policy: value.control_key_policy,
+        }
+    }
 }
 
 #[repr(C)]

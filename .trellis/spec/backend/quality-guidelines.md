@@ -123,7 +123,8 @@ typedef enum {
 } esp_wiremux_console_mode_t;
 ```
 
-`PASSTHROUGH` can return `ESP_ERR_NOT_SUPPORTED` until implemented, but the enum and config field must remain.
+`PASSTHROUGH` is implemented through configurable passthrough backends. Core
+backend names must remain platform-neutral; ESP-facing names may alias them.
 
 ## Scenario: Bidirectional Console Boundary
 
@@ -140,6 +141,7 @@ Host:
 wiremux listen --port <path> [--channel id]
 wiremux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
 wiremux send --port <path> --channel <id> [--line text]
+wiremux passthrough --port <path> --channel <id>
 wiremux tui --port <path>
 ```
 
@@ -172,9 +174,16 @@ the demo, and host verification commands in the same task.
 - Host input frames use the same magic/version/length/CRC wrapper as device output frames.
 - Host input envelopes set `direction = input`.
 - Console line-mode sends complete command lines to the console channel.
-- TUI MVP input is line-based. Unfiltered TUI input targets channel 1; filtered
-  TUI input targets the active channel. It must not raw-write user text to the
-  serial stream.
+- TUI input mode is manifest-driven. Unfiltered TUI input targets channel 1;
+  filtered TUI input targets the active channel. `LINE` channels send complete
+  command lines on Enter; `PASSTHROUGH` channels send key bytes promptly. It
+  must not raw-write user text to the serial stream outside `WMUX` frames.
+- TUI passthrough display is channel-local stream editing. In
+  `sources/host/src/tui.rs`, `complete_stream_line()`,
+  `backspace_stream_line()`, and `append_stream_segment()` must operate on the
+  latest incomplete `OutputLine` for the same channel. Do not use only
+  `lines.back_mut()` for passthrough stream editing, because interleaved log or
+  telemetry records from other channels can otherwise split a console echo line.
 - Host manifest requests use system channel 0 with
   `payload_type = "wiremux.v1.DeviceManifestRequest"` and empty request payload.
 - Device manifest responses use `payload_type = "wiremux.v1.DeviceManifest"`
@@ -201,11 +210,18 @@ the demo, and host verification commands in the same task.
 | host requests manifest on channel 0 | ESP emits a DeviceManifest response |
 | TUI submits input in unfiltered mode | host sends channel-1 mux input frame |
 | TUI submits input in channel filter mode | host sends mux input frame to active channel |
+| passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
+| non-passthrough channel emits partial text then another channel emits output | TUI keeps ordinary line-oriented record display; per-channel stream editing is not applied |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: `listen --channel 1 --line help` executes the ESP console help command and returns console text through channel 1.
+- Good: in TUI passthrough mode, device echo `h e l p`, interleaved telemetry,
+  backspace echo, `p`, and `CRLF` renders as one ch1 `help` line.
 - Base: telemetry and log channels continue emitting while console input is used.
+- Bad: TUI passthrough append logic edits only the global last line, causing an
+  interleaved telemetry record to split a single console input echo into two
+  ch1 rows.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
 - Bad: `listen` in one process and `send` in another process race on the same serial device; use `listen --line` for single-device verification.
 
@@ -220,6 +236,10 @@ the demo, and host verification commands in the same task.
   counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
   drag continuation when the pointer leaves the scrollbar column, and scrollbar
   bottom alignment at `scroll_offset = 0`.
+- Host unit tests cover TUI passthrough stream behavior: append until newline,
+  split backspace echo, active passthrough output restoring live tail, and
+  continuation of an incomplete passthrough channel line across interleaved
+  records from other channels.
 - Portable C tests cover manifest encoding of channel interaction modes and
   channel-name UTF-8-safe truncation.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.

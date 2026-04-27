@@ -37,6 +37,34 @@ enum ChannelInteractionMode {
   CHANNEL_INTERACTION_MODE_PASSTHROUGH = 2;
 }
 
+enum NewlinePolicy {
+  NEWLINE_POLICY_UNSPECIFIED = 0;
+  NEWLINE_POLICY_PRESERVE = 1;
+  NEWLINE_POLICY_LF = 2;
+  NEWLINE_POLICY_CR = 3;
+  NEWLINE_POLICY_CRLF = 4;
+}
+
+enum EchoPolicy {
+  ECHO_POLICY_UNSPECIFIED = 0;
+  ECHO_POLICY_REMOTE = 1;
+  ECHO_POLICY_LOCAL = 2;
+  ECHO_POLICY_NONE = 3;
+}
+
+enum ControlKeyPolicy {
+  CONTROL_KEY_POLICY_UNSPECIFIED = 0;
+  CONTROL_KEY_POLICY_HOST_HANDLED = 1;
+  CONTROL_KEY_POLICY_FORWARDED = 2;
+}
+
+message PassthroughPolicy {
+  NewlinePolicy input_newline_policy = 1;
+  NewlinePolicy output_newline_policy = 2;
+  EchoPolicy echo_policy = 3;
+  ControlKeyPolicy control_key_policy = 4;
+}
+
 message MuxEnvelope {
   uint32 channel_id = 1;
   Direction direction = 2;
@@ -80,6 +108,7 @@ message ChannelDescriptor {
   PayloadKind default_payload_kind = 8;
   repeated ChannelInteractionMode interaction_modes = 9;
   ChannelInteractionMode default_interaction_mode = 10;
+  PassthroughPolicy passthrough_policy = 11;
 }
 
 message DeviceManifest {
