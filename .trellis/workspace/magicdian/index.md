@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-04-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~359 | Active |
+| `journal-1.md` | ~392 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-04-27 | Clarify ESP enum aliases | `1de0107` | `dev` |
 | 9 | 2026-04-27 | Host TUI Log Scrollback | `6454642` | `dev` |
 | 8 | 2026-04-27 | Host ratatui TUI and manifest discovery | `3edebfb`, `bc11c69`, `2af4677`, `c40f7e9`, `6aa67ac`, `1e6b44f`, `ca9359d` | `dev` |
 | 7 | 2026-04-27 | Optimize host listen output | `378842d`, `fe1af9f` | `dev` |

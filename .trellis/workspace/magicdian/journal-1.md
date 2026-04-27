@@ -357,3 +357,36 @@ Added host TUI mouse-wheel log scrollback with frozen historical views, right-si
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Clarify ESP enum aliases
+
+**Date**: 2026-04-27
+**Task**: Clarify ESP enum aliases
+**Branch**: `dev`
+
+### Summary
+
+Kept ESP_WIREMUX public aliases and documented that they intentionally mirror core wire-protocol enum values without runtime conversion.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1de0107` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
