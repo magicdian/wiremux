@@ -594,3 +594,51 @@ External tool gaps in this shell:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Console passthrough mode 2604.27.3
+
+**Date**: 2026-04-27
+**Task**: Console passthrough mode 2604.27.3
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Protocol/API | Added API v2 passthrough policy metadata and froze `sources/core/proto/api/2/wiremux.proto`; bumped protocol current version to 2. |
+| Host | Added `wiremux passthrough`, manifest-driven TUI passthrough input, `Ctrl-]`/`Esc x` attach exit handling, and TUI per-channel passthrough stream rendering across interleaved logs. |
+| ESP SDK | Implemented passthrough console binding with configurable backend aliases and passthrough policy emission. |
+| Demo/Docs | Updated ESP demo with `mux_console_mode line|passthrough`, docs, release metadata, and version `2604.27.3`. |
+| Specs | Captured passthrough stream contracts and tests in backend code-specs. |
+
+**Verification**:
+- `cargo fmt --check` in `sources/host`
+- `cargo check` in `sources/host`
+- `cargo test` in `sources/host` (`58 passed`)
+- `cmake --build sources/core/c/build`
+- `ctest --test-dir sources/core/c/build --output-on-failure` (`35 passed`)
+- `idf.py build` attempted for ESP demo, but `idf.py` is not installed in this environment.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a89bfcd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

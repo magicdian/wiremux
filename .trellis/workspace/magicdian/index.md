@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-04-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~596 | Active |
+| `journal-1.md` | ~644 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-04-27 | Console passthrough mode 2604.27.3 | `a89bfcd` | `dev` |
 | 14 | 2026-04-27 | Registry example packaging release | `fec186f`, `a94bfc9` | `dev` |
 | 13 | 2026-04-27 | Core host session and protocol API versioning | `e41a832`, `d769242` | `dev` |
 | 12 | 2026-04-27 | Versioning and ESP Registry release setup | `9e4dd0b` | `dev` |
