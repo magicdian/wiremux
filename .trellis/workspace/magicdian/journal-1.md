@@ -127,7 +127,12 @@ Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework:
 
 ### Main Changes
 
-(Add details)
+- Reduced the serial read timeout used by `wiremux tui` and `wiremux passthrough`
+  from the passive listener's 100ms timeout to a 5ms interactive timeout.
+- Kept `wiremux listen` on the existing longer timeout so passive listening
+  behavior remains unchanged.
+- Updated backend specs to capture the rule that interactive host loops must not
+  gate keyboard polling behind long blocking serial reads.
 
 ### Git Commits
 
@@ -138,7 +143,11 @@ Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework:
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `git diff --check`
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test` (76 tests)
+- [OK] Human passthrough test confirmed noticeably improved typing feel.
 
 ### Status
 
@@ -775,6 +784,39 @@ Added a subdued passthrough hint to the host TUI bottom input area so users can 
 |------|---------|
 | `ee52e2b` | (see git log) |
 | `9dcffe1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 20: Reduce TUI passthrough input latency
+
+**Date**: 2026-04-28
+**Task**: Reduce TUI passthrough input latency
+**Branch**: `dev`
+
+### Summary
+
+Reduced interactive host serial read timeout for TUI and passthrough so keyboard polling is no longer gated by the passive listener timeout; documented the latency rule in backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8c807c` | (see git log) |
 
 ### Testing
 
