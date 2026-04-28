@@ -216,7 +216,14 @@ Added host-side GoogleTest/GoogleMock infrastructure for the portable C core, mi
 
 ### Main Changes
 
-(Add details)
+- Added a backend quality contract for TUI scroll responsiveness under bursty
+  terminal input.
+- Coalesced queued TUI mouse-wheel events into direction runs so stale
+  wheel-down bursts do not starve later wheel-up or quit keys.
+- Made wheel-down at live tail a cheap no-op and deferred expensive scroll range
+  recomputation to cases that need it.
+- Added regression tests for down-to-tail-then-up behavior and quit handling
+  after a stale wheel-down burst.
 
 ### Git Commits
 
@@ -887,6 +894,42 @@ Improved host TUI scrollback smoothness by reducing wheel scroll granularity, us
 ### Testing
 
 - [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 23: Fix TUI Scroll Burst Starvation
+
+**Date**: 2026-04-28
+**Task**: Fix TUI Scroll Burst Starvation
+**Branch**: `dev`
+
+### Summary
+
+Captured the TUI scroll responsiveness contract, then fixed host TUI wheel burst starvation by coalescing queued scroll events, making live-tail wheel-down cheap, and adding regression tests for wheel-up and quit responsiveness.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7921a22` | docs: capture tui scroll responsiveness contract |
+| `10f3346` | fix(tui): coalesce scroll wheel bursts |
+
+### Testing
+
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test`
 
 ### Status
 
