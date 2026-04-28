@@ -862,3 +862,36 @@ Added shared interactive backends for TUI and passthrough, Unix mio support, com
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: Fix TUI scroll smoothness
+
+**Date**: 2026-04-28
+**Task**: Fix TUI scroll smoothness
+**Branch**: `dev`
+
+### Summary
+
+Improved host TUI scrollback smoothness by reducing wheel scroll granularity, using viewport-aware scrollbar state, animating coarse scrollbar drag targets across frames, fixing live scrollback status labels, and documenting the TUI scrollbar behavior in backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a61b094` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
