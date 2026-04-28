@@ -222,6 +222,13 @@ the demo, and host verification commands in the same task.
   not use large fixed row jumps that visually defeat the configured frame rate;
   prefer one wrapped visual row per wheel event unless a dedicated smooth-scroll
   accumulator renders intermediate positions across frames.
+- TUI scroll handling must preserve input responsiveness under bursty terminal
+  input. Mouse-wheel bursts and scrollbar drags may be coalesced, but they must
+  not require the event loop to process every stale scroll event before handling
+  `Ctrl-C`, `Ctrl-]`, or `Esc x`. Avoid doing full wrapped-row recomputation once
+  per queued wheel event; cache, coalesce, or defer expensive scroll range work so
+  reverse scrolling and quit keys remain responsive while live serial output is
+  arriving.
 - TUI status must continue to show device manifest metadata including
   `DeviceManifest.protocol_version` as the device proto API version. Backend and
   FPS status belong in the existing status area, not a separate debug panel.
@@ -289,6 +296,7 @@ the demo, and host verification commands in the same task.
 | passthrough command output wraps inside a narrow output pane | scrollbar and cursor row/column follow visual wrapped rows, not the logical `OutputLine` index |
 | passthrough empty Enter echoes `CRLF` | TUI stores a completed empty prompt history row and renders the following current prompt row |
 | non-passthrough channel emits partial text then another channel emits output | TUI keeps ordinary line-oriented record display; per-channel stream editing is not applied |
+| user generates many mouse-wheel events, reaches live tail, then immediately scrolls upward or quits | TUI handles the latest direction/quit key promptly instead of draining stale wheel events first |
 
 ### 5. Good/Base/Bad Cases
 
@@ -304,6 +312,9 @@ the demo, and host verification commands in the same task.
   compat`.
 - Good: TUI status shows `api=<version>` from the received device manifest so
   users can see which proto API the device is using.
+- Good: after a long scrollback session, a burst of wheel-down events that
+  reaches live tail can be followed immediately by wheel-up or `Ctrl-C`; the TUI
+  coalesces stale scroll events and preserves quit-key responsiveness.
 - Base: telemetry and log channels continue emitting while console input is used.
 - Base: `wiremux passthrough --interactive-backend compat` works on every
   platform supported by `serialport`.
@@ -315,6 +326,8 @@ the demo, and host verification commands in the same task.
   boundary.
 - Bad: placing backend/FPS information in a separate TUI panel that hides or
   displaces the existing device manifest/version status.
+- Bad: processing every queued mouse-wheel event with a fresh full scroll-range
+  recomputation while keyboard quit events wait behind the mouse backlog.
 - Bad: treating empty `CRLF` as a reusable incomplete prompt suppresses terminal
   Enter semantics and makes prompt history diverge from shell-like behavior.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
@@ -334,7 +347,10 @@ the demo, and host verification commands in the same task.
   mouse wheel pause/resume, append-while-frozen stability, filtered scroll
   counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
   drag continuation when the pointer leaves the scrollbar column, and scrollbar
-  bottom alignment at `scroll_offset = 0`.
+  bottom alignment at `scroll_offset = 0`. Responsiveness coverage for future
+  event-loop changes must include burst coalescing or equivalent behavior where
+  stale wheel-down events do not block a later wheel-up or quit key after live
+  tail is reached.
 - Host unit tests cover TUI passthrough stream behavior: append until newline,
   split backspace echo, active passthrough output restoring live tail, and
   continuation of an incomplete passthrough channel line across interleaved
