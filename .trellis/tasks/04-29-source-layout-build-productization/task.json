@@ -45,9 +45,7 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "04-29-pr8-ci-release-validation-pass"
-  ],
+  "children": [],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
