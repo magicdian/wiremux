@@ -954,16 +954,22 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     .block(Block::default().title("status").borders(Borders::ALL));
     frame.render_widget(status, chunks[1]);
 
-    let input_line = if app.active_input_state() == InputState::ReadOnly {
-        Line::from(vec![
+    let input_line = match app.active_input_state() {
+        InputState::ReadOnly => Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::DarkGray)),
             Span::styled("read-only", Style::default().fg(Color::DarkGray)),
-        ])
-    } else {
-        Line::from(vec![
+        ]),
+        InputState::Line(_) => Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::Green)),
             Span::raw(app.input.as_str()),
-        ])
+        ]),
+        InputState::Passthrough(_) => Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "passthrough: type in output pane",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
     };
     let input = Paragraph::new(input_line).block(
         Block::default()
@@ -1969,6 +1975,24 @@ mod tests {
             terminal.get_cursor_position().expect("cursor position"),
             Position::new(input_area.x + 7, input_area.y + 1)
         );
+    }
+
+    #[test]
+    fn render_shows_passthrough_hint_in_bottom_input() {
+        let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
+        app.manifest = Some(passthrough_manifest(1));
+        app.input = "stale line input".to_string();
+        let area = Rect::new(0, 0, 80, 12);
+        let input_area = main_layout(area)[2];
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let input_row = buffer_row(terminal.backend().buffer(), input_area.y + 1, area.width);
+        assert!(input_row.contains("> passthrough: type in output pane"));
+        assert!(!input_row.contains("stale line input"));
     }
 
     #[test]

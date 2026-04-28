@@ -1,0 +1,5 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify host Rust TUI change stays in correct module"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify passthrough input rendering keeps TUI behavior and tests"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Confirm small rendering helper avoids duplicated input-state branches"}
