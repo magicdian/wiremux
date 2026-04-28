@@ -938,3 +938,43 @@ Captured the TUI scroll responsiveness contract, then fixed host TUI wheel burst
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: TUI resize EINTR fix
+
+**Date**: 2026-04-28
+**Task**: TUI resize EINTR fix
+**Branch**: `dev`
+
+### Summary
+
+Fixed TUI window resize exits caused by Interrupted system call. Added retry handling for interactive terminal/serial operations, documented the recoverable EINTR contract in backend specs, and verified with cargo fmt --check, cargo check, cargo test, plus manual resize testing.
+
+### Main Changes
+
+- Added shared `retry_interrupted()` handling for host interactive terminal operations.
+- Kept TUI and passthrough interactive loops alive when resize-driven `SIGWINCH`
+  interrupts `poll`, terminal reads, terminal size queries, or serial reads.
+- Captured the recoverable `ErrorKind::Interrupted` contract in backend error
+  handling and quality specs.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `725c6dd` | (see git log) |
+
+### Testing
+
+- [OK] Human verified `wiremux tui` no longer exits during window resize.
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test` - 86 tests passed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

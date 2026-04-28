@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 23
+- **Total Sessions**: 24
 - **Last Active**: 2026-04-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~931 | Active |
+| `journal-1.md` | ~973 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 24 | 2026-04-28 | TUI resize EINTR fix | `725c6dd` | `dev` |
 | 23 | 2026-04-28 | Fix TUI Scroll Burst Starvation | `7921a22`, `10f3346` | `dev` |
 | 22 | 2026-04-28 | Fix TUI scroll smoothness | `a61b094` | `dev` |
 | 21 | 2026-04-28 | Event-driven interactive backend | `77e5f0e` | `dev` |
