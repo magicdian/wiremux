@@ -1,6 +1,6 @@
 [package]
 name = "wiremux"
-version = "2604.27.3"
+version = "2604.28.1"
 edition = "2021"
 license = "Apache-2.0"
 

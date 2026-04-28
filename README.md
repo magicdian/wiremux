@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-[![Version](https://img.shields.io/badge/version-2604.27.3-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2604.28.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux is a lightweight channel multiplexer for serial-style byte streams. It lets one UART, USB CDC, USB Serial/JTAG, TCP bridge, or other ordered byte transport carry multiple logical channels at the same time, so logs, console commands, telemetry, and structured diagnostics do not have to fight over one raw stream.
@@ -139,7 +139,7 @@ Common commands:
 - `listen --line TEXT`: send one host-to-device input frame after connecting, then continue listening on the same serial handle.
 - `send`: send one input frame and exit.
 - `passthrough --channel N`: attach to one mux channel and forward key bytes immediately; `Ctrl-]` exits when supported by the terminal, and `Esc` then `x` is the portable exit sequence. `--interactive-backend auto|compat|mio` is optional; `auto` prefers `mio` on Unix and uses `compat` elsewhere.
-- `tui`: open a ratatui interface for channel filtering, scrollback, manifest display, backend/FPS status, and manifest-driven line/passthrough input with a native input cursor; `Ctrl-C`, `Ctrl-]`, or `Esc` then `x` exits. `--interactive-backend auto|compat|mio` selects the event backend, and `--tui-fps 60|120` overrides the automatic 60 fps default / Ghostty 120 fps detection.
+- `tui`: open a ratatui interface for channel filtering, scrollback, selectable output/status text, manifest display, backend/FPS status, and manifest-driven line/passthrough input with a native input cursor; `Ctrl-C`, `Ctrl-]`, or `Esc` then `x` exits. `--interactive-backend auto|compat|mio` selects the event backend, and `--tui-fps 60|120` overrides the automatic 60 fps default / Ghostty 120 fps detection.
 
 On macOS, passing `/dev/tty.usbmodem*` is accepted, but the host tool prefers the paired `/dev/cu.usbmodem*` path for application-side connections.
 

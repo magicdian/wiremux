@@ -235,6 +235,22 @@ the demo, and host verification commands in the same task.
   arrive during the same event burst. The up button must jump directly to the
   oldest visible position. Do not animate button clicks through a long backlog;
   reserve frame-by-frame animation for coarse scrollbar drag targets.
+- TUI text selection is application-managed because crossterm mouse capture
+  prevents terminal-native selection from seeing ratatui's internal scrollback.
+  In `sources/host/src/tui.rs`, selection state must track pane
+  (`Output`/`Status`), anchor row/column, cursor row/column, active drag state,
+  pending clipboard text, and any edge auto-scroll direction. Rendering must
+  highlight selected spans from the same wrapped visual rows used by scrollback
+  and scrollbar math. Copy actions must operate on the selected application text
+  and write through OSC 52 initially; do not assume terminal-native
+  `Command-C` or `Ctrl-Shift-C` can copy an app-drawn highlight.
+- TUI output selection edge scrolling must be frame-driven after the pointer
+  reaches the output pane's top or bottom content row. A single
+  `MouseEventKind::Drag` may start `selection_auto_scroll`, but continued
+  scrolling must not require additional mouse movement; the main loop should
+  schedule the next render deadline while auto-scroll is active and advance the
+  selection cursor as the scrollback window moves. Stop edge auto-scroll on
+  mouse release, clearing the selection, or reaching the scroll limit.
 - Interactive host loops must tolerate recoverable OS interruptions. On Unix,
   terminal resize can deliver `SIGWINCH` while the TUI is blocked in readiness
   polling, terminal event reads, terminal size queries, or serial reads. These
@@ -310,6 +326,12 @@ the demo, and host verification commands in the same task.
 | non-passthrough channel emits partial text then another channel emits output | TUI keeps ordinary line-oriented record display; per-channel stream editing is not applied |
 | user generates many mouse-wheel events, reaches live tail, then immediately scrolls upward or quits | TUI handles the latest direction/quit key promptly instead of draining stale wheel events first |
 | user clicks the scrollbar down button while new output is still arriving | TUI snaps to `scroll_offset = 0` and follows live output on the next render |
+| user drags output selection to the top content row and stops moving the mouse | TUI continues scrolling upward on render deadlines until the mouse is released or oldest visible output is reached |
+| user drags output selection to the bottom content row and stops moving the mouse | TUI continues scrolling downward on render deadlines until the mouse is released or live tail is reached |
+| user releases the mouse after selecting output/status text | TUI keeps the highlight and does not auto-copy by default |
+| user presses `Esc` while a selection exists | TUI clears the selection before treating `Esc` as the exit/input-clear prefix |
+| user presses `Ctrl-Shift-C`, `y`, `Enter`, or forwarded `Command-C` while a selection exists | TUI copies the selected application text through OSC 52 and keeps the highlight |
+| user presses terminal-native copy but the terminal intercepts the key before crossterm sees it | no app event is generated; document/use app-level copy keys instead of relying on native terminal selection |
 
 ### 5. Good/Base/Bad Cases
 
@@ -332,6 +354,11 @@ the demo, and host verification commands in the same task.
   returns to following live output. Clicking the up button jumps to the oldest
   visible scrollback position without spending many frames animating through a
   large buffer.
+- Good: dragging an output selection to the top or bottom content row starts
+  continuous auto-scroll that keeps extending the highlighted range even if the
+  mouse stays still.
+- Good: selecting status text copies exactly the visible status row text through
+  the same app-level copy path as output selection.
 - Base: telemetry and log channels continue emitting while console input is used.
 - Base: `wiremux passthrough --interactive-backend compat` works on every
   platform supported by `serialport`.
@@ -348,6 +375,11 @@ the demo, and host verification commands in the same task.
 - Bad: treating the scrollbar down button as an animated target from a stale
   row range, so new output arrives during catch-up and the TUI remains several
   rows above live tail instead of entering live-following mode.
+- Bad: implementing selection edge scroll only inside `MouseEventKind::Drag`,
+  which stalls auto-scroll whenever the pointer is held still at the pane edge.
+- Bad: relying on terminal-native selection/copy to read ratatui output while
+  `EnableMouseCapture` is active; the terminal selection engine cannot see
+  application-managed scrollback rows or highlights.
 - Bad: treating empty `CRLF` as a reusable incomplete prompt suppresses terminal
   Enter semantics and makes prompt history diverge from shell-like behavior.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
@@ -376,6 +408,12 @@ the demo, and host verification commands in the same task.
   changes must include burst coalescing or equivalent behavior where stale
   wheel-down events do not block a later wheel-up or quit key after live tail is
   reached.
+- Host unit tests cover TUI application-managed selection: output selection
+  highlights and copies visible text, status selection copies status text,
+  `Esc` clears selection before exit-prefix handling, `Ctrl-Shift-C` without a
+  selection does not quit, explicit copy keeps the selection, OSC 52 output is
+  correctly encoded, edge drag scrolls up/down, and edge auto-scroll continues
+  on render/frame advancement without requiring another mouse event.
 - Host unit tests cover TUI passthrough stream behavior: append until newline,
   split backspace echo, active passthrough output restoring live tail, and
   continuation of an incomplete passthrough channel line across interleaved

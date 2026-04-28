@@ -4,8 +4,9 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -36,6 +37,7 @@ use super::{
 const MAX_LINES: usize = 1000;
 const WHEEL_SCROLL_LINES: usize = 1;
 const TERMINAL_BURST_DRAIN_LIMIT: usize = 256;
+const SELECTION_EDGE_SCROLL_LINES: usize = 1;
 
 struct OutputLine {
     channel: Option<u32>,
@@ -52,6 +54,59 @@ struct RenderOutputRow {
     channel: Option<u32>,
     prefix: Option<String>,
     text: String,
+}
+
+struct OutputRenderModel {
+    rows: Vec<RenderOutputRow>,
+    visible_start: usize,
+    visible_end: usize,
+    content_height: usize,
+}
+
+struct StyledSegment {
+    text: String,
+    style: Style,
+}
+
+struct StatusRow {
+    segments: Vec<StyledSegment>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionPane {
+    Output,
+    Status,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionAutoScroll {
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectionPosition {
+    row: usize,
+    col: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TextSelection {
+    pane: SelectionPane,
+    anchor: SelectionPosition,
+    cursor: SelectionPosition,
+    active: bool,
+}
+
+impl TextSelection {
+    fn new(pane: SelectionPane, position: SelectionPosition) -> Self {
+        Self {
+            pane,
+            anchor: position,
+            cursor: position,
+            active: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +145,9 @@ struct App {
     scroll_target_offset: Option<usize>,
     empty_enter_restore_count: u8,
     dragging_scrollbar: bool,
+    selection: Option<TextSelection>,
+    selection_auto_scroll: Option<SelectionAutoScroll>,
+    pending_clipboard: Option<String>,
     stream_cr_pending_channel: Option<u32>,
     exit_escape_started_at: Option<Instant>,
 }
@@ -112,6 +170,9 @@ impl App {
             scroll_target_offset: None,
             empty_enter_restore_count: 0,
             dragging_scrollbar: false,
+            selection: None,
+            selection_auto_scroll: None,
+            pending_clipboard: None,
             stream_cr_pending_channel: None,
             exit_escape_started_at: None,
         }
@@ -501,6 +562,90 @@ impl App {
         let logical = rendered_output_lines(self, &filtered, append_prompt, 0, total_logical_lines);
         output_rows(self, &logical, output_width).len()
     }
+
+    fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selection_auto_scroll = None;
+        self.pending_clipboard = None;
+    }
+
+    fn has_selection(&self) -> bool {
+        self.selection
+            .as_ref()
+            .is_some_and(|selection| !selection_is_empty(selection))
+    }
+
+    fn request_copy_selection(&mut self, output_area: Rect, status_area: Rect) {
+        let Some(selection) = self.selection.as_ref() else {
+            self.status = "copy: no selection".to_string();
+            return;
+        };
+
+        let selected = match selection.pane {
+            SelectionPane::Output => {
+                let model = output_render_model(self, output_area);
+                selected_output_text(selection, &model.rows)
+            }
+            SelectionPane::Status => {
+                let rows = status_rows(self);
+                selected_status_text(selection, &rows, status_area)
+            }
+        };
+
+        if selected.is_empty() {
+            self.status = "copy: no selection".to_string();
+            return;
+        }
+
+        self.status = format!("copy: selected {} chars", selected.chars().count());
+        self.pending_clipboard = Some(selected);
+    }
+
+    fn advance_selection_auto_scroll(&mut self, output_area: Rect) -> bool {
+        let Some(direction) = self.selection_auto_scroll else {
+            return false;
+        };
+        let before = self.scroll_offset;
+        match direction {
+            SelectionAutoScroll::Up => self.scroll_up_by(output_area, SELECTION_EDGE_SCROLL_LINES),
+            SelectionAutoScroll::Down => {
+                self.scroll_down_by(output_area, SELECTION_EDGE_SCROLL_LINES)
+            }
+        }
+        let moved = self.scroll_offset != before;
+        if moved {
+            self.advance_selection_cursor_for_auto_scroll(output_area, direction);
+        }
+        if !moved {
+            self.selection_auto_scroll = None;
+        }
+        moved
+    }
+
+    fn advance_selection_cursor_for_auto_scroll(
+        &mut self,
+        output_area: Rect,
+        direction: SelectionAutoScroll,
+    ) {
+        let output_width = output_content_width(output_area);
+        let max_row = self
+            .filtered_visual_row_count(output_width)
+            .saturating_sub(1);
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        if selection.pane != SelectionPane::Output {
+            return;
+        }
+        match direction {
+            SelectionAutoScroll::Up => {
+                selection.cursor.row = selection.cursor.row.saturating_sub(1);
+            }
+            SelectionAutoScroll::Down => {
+                selection.cursor.row = selection.cursor.row.saturating_add(1).min(max_row);
+            }
+        }
+    }
 }
 
 pub fn run(args: TuiArgs) -> io::Result<()> {
@@ -509,7 +654,12 @@ pub fn run(args: TuiArgs) -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -518,6 +668,7 @@ pub fn run(args: TuiArgs) -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        PopKeyboardEnhancementFlags,
         DisableMouseCapture,
         LeaveAlternateScreen
     )?;
@@ -608,11 +759,19 @@ fn run_loop(
         }
 
         let now = Instant::now();
-        if dirty && now >= next_render_at {
+        if (dirty || app.selection_auto_scroll.is_some()) && now >= next_render_at {
+            let keep_auto_scrolling = if app.selection_auto_scroll.is_some() {
+                let terminal_area: Rect =
+                    interactive::retry_interrupted(|| terminal.size())?.into();
+                let output_area = main_layout(terminal_area)[0];
+                app.advance_selection_auto_scroll(output_area)
+            } else {
+                false
+            };
             let keep_animating = app.advance_scroll_animation();
             terminal.draw(|frame| render(frame, &app))?;
             next_render_at = Instant::now() + frame_interval;
-            dirty = keep_animating;
+            dirty = keep_animating || keep_auto_scrolling;
         }
 
         diagnostics.flush()?;
@@ -627,7 +786,7 @@ fn run_loop(
             app.exit_escape_started_at.map(|started_at| {
                 started_at + Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
             }),
-            dirty.then_some(next_render_at),
+            (dirty || app.selection_auto_scroll.is_some()).then_some(next_render_at),
         );
 
         let event = if let Some(backend) = backend.as_mut() {
@@ -667,18 +826,40 @@ fn run_loop(
                 dirty = true;
             }
             InteractiveEvent::Terminal(event) => {
-                let output_area = output_area_from_terminal_area(
-                    interactive::retry_interrupted(|| terminal.size())?.into(),
-                );
+                let terminal_area: Rect =
+                    interactive::retry_interrupted(|| terminal.size())?.into();
+                let chunks = main_layout(terminal_area);
+                let output_area = chunks[0];
+                let status_area = chunks[1];
                 let events = collect_terminal_burst(event)?;
                 if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
-                    handle_terminal_events(&mut app, output_area, Some(serial), &args, events)?;
+                    handle_terminal_events_with_areas(
+                        &mut app,
+                        output_area,
+                        status_area,
+                        Some(serial),
+                        &args,
+                        events,
+                    )?;
                 } else {
-                    handle_terminal_events(&mut app, output_area, None, &args, events)?;
+                    handle_terminal_events_with_areas(
+                        &mut app,
+                        output_area,
+                        status_area,
+                        None,
+                        &args,
+                        events,
+                    )?;
+                }
+                if let Some(text) = app.pending_clipboard.take() {
+                    write_osc52_copy(terminal.backend_mut(), &text)?;
                 }
                 dirty = true;
             }
             InteractiveEvent::Timeout => {
+                if app.selection_auto_scroll.is_some() {
+                    dirty = true;
+                }
                 if backend.is_none() && last_connect_attempt.elapsed() >= reconnect_delay {
                     continue;
                 }
@@ -741,14 +922,47 @@ fn resolve_tui_fps(override_fps: Option<u16>) -> u16 {
     }
 }
 
+#[cfg(test)]
 fn handle_key(
     app: &mut App,
     serial: Option<&mut dyn Write>,
     args: &TuiArgs,
     key: KeyEvent,
 ) -> io::Result<()> {
+    handle_key_with_areas(
+        app,
+        Rect::new(0, 0, 0, 0),
+        Rect::new(0, 0, 0, 0),
+        serial,
+        args,
+        key,
+    )
+}
+
+fn handle_key_with_areas(
+    app: &mut App,
+    output_area: Rect,
+    status_area: Rect,
+    serial: Option<&mut dyn Write>,
+    args: &TuiArgs,
+    key: KeyEvent,
+) -> io::Result<()> {
     let mut serial = serial;
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+    if app.has_selection() && is_copy_key(key) {
+        app.request_copy_selection(output_area, status_area);
+        return Ok(());
+    }
+
+    if key.code == KeyCode::Esc && app.selection.is_some() {
+        app.clear_selection();
+        app.status = "selection cleared".to_string();
+        return Ok(());
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::SHIFT)
+        && key.code == KeyCode::Char('c')
+    {
         app.should_quit = true;
         return Ok(());
     }
@@ -937,9 +1151,31 @@ enum ScrollbarMouseTarget {
     Track(usize),
 }
 
+#[cfg(test)]
 fn handle_terminal_events<I>(
     app: &mut App,
     output_area: Rect,
+    serial: Option<&mut dyn Write>,
+    args: &TuiArgs,
+    events: I,
+) -> io::Result<()>
+where
+    I: IntoIterator<Item = Event>,
+{
+    handle_terminal_events_with_areas(
+        app,
+        output_area,
+        Rect::new(0, 0, 0, 0),
+        serial,
+        args,
+        events,
+    )
+}
+
+fn handle_terminal_events_with_areas<I>(
+    app: &mut App,
+    output_area: Rect,
+    status_area: Rect,
     serial: Option<&mut dyn Write>,
     args: &TuiArgs,
     events: I,
@@ -967,7 +1203,7 @@ where
             flush_wheel_run(app, output_area, wheel_run, wheel_count);
             wheel_run = None;
             wheel_count = 0;
-            handle_mouse(app, output_area, mouse);
+            handle_mouse_with_areas(app, output_area, status_area, mouse);
         } else {
             flush_wheel_run(app, output_area, wheel_run, wheel_count);
             wheel_run = None;
@@ -975,7 +1211,7 @@ where
 
             if let Event::Key(key) = event {
                 let serial = serial.as_mut().map(|port| &mut **port as &mut dyn Write);
-                handle_key(app, serial, args, key)?;
+                handle_key_with_areas(app, output_area, status_area, serial, args, key)?;
                 if app.should_quit {
                     return Ok(());
                 }
@@ -1008,7 +1244,12 @@ fn mouse_wheel_direction(mouse: &MouseEvent) -> Option<WheelDirection> {
     }
 }
 
+#[cfg(test)]
 fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
+    handle_mouse_with_areas(app, output_area, Rect::new(0, 0, 0, 0), mouse);
+}
+
+fn handle_mouse_with_areas(app: &mut App, output_area: Rect, status_area: Rect, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollUp => app.scroll_up(output_area),
         MouseEventKind::ScrollDown => app.scroll_down(output_area),
@@ -1023,15 +1264,27 @@ fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
                 mouse.column,
                 mouse.row,
             ) {
-                Some(ScrollbarMouseTarget::UpButton) => app.jump_to_oldest_visible(output_area),
-                Some(ScrollbarMouseTarget::DownButton) => app.restore_auto_follow(),
+                Some(ScrollbarMouseTarget::UpButton) => {
+                    app.clear_selection();
+                    app.jump_to_oldest_visible(output_area);
+                }
+                Some(ScrollbarMouseTarget::DownButton) => {
+                    app.clear_selection();
+                    app.restore_auto_follow();
+                }
                 Some(ScrollbarMouseTarget::Track(offset)) => {
+                    app.clear_selection();
                     app.dragging_scrollbar = true;
                     app.animate_to_scroll_offset(offset, output_area);
                 }
                 None => {
                     app.dragging_scrollbar = false;
-                    app.reset_empty_enter_restore();
+                    if start_text_selection(app, output_area, status_area, mouse) {
+                        app.reset_empty_enter_restore();
+                    } else {
+                        app.clear_selection();
+                        app.reset_empty_enter_restore();
+                    }
                 }
             }
         }
@@ -1043,12 +1296,151 @@ fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
                 scrollbar_offset_from_drag_row(output_area, total_rows, output_height, mouse.row);
             app.animate_to_scroll_offset(offset, output_area);
         }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            update_text_selection(app, output_area, status_area, mouse);
+        }
         MouseEventKind::Up(MouseButton::Left) => {
             app.dragging_scrollbar = false;
+            app.selection_auto_scroll = None;
+            finish_text_selection(app);
             app.reset_empty_enter_restore();
         }
         _ => app.reset_empty_enter_restore(),
     }
+}
+
+fn start_text_selection(
+    app: &mut App,
+    output_area: Rect,
+    status_area: Rect,
+    mouse: MouseEvent,
+) -> bool {
+    if let Some(position) = output_selection_position(app, output_area, mouse.column, mouse.row) {
+        app.selection = Some(TextSelection::new(SelectionPane::Output, position));
+        app.selection_auto_scroll = None;
+        return true;
+    }
+
+    let status = status_rows(app);
+    if let Some(position) = status_selection_position(&status, status_area, mouse.column, mouse.row)
+    {
+        app.selection = Some(TextSelection::new(SelectionPane::Status, position));
+        app.selection_auto_scroll = None;
+        return true;
+    }
+
+    false
+}
+
+fn update_text_selection(app: &mut App, output_area: Rect, status_area: Rect, mouse: MouseEvent) {
+    let Some(pane) = app.selection.as_ref().map(|selection| selection.pane) else {
+        return;
+    };
+
+    match pane {
+        SelectionPane::Output => {
+            apply_selection_edge_scroll(app, output_area, mouse.row);
+            if let Some(position) =
+                output_selection_position(app, output_area, mouse.column, mouse.row)
+            {
+                if let Some(selection) = app.selection.as_mut() {
+                    selection.cursor = position;
+                }
+            }
+        }
+        SelectionPane::Status => {
+            let rows = status_rows(app);
+            if let Some(position) =
+                status_selection_position(&rows, status_area, mouse.column, mouse.row)
+            {
+                if let Some(selection) = app.selection.as_mut() {
+                    selection.cursor = position;
+                }
+            }
+        }
+    }
+}
+
+fn finish_text_selection(app: &mut App) {
+    if let Some(selection) = app.selection.as_mut() {
+        selection.active = false;
+        if selection_is_empty(selection) {
+            app.selection = None;
+        }
+    }
+}
+
+fn apply_selection_edge_scroll(app: &mut App, output_area: Rect, row: u16) {
+    if output_area.height <= 2 {
+        app.selection_auto_scroll = None;
+        return;
+    }
+
+    let top = output_area.y.saturating_add(1);
+    let bottom = output_area
+        .y
+        .saturating_add(output_area.height.saturating_sub(2));
+    if row <= top {
+        app.selection_auto_scroll = Some(SelectionAutoScroll::Up);
+        app.scroll_up_by(output_area, SELECTION_EDGE_SCROLL_LINES);
+    } else if row >= bottom {
+        app.selection_auto_scroll = Some(SelectionAutoScroll::Down);
+        app.scroll_down_by(output_area, SELECTION_EDGE_SCROLL_LINES);
+    } else {
+        app.selection_auto_scroll = None;
+    }
+}
+
+fn output_selection_position(
+    app: &App,
+    output_area: Rect,
+    column: u16,
+    row: u16,
+) -> Option<SelectionPosition> {
+    if !inside_content(output_area, column, row) {
+        return None;
+    }
+
+    let model = output_render_model(app, output_area);
+    let visible_row = row.saturating_sub(output_area.y).saturating_sub(1) as usize;
+    let row_index = model.visible_start.saturating_add(visible_row);
+    let render_row = model.rows.get(row_index)?;
+    let text = row_text(render_row);
+    Some(SelectionPosition {
+        row: row_index,
+        col: content_col(output_area, column).min(char_len(&text)),
+    })
+}
+
+fn status_selection_position(
+    rows: &[StatusRow],
+    status_area: Rect,
+    column: u16,
+    row: u16,
+) -> Option<SelectionPosition> {
+    if !inside_content(status_area, column, row) {
+        return None;
+    }
+
+    let row_index = row.saturating_sub(status_area.y).saturating_sub(1) as usize;
+    let status_row = rows.get(row_index)?;
+    Some(SelectionPosition {
+        row: row_index,
+        col: content_col(status_area, column).min(char_len(&status_row_text(status_row))),
+    })
+}
+
+fn inside_content(area: Rect, column: u16, row: u16) -> bool {
+    area.width > 2
+        && area.height > 2
+        && column > area.x
+        && column < area.x.saturating_add(area.width).saturating_sub(1)
+        && row > area.y
+        && row < area.y.saturating_add(area.height).saturating_sub(1)
+}
+
+fn content_col(area: Rect, column: u16) -> usize {
+    column.saturating_sub(area.x).saturating_sub(1) as usize
 }
 
 fn handle_stream_event(app: &mut App, diagnostics: &mut File, event: HostEvent) -> io::Result<()> {
@@ -1165,36 +1557,19 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     let chunks = main_layout(frame.area());
 
     let output_area = chunks[0];
-    let height = output_content_height(output_area);
-    let width = output_content_width(output_area);
-    let filtered = app
-        .lines
+    let output_model = output_render_model(app, output_area);
+    let visible = output_model.rows[output_model.visible_start..output_model.visible_end]
         .iter()
-        .filter(|line| app.line_matches_filter(line))
         .collect::<Vec<_>>();
-    let append_prompt = should_append_passthrough_prompt(app, &filtered);
-    let total_logical_lines = filtered.len() + usize::from(append_prompt);
-    let logical = rendered_output_lines(app, &filtered, append_prompt, 0, total_logical_lines);
-    let rows = output_rows(app, &logical, width);
-    let total_rendered_lines = rows.len();
-    let (start, end) = visible_window(total_rendered_lines, height, app.scroll_offset);
-    let visible = rows[start..end].iter().collect::<Vec<_>>();
     let lines = visible
         .iter()
-        .map(|line| {
-            if let Some(prefix) = line.prefix.as_deref() {
-                Line::from(vec![
-                    Span::styled(
-                        prefix,
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(line.text.as_str()),
-                ])
-            } else {
-                Line::from(line.text.as_str())
-            }
+        .enumerate()
+        .map(|(index, line)| {
+            render_output_row(
+                line,
+                output_model.visible_start.saturating_add(index),
+                app.selection.as_ref(),
+            )
         })
         .collect::<Vec<_>>();
 
@@ -1205,15 +1580,16 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     );
     frame.render_widget(output, output_area);
 
-    let max_offset = max_scroll_offset(total_rendered_lines, height);
+    let total_rendered_lines = output_model.rows.len();
+    let max_offset = max_scroll_offset(total_rendered_lines, output_model.content_height);
     if max_offset > 0 {
         let mut scrollbar_state = ScrollbarState::new(total_rendered_lines)
             .position(scrollbar_position(
                 total_rendered_lines,
-                height,
+                output_model.content_height,
                 app.scroll_offset,
             ))
-            .viewport_content_length(height);
+            .viewport_content_length(output_model.content_height);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             output_area,
@@ -1221,29 +1597,13 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         );
     }
 
-    let status = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled("filter ", Style::default().fg(Color::Yellow)),
-            Span::raw(app.filter_label()),
-            Span::raw("  "),
-            Span::styled("input ", Style::default().fg(Color::Yellow)),
-            Span::raw(app.input_label()),
-            Span::raw("  "),
-            Span::styled("device ", Style::default().fg(Color::Yellow)),
-            Span::raw(app.manifest_label()),
-        ]),
-        Line::from(vec![
-            Span::styled("backend ", Style::default().fg(Color::Yellow)),
-            Span::raw(app.backend_label.as_str()),
-            Span::raw("  "),
-            Span::styled("fps ", Style::default().fg(Color::Yellow)),
-            Span::raw(app.target_fps.to_string()),
-            Span::raw("  "),
-            Span::styled("status ", Style::default().fg(Color::Yellow)),
-            Span::raw(status_label(app)),
-        ]),
-    ])
-    .block(Block::default().title("status").borders(Borders::ALL));
+    let status_lines = status_rows(app)
+        .iter()
+        .enumerate()
+        .map(|(index, row)| render_status_row(row, index, app.selection.as_ref()))
+        .collect::<Vec<_>>();
+    let status =
+        Paragraph::new(status_lines).block(Block::default().title("status").borders(Borders::ALL));
     frame.render_widget(status, chunks[1]);
 
     let input_line = match app.active_input_state() {
@@ -1272,6 +1632,102 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     set_cursor_position(frame, app, output_area, &visible, chunks[2]);
 }
 
+fn render_output_row(
+    row: &RenderOutputRow,
+    row_index: usize,
+    selection: Option<&TextSelection>,
+) -> Line<'static> {
+    let selected = selection_range_for_row(
+        selection,
+        SelectionPane::Output,
+        row_index,
+        char_len(&row_text(row)),
+    );
+    let mut spans = Vec::new();
+    let prefix_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let mut offset = 0usize;
+    if let Some(prefix) = row.prefix.as_deref() {
+        append_selectable_spans(&mut spans, prefix, prefix_style, selected, offset);
+        offset = offset.saturating_add(char_len(prefix));
+    }
+    append_selectable_spans(
+        &mut spans,
+        row.text.as_str(),
+        Style::default(),
+        selected,
+        offset,
+    );
+    Line::from(spans)
+}
+
+fn render_status_row(
+    row: &StatusRow,
+    row_index: usize,
+    selection: Option<&TextSelection>,
+) -> Line<'static> {
+    let selected = selection_range_for_row(
+        selection,
+        SelectionPane::Status,
+        row_index,
+        char_len(&status_row_text(row)),
+    );
+    let mut spans = Vec::new();
+    let mut offset = 0usize;
+    for segment in &row.segments {
+        append_selectable_spans(
+            &mut spans,
+            segment.text.as_str(),
+            segment.style,
+            selected,
+            offset,
+        );
+        offset = offset.saturating_add(char_len(&segment.text));
+    }
+    Line::from(spans)
+}
+
+fn append_selectable_spans(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    style: Style,
+    selected: Option<(usize, usize)>,
+    offset: usize,
+) {
+    let Some((start, end)) = selected else {
+        spans.push(Span::styled(text.to_string(), style));
+        return;
+    };
+
+    let segment_start = offset;
+    let text_len = char_len(text);
+    let segment_end = offset.saturating_add(text_len);
+    if end <= segment_start || start >= segment_end {
+        spans.push(Span::styled(text.to_string(), style));
+        return;
+    }
+
+    let local_start = start.saturating_sub(segment_start).min(text_len);
+    let local_end = end.saturating_sub(segment_start).min(text_len);
+    if local_start > 0 {
+        spans.push(Span::styled(char_range(text, 0, local_start), style));
+    }
+    if local_end > local_start {
+        spans.push(Span::styled(
+            char_range(text, local_start, local_end),
+            selection_style(style),
+        ));
+    }
+    if local_end < text_len {
+        spans.push(Span::styled(char_range(text, local_end, text_len), style));
+    }
+}
+
+fn selection_style(style: Style) -> Style {
+    style.bg(Color::Blue).fg(Color::White)
+}
+
 fn should_append_passthrough_prompt(app: &App, filtered: &[&OutputLine]) -> bool {
     let InputState::Passthrough(active_channel) = app.active_input_state() else {
         return false;
@@ -1288,6 +1744,27 @@ fn should_append_passthrough_prompt(app: &App, filtered: &[&OutputLine]) -> bool
     {
         Some(line) => line.complete,
         None => true,
+    }
+}
+
+fn output_render_model(app: &App, output_area: Rect) -> OutputRenderModel {
+    let height = output_content_height(output_area);
+    let width = output_content_width(output_area);
+    let filtered = app
+        .lines
+        .iter()
+        .filter(|line| app.line_matches_filter(line))
+        .collect::<Vec<_>>();
+    let append_prompt = should_append_passthrough_prompt(app, &filtered);
+    let total_logical_lines = filtered.len() + usize::from(append_prompt);
+    let logical = rendered_output_lines(app, &filtered, append_prompt, 0, total_logical_lines);
+    let rows = output_rows(app, &logical, width);
+    let (visible_start, visible_end) = visible_window(rows.len(), height, app.scroll_offset);
+    OutputRenderModel {
+        rows,
+        visible_start,
+        visible_end,
+        content_height: height,
     }
 }
 
@@ -1337,6 +1814,156 @@ fn output_rows(
         append_output_rows(&mut rows, line.channel, prefix, line.text, output_width);
     }
     rows
+}
+
+fn status_rows(app: &App) -> Vec<StatusRow> {
+    let label = Style::default().fg(Color::Yellow);
+    vec![
+        StatusRow {
+            segments: vec![
+                segment("filter ", label),
+                segment(app.filter_label(), Style::default()),
+                segment("  ", Style::default()),
+                segment("input ", label),
+                segment(app.input_label(), Style::default()),
+                segment("  ", Style::default()),
+                segment("device ", label),
+                segment(app.manifest_label(), Style::default()),
+            ],
+        },
+        StatusRow {
+            segments: vec![
+                segment("backend ", label),
+                segment(app.backend_label.as_str(), Style::default()),
+                segment("  ", Style::default()),
+                segment("fps ", label),
+                segment(app.target_fps.to_string(), Style::default()),
+                segment("  ", Style::default()),
+                segment("status ", label),
+                segment(status_label(app), Style::default()),
+            ],
+        },
+    ]
+}
+
+fn segment(text: impl Into<String>, style: Style) -> StyledSegment {
+    StyledSegment {
+        text: text.into(),
+        style,
+    }
+}
+
+fn row_text(row: &RenderOutputRow) -> String {
+    match row.prefix.as_deref() {
+        Some(prefix) => format!("{prefix}{}", row.text),
+        None => row.text.clone(),
+    }
+}
+
+fn status_row_text(row: &StatusRow) -> String {
+    row.segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect()
+}
+
+fn selected_output_text(selection: &TextSelection, rows: &[RenderOutputRow]) -> String {
+    selected_text_from_rows(selection, rows.len(), |index| row_text(&rows[index]))
+}
+
+fn selected_status_text(
+    selection: &TextSelection,
+    rows: &[StatusRow],
+    _status_area: Rect,
+) -> String {
+    selected_text_from_rows(selection, rows.len(), |index| status_row_text(&rows[index]))
+}
+
+fn selected_text_from_rows<F>(
+    selection: &TextSelection,
+    row_count: usize,
+    mut row_text_at: F,
+) -> String
+where
+    F: FnMut(usize) -> String,
+{
+    if row_count == 0 {
+        return String::new();
+    }
+    let Some((start, end)) = normalized_selection(selection) else {
+        return String::new();
+    };
+    if start.row >= row_count {
+        return String::new();
+    }
+
+    let mut selected = Vec::new();
+    let last_row = end.row.min(row_count.saturating_sub(1));
+    for row_index in start.row..=last_row {
+        let text = row_text_at(row_index);
+        let len = char_len(&text);
+        let start_col = if row_index == start.row {
+            start.col.min(len)
+        } else {
+            0
+        };
+        let end_col = if row_index == end.row {
+            end.col.min(len)
+        } else {
+            len
+        };
+        if end_col >= start_col {
+            selected.push(char_range(&text, start_col, end_col));
+        }
+    }
+    selected.join("\n")
+}
+
+fn selection_range_for_row(
+    selection: Option<&TextSelection>,
+    pane: SelectionPane,
+    row_index: usize,
+    row_len: usize,
+) -> Option<(usize, usize)> {
+    let selection = selection?;
+    if selection.pane != pane {
+        return None;
+    }
+    let (start, end) = normalized_selection(selection)?;
+    if row_index < start.row || row_index > end.row {
+        return None;
+    }
+    let start_col = if row_index == start.row {
+        start.col.min(row_len)
+    } else {
+        0
+    };
+    let end_col = if row_index == end.row {
+        end.col.min(row_len)
+    } else {
+        row_len
+    };
+    (end_col > start_col).then_some((start_col, end_col))
+}
+
+fn normalized_selection(
+    selection: &TextSelection,
+) -> Option<(SelectionPosition, SelectionPosition)> {
+    if selection_is_empty(selection) {
+        return None;
+    }
+    if selection.anchor.row < selection.cursor.row
+        || (selection.anchor.row == selection.cursor.row
+            && selection.anchor.col <= selection.cursor.col)
+    {
+        Some((selection.anchor, selection.cursor))
+    } else {
+        Some((selection.cursor, selection.anchor))
+    }
+}
+
+fn selection_is_empty(selection: &TextSelection) -> bool {
+    selection.anchor == selection.cursor
 }
 
 fn append_output_rows(
@@ -1528,6 +2155,62 @@ fn display_width_usize(input: &str) -> usize {
     input.chars().count()
 }
 
+fn char_len(input: &str) -> usize {
+    input.chars().count()
+}
+
+fn char_range(input: &str, start: usize, end: usize) -> String {
+    input
+        .chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
+}
+
+fn is_copy_key(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Enter => true,
+        KeyCode::Char('y') if key.modifiers.is_empty() => true,
+        KeyCode::Char('c' | 'C')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.modifiers.contains(KeyModifiers::SHIFT) =>
+        {
+            true
+        }
+        KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::SUPER) => true,
+        _ => false,
+    }
+}
+
+fn write_osc52_copy(writer: &mut dyn Write, text: &str) -> io::Result<()> {
+    write!(writer, "\x1b]52;c;{}\x07", base64_encode(text.as_bytes()))?;
+    writer.flush()
+}
+
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+
+        output.push(TABLE[(b0 >> 2) as usize] as char);
+        output.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
+}
+
 fn main_layout(area: Rect) -> std::rc::Rc<[Rect]> {
     Layout::default()
         .direction(Direction::Vertical)
@@ -1552,10 +2235,6 @@ fn output_title(scroll_offset: usize) -> String {
     } else {
         format!("wiremux - scrollback +{scroll_offset}")
     }
-}
-
-fn output_area_from_terminal_area(area: Rect) -> Rect {
-    main_layout(area)[0]
 }
 
 fn output_content_height(output_area: Rect) -> usize {
@@ -1926,6 +2605,246 @@ mod tests {
         app.push_line(None, "line 30\n".to_string());
         assert_eq!(app.scroll_offset, 0);
         assert_eq!(app.scroll_target_offset, None);
+    }
+
+    #[test]
+    fn output_mouse_selection_highlights_and_copies_visible_text() {
+        let mut app = app_with_lines(2);
+        let area = Rect::new(0, 0, 80, 12);
+        let output_area = main_layout(area)[0];
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: output_area.x + 1,
+                row: output_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: output_area.x + 5,
+                row: output_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: output_area.x + 5,
+                row: output_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+
+        assert!(app.has_selection());
+        app.request_copy_selection(output_area, Rect::new(0, 0, 0, 0));
+        assert_eq!(app.pending_clipboard.as_deref(), Some("line"));
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+        assert_eq!(
+            terminal.backend().buffer()[(output_area.x + 1, output_area.y + 1)].bg,
+            Color::Blue
+        );
+    }
+
+    #[test]
+    fn status_mouse_selection_copies_status_text() {
+        let mut app = App::new("diag.log".to_string());
+        let area = Rect::new(0, 0, 80, 12);
+        let chunks = main_layout(area);
+        let status_area = chunks[1];
+        let output_area = chunks[0];
+
+        handle_mouse_with_areas(
+            &mut app,
+            output_area,
+            status_area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: status_area.x + 1,
+                row: status_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        handle_mouse_with_areas(
+            &mut app,
+            output_area,
+            status_area,
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: status_area.x + 7,
+                row: status_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        handle_mouse_with_areas(
+            &mut app,
+            output_area,
+            status_area,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: status_area.x + 7,
+                row: status_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+
+        app.request_copy_selection(output_area, status_area);
+
+        assert_eq!(app.pending_clipboard.as_deref(), Some("filter"));
+    }
+
+    #[test]
+    fn selection_edge_drag_scrolls_output_up_and_down() {
+        let mut app = app_with_lines(30);
+        let output_area = Rect::new(0, 0, 40, 8);
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: output_area.x + 1,
+                row: output_area.y + 2,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: output_area.x + 1,
+                row: output_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert_eq!(app.scroll_offset, 1);
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: output_area.x + 1,
+                row: output_area.y + output_area.height - 2,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn selection_auto_scroll_continues_without_more_mouse_events() {
+        let mut app = app_with_lines(30);
+        let output_area = Rect::new(0, 0, 40, 8);
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: output_area.x + 1,
+                row: output_area.y + 2,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: output_area.x + 1,
+                row: output_area.y + 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        let first_offset = app.scroll_offset;
+        let first_cursor = app.selection.as_ref().expect("selection").cursor.row;
+
+        assert!(app.advance_selection_auto_scroll(output_area));
+
+        assert!(app.scroll_offset > first_offset);
+        assert!(app.selection.as_ref().expect("selection").cursor.row < first_cursor);
+    }
+
+    #[test]
+    fn escape_clears_selection_before_exit_prefix() {
+        let mut app = app_with_lines(2);
+        app.selection = Some(TextSelection {
+            pane: SelectionPane::Output,
+            anchor: SelectionPosition { row: 0, col: 0 },
+            cursor: SelectionPosition { row: 0, col: 4 },
+            active: false,
+        });
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+        )
+        .expect("clear selection");
+
+        assert!(app.selection.is_none());
+        assert!(app.exit_escape_started_at.is_none());
+    }
+
+    #[test]
+    fn copy_key_writes_pending_clipboard_without_clearing_selection() {
+        let mut app = app_with_lines(2);
+        let output_area = output_area_for_content(38, 4);
+        app.selection = Some(TextSelection {
+            pane: SelectionPane::Output,
+            anchor: SelectionPosition { row: 0, col: 0 },
+            cursor: SelectionPosition { row: 0, col: 4 },
+            active: false,
+        });
+
+        handle_key_with_areas(
+            &mut app,
+            output_area,
+            Rect::new(0, 0, 0, 0),
+            None,
+            &tui_args(),
+            KeyEvent::new(
+                KeyCode::Char('C'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+        )
+        .expect("copy selection");
+
+        assert_eq!(app.pending_clipboard.as_deref(), Some("line"));
+        assert!(app.selection.is_some());
+    }
+
+    #[test]
+    fn ctrl_shift_c_without_selection_does_not_quit() {
+        let mut app = App::new("diag.log".to_string());
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+        )
+        .expect("handle copy key without selection");
+
+        assert!(!app.should_quit);
+        assert!(app.pending_clipboard.is_none());
     }
 
     #[test]
@@ -2707,6 +3626,26 @@ mod tests {
         assert_eq!(
             terminal.get_cursor_position().expect("cursor position"),
             Position::new(output_area.x + 1 + display_width(prompt), output_area.y + 2)
+        );
+    }
+
+    #[test]
+    fn base64_encode_handles_padding() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+    }
+
+    #[test]
+    fn write_osc52_copy_emits_clipboard_sequence() {
+        let mut output = Vec::new();
+
+        write_osc52_copy(&mut output, "line").expect("write osc52");
+
+        assert_eq!(
+            String::from_utf8(output).expect("utf8"),
+            "\x1b]52;c;bGluZQ==\x07"
         );
     }
 

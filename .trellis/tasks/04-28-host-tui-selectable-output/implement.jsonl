@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "host TUI quality gates and console boundary"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "interactive TUI interruption and error behavior"}
+{"file": "sources/host/src/tui.rs", "reason": "primary TUI selection, mouse, render, scrollback implementation"}
+{"file": "sources/host/Cargo.toml", "reason": "host version and dependency constraints"}
+{"file": "VERSION", "reason": "release version source"}
