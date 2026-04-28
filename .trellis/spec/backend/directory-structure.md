@@ -433,17 +433,28 @@ Required behavior:
   output pane follows live tail output. Mouse wheel up increases
   `scroll_offset` and freezes the visible window; matching incoming lines must
   increase `scroll_offset` while frozen so the same historical rows stay visible.
+  Mouse-wheel scrolling should move by one wrapped visual row per wheel event
+  unless an explicit smooth-scroll accumulator exists; larger fixed jumps make
+  the output pane and scrollbar appear choppy even when the render loop is
+  running at 60/120 FPS.
 - TUI scroll recovery uses explicit user actions only: mouse wheel down to
   `scroll_offset = 0`, dragging the right-side output scrollbar to the bottom,
   or pressing `Enter` twice while the input line is empty. `Enter` with
   non-empty input must preserve the existing send behavior and must not count
   toward the recovery gesture.
-- The TUI right-side scrollbar represents scrollable positions, not raw content
-  rows: `position = max_scroll_offset - scroll_offset`. At live tail
+- The TUI right-side scrollbar must use the same wrapped visual row model as the
+  output pane. Build the scrollbar state from total rendered rows, viewport
+  height, and the visible window's first row; do not model it as a one-cell
+  viewport over only the scrollable offset count. At live tail
   (`scroll_offset = 0`) the thumb must render at the bottom; at the oldest
-  visible position it must render at the top. Mouse dragging must start on the
-  scrollbar column, but once dragging is active, row movement should keep
-  updating the offset even if the pointer leaves the column.
+  visible position it must render at the top. Keep the thumb visually solid;
+  tiny fractional block changes can make terminal scrollbars look more stalled
+  and jittery. Mouse dragging must start on the scrollbar column, but once
+  dragging is active, row movement should keep updating the target offset even
+  if the pointer leaves the column. Because terminal mouse drag events only
+  report character-cell rows, large scrollback buffers can map one drag row to
+  many content rows; animate the visible `scroll_offset` toward the target at
+  the TUI frame cadence instead of jumping in one render.
 - On macOS, prefer `/dev/cu.*` over the paired `/dev/tty.*` device when the user passes a USB serial/JTAG path.
 - Use the Rust `serialport` backend for macOS, Linux, and Windows. Do not shell out to `stty` for normal operation.
 - Host transmit commands must reuse `encode_envelope()` and `build_frame_payload_with_max()` rather than duplicating protocol constants in `main.rs`.

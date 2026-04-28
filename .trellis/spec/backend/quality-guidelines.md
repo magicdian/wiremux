@@ -218,7 +218,10 @@ the demo, and host verification commands in the same task.
   by emitting the same `InteractiveEvent` variants.
 - TUI rendering is dirty-driven and capped by target FPS. `--tui-fps` accepts
   only `60` or `120`; absent an override, the host defaults to 60 fps and may
-  select 120 fps for confidently detected Ghostty terminals.
+  select 120 fps for confidently detected Ghostty terminals. Scroll input must
+  not use large fixed row jumps that visually defeat the configured frame rate;
+  prefer one wrapped visual row per wheel event unless a dedicated smooth-scroll
+  accumulator renders intermediate positions across frames.
 - TUI status must continue to show device manifest metadata including
   `DeviceManifest.protocol_version` as the device proto API version. Backend and
   FPS status belong in the existing status area, not a separate debug panel.
@@ -239,7 +242,15 @@ the demo, and host verification commands in the same task.
   wrapped offset both affect the terminal row/column. Output visibility and
   scrollbar range must use the same wrapped visual row count, not only logical
   `OutputLine` count, so resizing the TUI narrower cannot hide overflow without
-  a scrollbar. In line mode, place the cursor in the bottom input box.
+  a scrollbar. The scrollbar renderer must use total rendered rows, output
+  content height, and the visible window's first rendered row; a one-cell
+  viewport over only `max_scroll_offset + 1` makes the thumb size and motion
+  misrepresent the real viewport. Keep the scrollbar thumb visually solid; tiny
+  fractional block glyph changes can make terminal scrollbars feel more stalled
+  and jittery. Dragging can still be coarse because terminal mouse events report
+  character-cell rows, so drag handlers should animate the visible scroll offset
+  toward the coarse target across frames instead of applying the full target
+  jump in one render. In line mode, place the cursor in the bottom input box.
 - Host manifest requests use system channel 0 with
   `payload_type = "wiremux.v1.DeviceManifestRequest"` and empty request payload.
 - Device manifest responses use `payload_type = "wiremux.v1.DeviceManifest"`

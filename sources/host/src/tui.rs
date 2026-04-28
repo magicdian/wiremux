@@ -34,7 +34,7 @@ use super::{
 };
 
 const MAX_LINES: usize = 1000;
-const WHEEL_SCROLL_LINES: usize = 3;
+const WHEEL_SCROLL_LINES: usize = 1;
 
 struct OutputLine {
     channel: Option<u32>,
@@ -86,6 +86,7 @@ struct App {
     manifest: Option<DeviceManifest>,
     should_quit: bool,
     scroll_offset: usize,
+    scroll_target_offset: Option<usize>,
     empty_enter_restore_count: u8,
     dragging_scrollbar: bool,
     stream_cr_pending_channel: Option<u32>,
@@ -107,6 +108,7 @@ impl App {
             manifest: None,
             should_quit: false,
             scroll_offset: 0,
+            scroll_target_offset: None,
             empty_enter_restore_count: 0,
             dragging_scrollbar: false,
             stream_cr_pending_channel: None,
@@ -147,9 +149,7 @@ impl App {
                 text: line,
                 complete,
             };
-            if self.scroll_offset > 0 && self.line_matches_filter(&output_line) {
-                self.scroll_offset = self.scroll_offset.saturating_add(1);
-            }
+            self.pin_scrolled_view_for_new_line(&output_line);
             self.lines.push_back(output_line);
         }
         if text.is_empty() || !text.ends_with(['\n', '\r']) {
@@ -229,10 +229,17 @@ impl App {
             text: segment.to_string(),
             complete,
         };
-        if self.scroll_offset > 0 && self.line_matches_filter(&output_line) {
-            self.scroll_offset = self.scroll_offset.saturating_add(1);
-        }
+        self.pin_scrolled_view_for_new_line(&output_line);
         self.lines.push_back(output_line);
+    }
+
+    fn pin_scrolled_view_for_new_line(&mut self, output_line: &OutputLine) {
+        if self.scroll_offset > 0 && self.line_matches_filter(output_line) {
+            self.scroll_offset = self.scroll_offset.saturating_add(1);
+            if let Some(target) = self.scroll_target_offset.as_mut() {
+                *target = target.saturating_add(1);
+            }
+        }
     }
 
     fn incomplete_stream_line_mut(&mut self, channel: Option<u32>) -> Option<&mut OutputLine> {
@@ -351,6 +358,7 @@ impl App {
 
     fn scroll_up(&mut self, output_area: Rect) {
         self.empty_enter_restore_count = 0;
+        self.scroll_target_offset = None;
         let max_offset = self.max_scroll_offset(output_area);
         if max_offset == 0 {
             self.scroll_offset = 0;
@@ -368,6 +376,7 @@ impl App {
 
     fn scroll_down(&mut self, output_area: Rect) {
         self.empty_enter_restore_count = 0;
+        self.scroll_target_offset = None;
         let max_offset = self.max_scroll_offset(output_area);
         self.scroll_offset = self.scroll_offset.min(max_offset);
         self.scroll_offset = self.scroll_offset.saturating_sub(WHEEL_SCROLL_LINES);
@@ -388,18 +397,42 @@ impl App {
 
     fn follow_live_output(&mut self) {
         self.scroll_offset = 0;
+        self.scroll_target_offset = None;
         self.empty_enter_restore_count = 0;
         self.dragging_scrollbar = false;
     }
 
-    fn set_scroll_offset(&mut self, scroll_offset: usize, output_area: Rect) {
+    fn animate_to_scroll_offset(&mut self, scroll_offset: usize, output_area: Rect) {
         self.empty_enter_restore_count = 0;
-        self.scroll_offset = scroll_offset.min(self.max_scroll_offset(output_area));
-        if self.scroll_offset == 0 {
-            self.status = "scrollbar: following live output".to_string();
+        let target = scroll_offset.min(self.max_scroll_offset(output_area));
+        if target == self.scroll_offset {
+            self.scroll_target_offset = None;
         } else {
-            self.status = format!("scrollbar: {} lines from bottom", self.scroll_offset);
+            self.scroll_target_offset = Some(target);
         }
+    }
+
+    fn advance_scroll_animation(&mut self) -> bool {
+        let Some(target) = self.scroll_target_offset else {
+            return false;
+        };
+        if self.scroll_offset == target {
+            self.scroll_target_offset = None;
+            return false;
+        }
+
+        let distance = self.scroll_offset.abs_diff(target);
+        let step = ((distance + 4) / 5).clamp(1, 12);
+        if self.scroll_offset < target {
+            self.scroll_offset = self.scroll_offset.saturating_add(step).min(target);
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub(step).max(target);
+        }
+
+        if self.scroll_offset == target {
+            self.scroll_target_offset = None;
+        }
+        self.scroll_target_offset.is_some()
     }
 
     fn reset_empty_enter_restore(&mut self) {
@@ -538,9 +571,10 @@ fn run_loop(
 
         let now = Instant::now();
         if dirty && now >= next_render_at {
+            let keep_animating = app.advance_scroll_animation();
             terminal.draw(|frame| render(frame, &app))?;
             next_render_at = Instant::now() + frame_interval;
-            dirty = false;
+            dirty = keep_animating;
         }
 
         diagnostics.flush()?;
@@ -855,7 +889,7 @@ fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
                 mouse.row,
             ) {
                 app.dragging_scrollbar = true;
-                app.set_scroll_offset(offset, output_area);
+                app.animate_to_scroll_offset(offset, output_area);
             } else {
                 app.dragging_scrollbar = false;
                 app.reset_empty_enter_restore();
@@ -864,7 +898,7 @@ fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
         MouseEventKind::Drag(MouseButton::Left) if app.dragging_scrollbar => {
             let offset =
                 scrollbar_offset_from_drag_row(output_area, total_rows, output_height, mouse.row);
-            app.set_scroll_offset(offset, output_area);
+            app.animate_to_scroll_offset(offset, output_area);
         }
         MouseEventKind::Up(MouseButton::Left) => {
             app.dragging_scrollbar = false;
@@ -1030,9 +1064,13 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
 
     let max_offset = max_scroll_offset(total_rendered_lines, height);
     if max_offset > 0 {
-        let mut scrollbar_state = ScrollbarState::new(max_offset + 1)
-            .position(scrollbar_position(max_offset, app.scroll_offset))
-            .viewport_content_length(1);
+        let mut scrollbar_state = ScrollbarState::new(total_rendered_lines)
+            .position(scrollbar_position(
+                total_rendered_lines,
+                height,
+                app.scroll_offset,
+            ))
+            .viewport_content_length(height);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             output_area,
@@ -1059,7 +1097,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             Span::raw(app.target_fps.to_string()),
             Span::raw("  "),
             Span::styled("status ", Style::default().fg(Color::Yellow)),
-            Span::raw(app.status.as_str()),
+            Span::raw(status_label(app)),
         ]),
     ])
     .block(Block::default().title("status").borders(Borders::ALL));
@@ -1358,6 +1396,13 @@ fn main_layout(area: Rect) -> std::rc::Rc<[Rect]> {
         .split(area)
 }
 
+fn status_label(app: &App) -> String {
+    if app.scroll_offset == 0 {
+        return app.status.clone();
+    }
+    format!("scrollback: {} lines from bottom", app.scroll_offset)
+}
+
 fn output_title(scroll_offset: usize) -> String {
     if scroll_offset == 0 {
         "wiremux".to_string()
@@ -1399,8 +1444,8 @@ fn visible_window(
     (start, end)
 }
 
-fn scrollbar_position(max_offset: usize, scroll_offset: usize) -> usize {
-    max_offset.saturating_sub(scroll_offset.min(max_offset))
+fn scrollbar_position(total_lines: usize, output_height: usize, scroll_offset: usize) -> usize {
+    visible_window(total_lines, output_height, scroll_offset).0
 }
 
 fn scrollbar_offset_from_mouse(
@@ -1493,10 +1538,22 @@ mod tests {
 
     #[test]
     fn scrollbar_position_reaches_last_position_at_tail() {
-        assert_eq!(scrollbar_position(20, 0), 20);
-        assert_eq!(scrollbar_position(20, 11), 9);
-        assert_eq!(scrollbar_position(20, 20), 0);
-        assert_eq!(scrollbar_position(20, 50), 0);
+        assert_eq!(scrollbar_position(24, 4, 0), 20);
+        assert_eq!(scrollbar_position(24, 4, 11), 9);
+        assert_eq!(scrollbar_position(24, 4, 20), 0);
+        assert_eq!(scrollbar_position(24, 4, 50), 0);
+    }
+
+    #[test]
+    fn status_label_uses_current_scroll_offset_while_scrolled() {
+        let mut app = App::new("diag.log".to_string());
+        app.status = "scrollbar: 796 lines from bottom".to_string();
+        app.scroll_offset = 880;
+
+        assert_eq!(status_label(&app), "scrollback: 880 lines from bottom");
+
+        app.scroll_offset = 0;
+        assert_eq!(status_label(&app), "scrollbar: 796 lines from bottom");
     }
 
     #[test]
@@ -1554,7 +1611,7 @@ mod tests {
     }
 
     #[test]
-    fn scrollbar_drag_sets_offset_until_mouse_release() {
+    fn scrollbar_drag_animates_toward_target_until_mouse_release() {
         let mut app = app_with_lines(30);
         let output_area = Rect::new(0, 0, 40, 12);
 
@@ -1569,7 +1626,12 @@ mod tests {
             },
         );
         assert!(app.dragging_scrollbar);
-        assert_eq!(app.scroll_offset, 20);
+        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.scroll_target_offset, Some(20));
+
+        assert!(app.advance_scroll_animation());
+        assert!(app.scroll_offset > 0);
+        assert!(app.scroll_offset < 20);
 
         handle_mouse(
             &mut app,
@@ -1581,6 +1643,9 @@ mod tests {
                 modifiers: KeyModifiers::empty(),
             },
         );
+        assert_eq!(app.scroll_target_offset, Some(0));
+
+        while app.advance_scroll_animation() {}
         assert_eq!(app.scroll_offset, 0);
 
         handle_mouse(
@@ -1645,15 +1710,19 @@ mod tests {
     fn appended_matching_lines_do_not_move_scrolled_view() {
         let mut app = app_with_lines(10);
         app.scroll_up(output_area_for_content(38, 4));
+        let expected_window = (
+            10usize.saturating_sub(4 + WHEEL_SCROLL_LINES),
+            10usize.saturating_sub(WHEEL_SCROLL_LINES),
+        );
         assert_eq!(
             visible_window(app.filtered_line_count(), 4, app.scroll_offset),
-            (3, 7)
+            expected_window
         );
 
         app.push_line(None, "new\n".to_string());
         assert_eq!(
             visible_window(app.filtered_line_count(), 4, app.scroll_offset),
-            (3, 7)
+            expected_window
         );
     }
 
