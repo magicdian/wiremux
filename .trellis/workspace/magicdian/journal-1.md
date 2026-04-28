@@ -78,7 +78,13 @@ Implemented PR5-PR8: host serialport send/listen input framing, ESP32 inbound fr
 
 ### Main Changes
 
-(Add details)
+- Updated `sources/host/src/tui.rs` so the bottom input area renders a dedicated
+  subdued passthrough hint: `> passthrough: type in output pane`.
+- Kept line-mode input rendering and readonly rendering unchanged.
+- Added a TUI render test proving the passthrough hint appears and stale line
+  input text is hidden while passthrough mode is active.
+- Archived `.trellis/tasks/04-28-passthrough-input-hint` after the feature
+  commit.
 
 ### Git Commits
 
@@ -95,7 +101,10 @@ Implemented PR5-PR8: host serialport send/listen input framing, ESP32 inbound fr
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `cargo test` in `sources/host`
+- [OK] `cargo check` in `sources/host`
+- [OK] `cargo fmt --check` in `sources/host`
+- [OK] Human TUI validation passed
 
 ### Status
 
@@ -732,6 +741,40 @@ Fixed TUI passthrough rendering so wrapped output rows drive visible scrollback,
 |------|---------|
 | `5c57630` | (see git log) |
 | `ec53ce5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 19: Passthrough input hint
+
+**Date**: 2026-04-28
+**Task**: Passthrough input hint
+**Branch**: `dev`
+
+### Summary
+
+Added a subdued passthrough hint to the host TUI bottom input area so users can see that typing belongs in the output pane; archived the completed task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ee52e2b` | (see git log) |
+| `9dcffe1` | (see git log) |
 
 ### Testing
 
