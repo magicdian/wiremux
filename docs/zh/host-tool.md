@@ -9,7 +9,7 @@ wiremux listen --port /dev/tty.usbmodem2101 --baud 115200
 wiremux send --port /dev/tty.usbmodem2101 --channel 1 --line help
 wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
 wiremux passthrough --port /dev/tty.usbmodem2101 --channel 1
-wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
+wiremux tui --port /dev/tty.usbmodem2101 --baud 115200 --tui-fps 120
 ```
 
 当前能力：
@@ -31,9 +31,15 @@ wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
 - 非 mux 字节按普通终端输出保留。
 - 构造 host-to-device input `MuxEnvelope`，并通过同一个 `WMUX` frame 格式发送到指定 channel。
 - `wiremux tui` 提供 ratatui 交互界面，用同一个串口 handle 读取输出、发送输入、请求
-  manifest，并在界面内切换 channel 过滤。
+  manifest，并在界面内切换 channel 过滤。status 区域会显示当前 interactive
+  backend 和 FPS。
 - `wiremux passthrough --channel N` 会 attach 到一个 mux channel，把按键立即封装为
   `MuxEnvelope(direction=input)` 发送；终端支持时 `Ctrl-]` 退出，通用退出序列是先按 `Esc` 再按 `x`。
+- `wiremux tui` 和 `wiremux passthrough` 都支持可选
+  `--interactive-backend auto|compat|mio`；默认 `auto` 在 Unix 上优先使用 `mio`，
+  不可用时回退到 `compat`，Windows 使用 `compat`。
+- `wiremux tui` 支持 `--tui-fps 60|120`；未指定时默认 60 fps，检测到 Ghostty 时
+  自动使用 120 fps。
 
 ## 输出格式
 

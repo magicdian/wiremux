@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::collections::HashMap;
 use std::env;
@@ -14,6 +14,7 @@ use wiremux::host_session::{
     NEWLINE_POLICY_CRLF, NEWLINE_POLICY_LF,
 };
 
+mod interactive;
 mod tui;
 
 const PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS: u64 = 750;
@@ -54,6 +55,7 @@ struct PassthroughArgs {
     baud: u32,
     max_payload_len: usize,
     channel: u8,
+    interactive_backend: interactive::InteractiveBackendMode,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,8 @@ struct TuiArgs {
     baud: u32,
     max_payload_len: usize,
     reconnect_delay_ms: u64,
+    interactive_backend: interactive::InteractiveBackendMode,
+    tui_fps: Option<u16>,
 }
 
 struct DisplayOutput<W: Write> {
@@ -327,40 +331,46 @@ fn send(args: SendArgs) -> io::Result<()> {
 
 fn passthrough(args: PassthroughArgs) -> io::Result<()> {
     let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.port)?;
-    let (connected_port, mut port) =
-        open_available_port_with_timeout(&args.port, args.baud, INTERACTIVE_SERIAL_READ_TIMEOUT)?;
+    let (connected_port, mut backend) = interactive::open_interactive_backend(
+        &args.port,
+        args.baud,
+        args.interactive_backend,
+        INTERACTIVE_SERIAL_READ_TIMEOUT,
+    )?;
     writeln!(
         diagnostics,
-        "[wiremux] passthrough connected: {} channel={}",
+        "[wiremux] passthrough connected: {} channel={} backend={}",
         connected_port.display(),
-        args.channel
+        args.channel,
+        backend.label()
     )?;
 
     let request =
         build_manifest_request_frame(args.max_payload_len).map_err(build_frame_error_to_io)?;
-    port.write_all(&request)?;
-    port.flush()?;
+    backend.write_all(&request)?;
+    backend.flush()?;
 
     {
         let mut stdout = io::stdout().lock();
         writeln!(
             stdout,
-            "wiremux> diagnostics: {}; passthrough ch{}; Ctrl-] or Esc x quits",
+            "wiremux> diagnostics: {}; passthrough ch{}; backend {}; Ctrl-] or Esc x quits",
             diagnostics_path.display(),
-            args.channel
+            args.channel,
+            backend.label()
         )?;
         stdout.flush()?;
     }
 
     enable_raw_mode()?;
-    let result = passthrough_loop(args, &mut port, &mut diagnostics);
+    let result = passthrough_loop(args, &mut backend, &mut diagnostics);
     disable_raw_mode()?;
     result
 }
 
 fn passthrough_loop(
     args: PassthroughArgs,
-    port: &mut Box<dyn serialport::SerialPort>,
+    backend: &mut interactive::ConnectedInteractiveBackend,
     diagnostics: &mut File,
 ) -> io::Result<()> {
     let mut session = HostSession::new(args.max_payload_len).map_err(|status| {
@@ -371,14 +381,15 @@ fn passthrough_loop(
     })?;
     let mut manifest = None;
     let mut stdout = io::stdout().lock();
-    let mut buf = [0u8; 4096];
     let mut exit_escape_started_at = None;
 
     loop {
-        match port.read(&mut buf) {
-            Ok(0) => return Ok(()),
-            Ok(read_len) => {
-                for event in session.feed(&buf[..read_len]).map_err(|status| {
+        let deadline = exit_escape_started_at.map(|started_at: Instant| {
+            started_at + Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
+        });
+        match backend.next_event(deadline)? {
+            interactive::InteractiveEvent::SerialBytes(bytes) => {
+                for event in session.feed(&bytes).map_err(|status| {
                     io::Error::new(
                         io::ErrorKind::Other,
                         format!("host session feed failed: {status}"),
@@ -395,56 +406,52 @@ fn passthrough_loop(
                 stdout.flush()?;
                 diagnostics.flush()?;
             }
-            Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
-            Err(err) => return Err(err),
-        }
-
-        if exit_escape_started_at.is_some_and(|started_at: Instant| {
-            started_at.elapsed() >= Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
-        }) {
-            send_passthrough_key(
-                args.channel,
-                KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
-                manifest.as_ref(),
-                port,
-                args.max_payload_len,
-            )?;
-            exit_escape_started_at = None;
-        }
-
-        while event::poll(Duration::from_millis(1))? {
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            if is_passthrough_exit_key(key) || is_passthrough_meta_exit_key(key) {
-                return Ok(());
-            }
-
-            if exit_escape_started_at.take().is_some() {
-                if is_passthrough_escape_exit_suffix(key) {
+            interactive::InteractiveEvent::SerialEof => return Ok(()),
+            interactive::InteractiveEvent::SerialError(err) => return Err(err),
+            interactive::InteractiveEvent::Terminal(Event::Key(key)) => {
+                if is_passthrough_exit_key(key) || is_passthrough_meta_exit_key(key) {
                     return Ok(());
                 }
+
+                if exit_escape_started_at.take().is_some() {
+                    if is_passthrough_escape_exit_suffix(key) {
+                        return Ok(());
+                    }
+                    send_passthrough_key(
+                        args.channel,
+                        KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+                        manifest.as_ref(),
+                        backend,
+                        args.max_payload_len,
+                    )?;
+                }
+
+                if key.code == KeyCode::Esc {
+                    exit_escape_started_at = Some(Instant::now());
+                    continue;
+                }
+
                 send_passthrough_key(
                     args.channel,
-                    KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+                    key,
                     manifest.as_ref(),
-                    port,
+                    backend,
                     args.max_payload_len,
                 )?;
             }
-
-            if key.code == KeyCode::Esc {
-                exit_escape_started_at = Some(Instant::now());
-                continue;
+            interactive::InteractiveEvent::Terminal(_) => {}
+            interactive::InteractiveEvent::Timeout => {
+                if exit_escape_started_at.is_some() {
+                    send_passthrough_key(
+                        args.channel,
+                        KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+                        manifest.as_ref(),
+                        backend,
+                        args.max_payload_len,
+                    )?;
+                    exit_escape_started_at = None;
+                }
             }
-
-            send_passthrough_key(
-                args.channel,
-                key,
-                manifest.as_ref(),
-                port,
-                args.max_payload_len,
-            )?;
         }
     }
 }
@@ -453,7 +460,7 @@ fn send_passthrough_key(
     channel: u8,
     key: KeyEvent,
     manifest: Option<&DeviceManifest>,
-    port: &mut Box<dyn serialport::SerialPort>,
+    port: &mut dyn Write,
     max_payload_len: usize,
 ) -> io::Result<()> {
     let policy = manifest
@@ -1014,6 +1021,8 @@ where
     let mut channel = None;
     let mut send_channel = None;
     let mut line = None;
+    let mut interactive_backend = interactive::InteractiveBackendMode::Auto;
+    let mut tui_fps = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -1047,6 +1056,29 @@ where
                     .parse()
                     .map_err(|_| format!("invalid --reconnect-delay-ms value: {value}"))?;
             }
+            "--interactive-backend" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--interactive-backend requires a value".to_string())?;
+                interactive_backend = interactive::InteractiveBackendMode::parse(&value)
+                    .ok_or_else(|| {
+                        format!("invalid --interactive-backend value: {value}; expected auto, compat, or mio")
+                    })?;
+            }
+            "--tui-fps" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--tui-fps requires a value".to_string())?;
+                let fps = value
+                    .parse()
+                    .map_err(|_| format!("invalid --tui-fps value: {value}"))?;
+                if !matches!(fps, 60 | 120) {
+                    return Err(format!(
+                        "invalid --tui-fps value: {value}; expected 60 or 120"
+                    ));
+                }
+                tui_fps = Some(fps);
+            }
             "--channel" => {
                 let value = args
                     .next()
@@ -1072,26 +1104,46 @@ where
 
     let port = port.ok_or_else(usage)?;
     match command {
-        "listen" => Ok(Some(CliCommand::Listen(ListenArgs {
-            port,
-            baud,
-            max_payload_len,
-            reconnect_delay_ms,
-            channel: channel.map(u32::from),
-            send_channel: line.as_ref().map(|_| send_channel.or(channel).unwrap_or(1)),
-            line,
-        }))),
-        "send" => Ok(Some(CliCommand::Send(SendArgs {
-            port,
-            baud,
-            max_payload_len,
-            channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
-            line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
-        }))),
-        "passthrough" => {
-            if send_channel.is_some() || line.is_some() {
+        "listen" => {
+            if tui_fps.is_some() || interactive_backend != interactive::InteractiveBackendMode::Auto
+            {
                 return Err(format!(
-                    "passthrough does not accept --send-channel or --line\n{}",
+                    "listen does not accept --tui-fps or --interactive-backend\n{}",
+                    usage()
+                ));
+            }
+            Ok(Some(CliCommand::Listen(ListenArgs {
+                port,
+                baud,
+                max_payload_len,
+                reconnect_delay_ms,
+                channel: channel.map(u32::from),
+                send_channel: line.as_ref().map(|_| send_channel.or(channel).unwrap_or(1)),
+                line,
+            })))
+        }
+        "send" => {
+            if tui_fps.is_some()
+                || interactive_backend != interactive::InteractiveBackendMode::Auto
+                || reconnect_delay_ms != 500
+            {
+                return Err(format!(
+                    "send does not accept --tui-fps, --interactive-backend, or --reconnect-delay-ms\n{}",
+                    usage()
+                ));
+            }
+            Ok(Some(CliCommand::Send(SendArgs {
+                port,
+                baud,
+                max_payload_len,
+                channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
+                line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
+            })))
+        }
+        "passthrough" => {
+            if send_channel.is_some() || line.is_some() || tui_fps.is_some() {
+                return Err(format!(
+                    "passthrough does not accept --send-channel, --line, or --tui-fps\n{}",
                     usage()
                 ));
             }
@@ -1101,6 +1153,7 @@ where
                 max_payload_len,
                 channel: channel
                     .ok_or_else(|| "passthrough requires --channel <id>".to_string())?,
+                interactive_backend,
             })))
         }
         "tui" => {
@@ -1115,6 +1168,8 @@ where
                 baud,
                 max_payload_len,
                 reconnect_delay_ms,
+                interactive_backend,
+                tui_fps,
             })))
         }
         _ => unreachable!("command is normalized before parsing"),
@@ -1129,7 +1184,7 @@ fn parse_channel(value: &str) -> Result<u8, String> {
 }
 
 fn usage() -> String {
-    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux passthrough --port <path> --channel <id> [--baud 115200] [--max-payload bytes]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500]".to_string()
+    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux passthrough --port <path> --channel <id> [--baud 115200] [--max-payload bytes] [--interactive-backend auto|compat|mio]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--interactive-backend auto|compat|mio] [--tui-fps 60|120]".to_string()
 }
 
 #[cfg(test)]
@@ -1332,6 +1387,38 @@ mod tests {
         assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.baud, 921_600);
         assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
+        assert_eq!(
+            args.interactive_backend,
+            super::interactive::InteractiveBackendMode::Auto
+        );
+        assert_eq!(args.tui_fps, None);
+    }
+
+    #[test]
+    fn parses_tui_interactive_backend_and_fps() {
+        let command = parse_args(
+            [
+                "tui",
+                "--port",
+                "/dev/cu.usbmodem2101",
+                "--interactive-backend",
+                "compat",
+                "--tui-fps",
+                "120",
+            ]
+            .map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Tui(args) = command else {
+            panic!("expected tui command");
+        };
+
+        assert_eq!(
+            args.interactive_backend,
+            super::interactive::InteractiveBackendMode::Compat
+        );
+        assert_eq!(args.tui_fps, Some(120));
     }
 
     #[test]
@@ -1354,6 +1441,63 @@ mod tests {
 
         assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.channel, 1);
+        assert_eq!(
+            args.interactive_backend,
+            super::interactive::InteractiveBackendMode::Auto
+        );
+    }
+
+    #[test]
+    fn parses_passthrough_interactive_backend() {
+        let command = parse_args(
+            [
+                "passthrough",
+                "--port",
+                "/dev/cu.usbmodem2101",
+                "--channel",
+                "1",
+                "--interactive-backend",
+                "mio",
+            ]
+            .map(String::from),
+        )
+        .expect("args parse")
+        .expect("valid args");
+        let CliCommand::Passthrough(args) = command else {
+            panic!("expected passthrough command");
+        };
+
+        assert_eq!(
+            args.interactive_backend,
+            super::interactive::InteractiveBackendMode::Mio
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_tui_fps() {
+        let err = parse_args(
+            ["tui", "--port", "/dev/cu.usbmodem2101", "--tui-fps", "144"].map(String::from),
+        )
+        .expect_err("invalid fps");
+
+        assert!(err.contains("invalid --tui-fps value"));
+    }
+
+    #[test]
+    fn rejects_invalid_interactive_backend() {
+        let err = parse_args(
+            [
+                "tui",
+                "--port",
+                "/dev/cu.usbmodem2101",
+                "--interactive-backend",
+                "fast",
+            ]
+            .map(String::from),
+        )
+        .expect_err("invalid backend");
+
+        assert!(err.contains("invalid --interactive-backend value"));
     }
 
     #[test]

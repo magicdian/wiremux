@@ -51,5 +51,6 @@ line-mode console 通过 mux channel 1 收发。烧录完成后，不要让 `idf
 
 - Host CLI 使用 `serialport` backend 打开 macOS/Linux/Windows 串口。
 - ESP32 侧首期实现 line-mode console adapter。
-- `ratatui` TUI 不在首期范围内。
+- TUI 默认 60 fps，检测到 Ghostty 时自动使用 120 fps；也可以用
+  `--tui-fps 60|120` 显式指定。
 - panic、early boot、ROM log 捕获不在首期范围内。

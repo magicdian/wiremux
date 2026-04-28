@@ -1,12 +1,11 @@
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, Read, Write};
-use std::thread;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-    MouseButton, MouseEvent, MouseEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -25,13 +24,13 @@ use wiremux::host_session::{
     ProtocolCompatibilityKind, DIRECTION_INPUT,
 };
 
+use super::interactive::{self, ConnectedInteractiveBackend, InteractiveEvent};
 use super::{
     build_frame_error_to_io, build_input_frame, build_manifest_request_frame,
     channel_supports_passthrough, create_diagnostics_file, is_passthrough_escape_exit_suffix,
-    is_passthrough_exit_key, is_passthrough_meta_exit_key, open_available_port_with_timeout,
-    passthrough_key_payload, passthrough_policy_for_channel, printable_payload,
-    write_envelope_diagnostics, TuiArgs, INTERACTIVE_SERIAL_READ_TIMEOUT,
-    PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
+    is_passthrough_exit_key, is_passthrough_meta_exit_key, passthrough_key_payload,
+    passthrough_policy_for_channel, printable_payload, write_envelope_diagnostics, TuiArgs,
+    INTERACTIVE_SERIAL_READ_TIMEOUT, PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
 };
 
 const MAX_LINES: usize = 1000;
@@ -80,6 +79,8 @@ struct App {
     filter: Option<u32>,
     prefix_pending: bool,
     status: String,
+    backend_label: String,
+    target_fps: u16,
     connected_port: Option<String>,
     diagnostics_path: String,
     manifest: Option<DeviceManifest>,
@@ -99,6 +100,8 @@ impl App {
             filter: None,
             prefix_pending: false,
             status: "connecting".to_string(),
+            backend_label: "disconnected".to_string(),
+            target_fps: 60,
             connected_port: None,
             diagnostics_path,
             manifest: None,
@@ -303,9 +306,10 @@ impl App {
     fn manifest_label(&self) -> String {
         match &self.manifest {
             Some(manifest) => format!(
-                "{} {} channels={} max_payload={}",
+                "{} {} api={} channels={} max_payload={}",
                 empty_as_dash(&manifest.device_name),
                 empty_as_dash(&manifest.firmware_version),
+                manifest.protocol_version,
                 manifest.channels.len(),
                 manifest.max_payload_len
             ),
@@ -458,13 +462,16 @@ fn run_loop(
     diagnostics_path: String,
 ) -> io::Result<()> {
     let reconnect_delay = Duration::from_millis(args.reconnect_delay_ms);
+    let target_fps = resolve_tui_fps(args.tui_fps);
+    let frame_interval = Duration::from_secs_f64(1.0 / f64::from(target_fps));
     let mut app = App::new(diagnostics_path);
+    app.target_fps = target_fps;
     app.push_marker(format!(
         "diagnostics: {}; Ctrl-B 0..9 filters; Enter sends; Ctrl-C/Ctrl-]/Esc x quits",
         app.diagnostics_path
     ));
 
-    let mut serial = None;
+    let mut backend: Option<ConnectedInteractiveBackend> = None;
     let mut host_session = HostSession::new(args.max_payload_len).map_err(|status| {
         io::Error::new(
             io::ErrorKind::Other,
@@ -472,25 +479,33 @@ fn run_loop(
         )
     })?;
     let mut last_connect_attempt = Instant::now() - reconnect_delay;
-    let mut buf = [0u8; 4096];
+    let mut dirty = true;
+    let mut next_render_at = Instant::now();
 
     loop {
-        if serial.is_none() && last_connect_attempt.elapsed() >= reconnect_delay {
+        if backend.is_none() && last_connect_attempt.elapsed() >= reconnect_delay {
             last_connect_attempt = Instant::now();
-            match open_available_port_with_timeout(
+            match interactive::open_interactive_backend(
                 &args.port,
                 args.baud,
+                args.interactive_backend,
                 INTERACTIVE_SERIAL_READ_TIMEOUT,
             ) {
-                Ok((path, mut port)) => {
+                Ok((path, mut connected_backend)) => {
                     app.connected_port = Some(path.display().to_string());
+                    app.backend_label = connected_backend.label().to_string();
                     app.status = format!("connected {}", path.display());
-                    writeln!(diagnostics, "[wiremux] connected: {}", path.display())?;
+                    writeln!(
+                        diagnostics,
+                        "[wiremux] connected: {} backend={}",
+                        path.display(),
+                        connected_backend.label()
+                    )?;
                     let request = build_manifest_request_frame(args.max_payload_len)
                         .map_err(build_frame_error_to_io)?;
-                    port.write_all(&request)?;
-                    port.flush()?;
-                    serial = Some(port);
+                    connected_backend.write_all(&request)?;
+                    connected_backend.flush()?;
+                    backend = Some(connected_backend);
                     host_session = HostSession::new(args.max_payload_len).map_err(|status| {
                         io::Error::new(
                             io::ErrorKind::Other,
@@ -498,72 +513,152 @@ fn run_loop(
                         )
                     })?;
                     app.push_marker("manifest requested");
+                    dirty = true;
                 }
                 Err(err) => {
                     app.status = format!("waiting for {}: {err}", args.port.display());
+                    app.backend_label = "disconnected".to_string();
                     writeln!(
                         diagnostics,
                         "[wiremux] waiting for {}: {err}",
                         args.port.display()
                     )?;
+                    dirty = true;
                 }
             }
         }
 
-        if let Some(port) = serial.as_mut() {
-            match port.read(&mut buf) {
-                Ok(0) => {
-                    app.push_marker("disconnected: EOF");
-                    serial = None;
-                }
-                Ok(read_len) => {
-                    for event in host_session.feed(&buf[..read_len]).map_err(|status| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("host session feed failed: {status}"),
-                        )
-                    })? {
-                        handle_stream_event(&mut app, &mut diagnostics, event)?;
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
-                Err(err) => {
-                    app.push_marker(format!("disconnected: {err}"));
-                    writeln!(diagnostics, "[wiremux] disconnected: {err}")?;
-                    serial = None;
-                }
+        if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
+            if handle_exit_escape_timeout(&mut app, Some(serial), &args)? {
+                dirty = true;
             }
+        } else if handle_exit_escape_timeout(&mut app, None, &args)? {
+            dirty = true;
         }
 
-        handle_exit_escape_timeout(&mut app, serial.as_mut(), &args)?;
-
-        while event::poll(Duration::from_millis(1))? {
-            match event::read()? {
-                Event::Key(key) => handle_key(&mut app, serial.as_mut(), &args, key)?,
-                Event::Mouse(mouse) => {
-                    let output_area = output_area_from_terminal_area(terminal.size()?.into());
-                    handle_mouse(&mut app, output_area, mouse);
-                }
-                _ => {}
-            }
+        let now = Instant::now();
+        if dirty && now >= next_render_at {
+            terminal.draw(|frame| render(frame, &app))?;
+            next_render_at = Instant::now() + frame_interval;
+            dirty = false;
         }
 
-        terminal.draw(|frame| render(frame, &app))?;
         diagnostics.flush()?;
 
         if app.should_quit {
             break;
         }
 
-        thread::sleep(Duration::from_millis(16));
+        let deadline = next_deadline(
+            backend.is_none(),
+            last_connect_attempt + reconnect_delay,
+            app.exit_escape_started_at.map(|started_at| {
+                started_at + Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
+            }),
+            dirty.then_some(next_render_at),
+        );
+
+        let event = if let Some(backend) = backend.as_mut() {
+            backend.next_event(deadline)?
+        } else {
+            interactive::wait_terminal_event(deadline)?
+        };
+
+        match event {
+            InteractiveEvent::SerialBytes(bytes) => {
+                for event in host_session.feed(&bytes).map_err(|status| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("host session feed failed: {status}"),
+                    )
+                })? {
+                    handle_stream_event(&mut app, &mut diagnostics, event)?;
+                }
+                dirty = true;
+            }
+            InteractiveEvent::SerialEof => {
+                app.push_marker("disconnected: EOF");
+                app.connected_port = None;
+                app.backend_label = "disconnected".to_string();
+                backend = None;
+                dirty = true;
+            }
+            InteractiveEvent::SerialError(err) => {
+                if err.kind() == io::ErrorKind::TimedOut {
+                    continue;
+                }
+                app.push_marker(format!("disconnected: {err}"));
+                writeln!(diagnostics, "[wiremux] disconnected: {err}")?;
+                app.connected_port = None;
+                app.backend_label = "disconnected".to_string();
+                backend = None;
+                dirty = true;
+            }
+            InteractiveEvent::Terminal(Event::Key(key)) => {
+                if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
+                    handle_key(&mut app, Some(serial), &args, key)?;
+                } else {
+                    handle_key(&mut app, None, &args, key)?;
+                }
+                dirty = true;
+            }
+            InteractiveEvent::Terminal(Event::Mouse(mouse)) => {
+                let output_area = output_area_from_terminal_area(terminal.size()?.into());
+                handle_mouse(&mut app, output_area, mouse);
+                dirty = true;
+            }
+            InteractiveEvent::Terminal(_) => {
+                dirty = true;
+            }
+            InteractiveEvent::Timeout => {
+                if backend.is_none() && last_connect_attempt.elapsed() >= reconnect_delay {
+                    continue;
+                }
+                if app.exit_escape_started_at.is_some_and(|started_at| {
+                    started_at.elapsed()
+                        >= Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
+                }) {
+                    dirty = true;
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
+fn next_deadline(
+    reconnect_pending: bool,
+    reconnect_at: Instant,
+    escape_at: Option<Instant>,
+    render_at: Option<Instant>,
+) -> Option<Instant> {
+    [
+        reconnect_pending.then_some(reconnect_at),
+        escape_at,
+        render_at,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+}
+
+fn resolve_tui_fps(override_fps: Option<u16>) -> u16 {
+    if let Some(fps) = override_fps {
+        return fps;
+    }
+    if std::env::var("TERM").is_ok_and(|value| value == "xterm-ghostty")
+        || std::env::var("TERM_PROGRAM").is_ok_and(|value| value.eq_ignore_ascii_case("ghostty"))
+    {
+        120
+    } else {
+        60
+    }
+}
+
 fn handle_key(
     app: &mut App,
-    serial: Option<&mut Box<dyn serialport::SerialPort>>,
+    serial: Option<&mut dyn Write>,
     args: &TuiArgs,
     key: KeyEvent,
 ) -> io::Result<()> {
@@ -583,7 +678,10 @@ fn handle_key(
             app.should_quit = true;
             return Ok(());
         }
-        apply_pending_escape(app, serial.as_mut().map(|port| &mut **port), args)?;
+        match serial.as_mut() {
+            Some(port) => apply_pending_escape(app, Some(&mut **port), args)?,
+            None => apply_pending_escape(app, None, args)?,
+        }
     }
 
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('b') {
@@ -634,9 +732,10 @@ fn handle_key(
             }
             _ => {}
         },
-        InputState::Passthrough(_) => {
-            send_tui_passthrough_key(app, serial.as_mut().map(|port| &mut **port), args, key)?;
-        }
+        InputState::Passthrough(_) => match serial.as_mut() {
+            Some(port) => send_tui_passthrough_key(app, Some(&mut **port), args, key)?,
+            None => send_tui_passthrough_key(app, None, args, key)?,
+        },
         InputState::Line(channel) => match key.code {
             KeyCode::Char(ch) => {
                 app.reset_empty_enter_restore();
@@ -654,7 +753,7 @@ fn handle_key(
                 app.reset_empty_enter_restore();
                 let frame = build_input_frame(channel, app.input.as_bytes(), args.max_payload_len)
                     .map_err(build_frame_error_to_io)?;
-                if let Some(port) = serial {
+                if let Some(port) = serial.as_mut() {
                     port.write_all(&frame)?;
                     port.flush()?;
                     app.status = format!("sent {} bytes to ch{channel}", app.input.len());
@@ -672,21 +771,22 @@ fn handle_key(
 
 fn handle_exit_escape_timeout(
     app: &mut App,
-    serial: Option<&mut Box<dyn serialport::SerialPort>>,
+    serial: Option<&mut dyn Write>,
     args: &TuiArgs,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     if app.exit_escape_started_at.is_some_and(|started_at| {
         started_at.elapsed() >= Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
     }) {
         app.exit_escape_started_at = None;
         apply_pending_escape(app, serial, args)?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn apply_pending_escape(
     app: &mut App,
-    serial: Option<&mut Box<dyn serialport::SerialPort>>,
+    serial: Option<&mut dyn Write>,
     args: &TuiArgs,
 ) -> io::Result<()> {
     if app.active_input_is_passthrough() {
@@ -709,7 +809,7 @@ fn apply_pending_escape(
 
 fn send_tui_passthrough_key(
     app: &mut App,
-    serial: Option<&mut Box<dyn serialport::SerialPort>>,
+    serial: Option<&mut dyn Write>,
     args: &TuiArgs,
     key: KeyEvent,
 ) -> io::Result<()> {
@@ -952,6 +1052,12 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             Span::raw(app.manifest_label()),
         ]),
         Line::from(vec![
+            Span::styled("backend ", Style::default().fg(Color::Yellow)),
+            Span::raw(app.backend_label.as_str()),
+            Span::raw("  "),
+            Span::styled("fps ", Style::default().fg(Color::Yellow)),
+            Span::raw(app.target_fps.to_string()),
+            Span::raw("  "),
             Span::styled("status ", Style::default().fg(Color::Yellow)),
             Span::raw(app.status.as_str()),
         ]),
@@ -1246,7 +1352,7 @@ fn main_layout(area: Rect) -> std::rc::Rc<[Rect]> {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Length(3),
         ])
         .split(area)
@@ -1863,6 +1969,8 @@ mod tests {
                 baud: 115200,
                 max_payload_len: 512,
                 reconnect_delay_ms: 500,
+                interactive_backend: interactive::InteractiveBackendMode::Auto,
+                tui_fps: None,
             },
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
         )
@@ -1998,6 +2106,26 @@ mod tests {
         let input_row = buffer_row(terminal.backend().buffer(), input_area.y + 1, area.width);
         assert!(input_row.contains("> passthrough: type in output pane"));
         assert!(!input_row.contains("stale line input"));
+    }
+
+    #[test]
+    fn render_status_shows_backend_and_fps() {
+        let mut app = App::new("diag.log".to_string());
+        app.backend_label = "mio".to_string();
+        app.target_fps = 120;
+        app.manifest = Some(line_manifest(1));
+        let area = Rect::new(0, 0, 80, 12);
+        let status_area = main_layout(area)[1];
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let device_row = buffer_row(terminal.backend().buffer(), status_area.y + 1, area.width);
+        let backend_row = buffer_row(terminal.backend().buffer(), status_area.y + 2, area.width);
+        assert!(device_row.contains("device - - api=2"));
+        assert!(backend_row.contains("backend mio"));
+        assert!(backend_row.contains("fps 120"));
     }
 
     #[test]
@@ -2262,6 +2390,8 @@ mod tests {
             baud: 115200,
             max_payload_len: 512,
             reconnect_delay_ms: 500,
+            interactive_backend: interactive::InteractiveBackendMode::Auto,
+            tui_fps: None,
         }
     }
 

@@ -899,6 +899,9 @@ name = "wiremux"
 version = "2604.27.3"
 dependencies = [
  "crossterm",
+ "mio",
  "ratatui",
  "serialport",
+ "signal-hook",
+ "signal-hook-mio",
 ]

@@ -129,7 +129,7 @@ cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 cargo run -- passthrough --port /dev/tty.usbmodem2101 --baud 115200 --channel 1
-cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
+cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200 --tui-fps 120
 ```
 
 Common commands:
@@ -138,8 +138,8 @@ Common commands:
 - `listen --channel N`: print only decoded payload bytes from one channel.
 - `listen --line TEXT`: send one host-to-device input frame after connecting, then continue listening on the same serial handle.
 - `send`: send one input frame and exit.
-- `passthrough --channel N`: attach to one mux channel and forward key bytes immediately; `Ctrl-]` exits when supported by the terminal, and `Esc` then `x` is the portable exit sequence.
-- `tui`: open a ratatui interface for channel filtering, scrollback, manifest display, and manifest-driven line/passthrough input with a native input cursor; `Ctrl-C`, `Ctrl-]`, or `Esc` then `x` exits.
+- `passthrough --channel N`: attach to one mux channel and forward key bytes immediately; `Ctrl-]` exits when supported by the terminal, and `Esc` then `x` is the portable exit sequence. `--interactive-backend auto|compat|mio` is optional; `auto` prefers `mio` on Unix and uses `compat` elsewhere.
+- `tui`: open a ratatui interface for channel filtering, scrollback, manifest display, backend/FPS status, and manifest-driven line/passthrough input with a native input cursor; `Ctrl-C`, `Ctrl-]`, or `Esc` then `x` exits. `--interactive-backend auto|compat|mio` selects the event backend, and `--tui-fps 60|120` overrides the automatic 60 fps default / Ghostty 120 fps detection.
 
 On macOS, passing `/dev/tty.usbmodem*` is accepted, but the host tool prefers the paired `/dev/cu.usbmodem*` path for application-side connections.
 

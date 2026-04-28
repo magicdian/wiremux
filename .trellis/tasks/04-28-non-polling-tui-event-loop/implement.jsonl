@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Shared backend abstraction avoids duplicated passthrough/TUI loops"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Host interactive loop behavior and tests"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Interactive serial disconnect and diagnostics behavior"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Host diagnostics output touched by backend fallback/debug HUD"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host Rust module placement and CLI/TUI ownership"}

@@ -141,8 +141,33 @@ Host:
 wiremux listen --port <path> [--channel id]
 wiremux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
 wiremux send --port <path> --channel <id> [--line text]
-wiremux passthrough --port <path> --channel <id>
-wiremux tui --port <path>
+wiremux passthrough --port <path> --channel <id> [--interactive-backend auto|compat|mio]
+wiremux tui --port <path> [--interactive-backend auto|compat|mio] [--tui-fps 60|120]
+```
+
+Rust host interactive backend:
+
+```rust
+pub enum InteractiveBackendMode {
+    Auto,
+    Compat,
+    Mio,
+}
+
+pub enum InteractiveEvent {
+    SerialBytes(Vec<u8>),
+    SerialEof,
+    SerialError(std::io::Error),
+    Terminal(crossterm::event::Event),
+    Timeout,
+}
+
+pub fn open_interactive_backend(
+    requested: &Path,
+    baud: u32,
+    mode: InteractiveBackendMode,
+    read_timeout: Duration,
+) -> io::Result<(PathBuf, ConnectedInteractiveBackend)>;
 ```
 
 ESP:
@@ -180,10 +205,23 @@ the demo, and host verification commands in the same task.
   complete command lines on Enter and `PASSTHROUGH` channels send key bytes
   promptly. TUI must not raw-write user text to the serial stream outside
   `WMUX` frames.
-- Interactive host loops must not block keyboard polling behind the passive
-  listener's serial read timeout. `tui` and `passthrough` should either use a
-  short serial read timeout or otherwise structure the loop so key handling is
-  checked before a potentially long blocking read.
+- Interactive host loops must not block keyboard handling behind the passive
+  listener's serial read timeout. `tui` and `passthrough` must consume
+  `InteractiveEvent` values from the shared interactive backend rather than each
+  owning an ad-hoc serial-read plus terminal-poll loop.
+- `--interactive-backend` is optional and defaults to `auto`. On Unix, `auto`
+  must prefer the `mio` backend and fall back to `compat` with a visible backend
+  label if `mio` cannot open. On non-Unix platforms, `auto` uses `compat`.
+  Explicit `mio` is Unix-only and must fail clearly when unsupported.
+- The compat backend may use serial/input reader threads and channels. The Unix
+  `mio` backend must keep the upper `tui`/`passthrough` business logic identical
+  by emitting the same `InteractiveEvent` variants.
+- TUI rendering is dirty-driven and capped by target FPS. `--tui-fps` accepts
+  only `60` or `120`; absent an override, the host defaults to 60 fps and may
+  select 120 fps for confidently detected Ghostty terminals.
+- TUI status must continue to show device manifest metadata including
+  `DeviceManifest.protocol_version` as the device proto API version. Backend and
+  FPS status belong in the existing status area, not a separate debug panel.
 - TUI passthrough display is channel-local stream editing. In
   `sources/host/src/tui.rs`, `complete_stream_line()`,
   `backspace_stream_line()`, and `append_stream_segment()` must operate on the
@@ -229,7 +267,12 @@ the demo, and host verification commands in the same task.
 | TUI submits input in unfiltered mode | host treats the view as read-only and sends no mux input frame |
 | TUI submits input in channel filter mode for an output-only channel | host treats the channel as read-only and sends no mux input frame |
 | TUI submits input in channel filter mode for an input-capable channel | host sends mux input frame to active channel |
-| TUI/passthrough waits for serial data while the user types | keyboard polling is not gated by a long passive-listener read timeout |
+| `--interactive-backend auto` on Unix and mio opens | active backend label is `mio` |
+| `--interactive-backend auto` on Unix and mio fails but compat opens | active backend label reports compat fallback and interactive use continues |
+| `--interactive-backend mio` on non-Unix | command fails clearly before entering the interactive loop |
+| `--tui-fps 144` | CLI parse fails with allowed values `60` or `120` |
+| TUI/passthrough waits for serial data while the user types | keyboard handling is not gated by a long passive-listener read timeout |
+| TUI receives manifest with protocol API version | status displays the device API version from `DeviceManifest.protocol_version` |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
 | passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
 | passthrough command output wraps inside a narrow output pane | scrollbar and cursor row/column follow visual wrapped rows, not the logical `OutputLine` index |
@@ -245,10 +288,22 @@ the demo, and host verification commands in the same task.
   is followed visually by a current `ch1(console)> ` prompt row. Empty Enter
   creates a completed empty prompt history row and advances to the next current
   prompt, matching terminal behavior.
+- Good: `wiremux tui --interactive-backend auto` on Unix shows `backend mio` in
+  status when raw-fd readiness is available, while Windows shows `backend
+  compat`.
+- Good: TUI status shows `api=<version>` from the received device manifest so
+  users can see which proto API the device is using.
 - Base: telemetry and log channels continue emitting while console input is used.
+- Base: `wiremux passthrough --interactive-backend compat` works on every
+  platform supported by `serialport`.
 - Bad: TUI passthrough append logic edits only the global last line, causing an
   interleaved telemetry record to split a single console input echo into two
   ch1 rows.
+- Bad: adding a Unix `mio` implementation by forking the whole TUI or
+  passthrough business loop instead of keeping the shared `InteractiveEvent`
+  boundary.
+- Bad: placing backend/FPS information in a separate TUI panel that hides or
+  displaces the existing device manifest/version status.
 - Bad: treating empty `CRLF` as a reusable incomplete prompt suppresses terminal
   Enter semantics and makes prompt history diverge from shell-like behavior.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
@@ -259,7 +314,11 @@ the demo, and host verification commands in the same task.
 - Host unit test builds an input frame and verifies the scanner decodes it back into the expected envelope fields.
 - Host unit tests cover `listen --line`, `--send-channel`, invalid channel, missing line for one-shot `send`, and macOS `tty` to `cu` preference.
 - Host unit tests cover `tui` parser behavior, manifest request frame
-  construction, and manifest decode with channel interaction modes.
+  construction, manifest decode with channel interaction modes,
+  `--interactive-backend` parsing, invalid backend values, `--tui-fps 60|120`,
+  and invalid FPS values.
+- Host TUI render tests must assert that the status area includes backend, FPS,
+  and device proto API version from `DeviceManifest.protocol_version`.
 - Host unit tests cover TUI scrollback behavior: live-tail visible-window math,
   mouse wheel pause/resume, append-while-frozen stability, filtered scroll
   counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
@@ -304,6 +363,20 @@ Correct single-process hardware check:
 
 ```text
 Host opens the serial port once, sends the input frame with `listen --line`, then keeps decoding output on the same handle.
+```
+
+#### Wrong
+
+```text
+Unix raw-fd readiness is implemented by maintaining a separate TUI loop from the
+compat backend, so passthrough escape handling and TUI status drift by platform.
+```
+
+#### Correct
+
+```text
+Unix mio and compat both emit `InteractiveEvent` values. TUI and passthrough own
+the protocol/session/status behavior above that shared backend boundary.
 ```
 
 ## Scenario: Release Versioning and ESP Registry Packaging
