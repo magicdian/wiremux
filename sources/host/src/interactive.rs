@@ -291,7 +291,7 @@ pub fn wait_terminal_event(deadline: Option<Instant>) -> io::Result<InteractiveE
     }
 }
 
-fn drain_terminal_event() -> io::Result<Option<Event>> {
+pub(crate) fn drain_terminal_event() -> io::Result<Option<Event>> {
     if event::poll(Duration::ZERO)? {
         Ok(Some(event::read()?))
     } else {

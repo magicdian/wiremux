@@ -35,6 +35,7 @@ use super::{
 
 const MAX_LINES: usize = 1000;
 const WHEEL_SCROLL_LINES: usize = 1;
+const TERMINAL_BURST_DRAIN_LIMIT: usize = 256;
 
 struct OutputLine {
     channel: Option<u32>,
@@ -357,6 +358,13 @@ impl App {
     }
 
     fn scroll_up(&mut self, output_area: Rect) {
+        self.scroll_up_by(output_area, WHEEL_SCROLL_LINES);
+    }
+
+    fn scroll_up_by(&mut self, output_area: Rect, lines: usize) {
+        if lines == 0 {
+            return;
+        }
         self.empty_enter_restore_count = 0;
         self.scroll_target_offset = None;
         let max_offset = self.max_scroll_offset(output_area);
@@ -366,7 +374,7 @@ impl App {
         }
         self.scroll_offset = self
             .scroll_offset
-            .saturating_add(WHEEL_SCROLL_LINES)
+            .saturating_add(lines.saturating_mul(WHEEL_SCROLL_LINES))
             .min(max_offset);
         self.status = format!(
             "scrollback paused: {} lines from bottom",
@@ -375,11 +383,24 @@ impl App {
     }
 
     fn scroll_down(&mut self, output_area: Rect) {
+        self.scroll_down_by(output_area, WHEEL_SCROLL_LINES);
+    }
+
+    fn scroll_down_by(&mut self, output_area: Rect, lines: usize) {
+        if lines == 0 {
+            return;
+        }
         self.empty_enter_restore_count = 0;
         self.scroll_target_offset = None;
+        if self.scroll_offset == 0 {
+            self.status = "scrollback: following live output".to_string();
+            return;
+        }
         let max_offset = self.max_scroll_offset(output_area);
         self.scroll_offset = self.scroll_offset.min(max_offset);
-        self.scroll_offset = self.scroll_offset.saturating_sub(WHEEL_SCROLL_LINES);
+        self.scroll_offset = self
+            .scroll_offset
+            .saturating_sub(lines.saturating_mul(WHEEL_SCROLL_LINES));
         if self.scroll_offset == 0 {
             self.status = "scrollback: following live output".to_string();
         } else {
@@ -628,20 +649,14 @@ fn run_loop(
                 backend = None;
                 dirty = true;
             }
-            InteractiveEvent::Terminal(Event::Key(key)) => {
-                if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
-                    handle_key(&mut app, Some(serial), &args, key)?;
-                } else {
-                    handle_key(&mut app, None, &args, key)?;
-                }
-                dirty = true;
-            }
-            InteractiveEvent::Terminal(Event::Mouse(mouse)) => {
+            InteractiveEvent::Terminal(event) => {
                 let output_area = output_area_from_terminal_area(terminal.size()?.into());
-                handle_mouse(&mut app, output_area, mouse);
-                dirty = true;
-            }
-            InteractiveEvent::Terminal(_) => {
+                let events = collect_terminal_burst(event)?;
+                if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
+                    handle_terminal_events(&mut app, output_area, Some(serial), &args, events)?;
+                } else {
+                    handle_terminal_events(&mut app, output_area, None, &args, events)?;
+                }
                 dirty = true;
             }
             InteractiveEvent::Timeout => {
@@ -659,6 +674,23 @@ fn run_loop(
     }
 
     Ok(())
+}
+
+fn collect_terminal_burst(first: Event) -> io::Result<Vec<Event>> {
+    let mut events = vec![first];
+    if !events.first().is_some_and(
+        |event| matches!(event, Event::Mouse(mouse) if mouse_wheel_direction(mouse).is_some()),
+    ) {
+        return Ok(events);
+    }
+
+    while events.len() < TERMINAL_BURST_DRAIN_LIMIT {
+        let Some(event) = interactive::drain_terminal_event()? else {
+            break;
+        };
+        events.push(event);
+    }
+    Ok(events)
 }
 
 fn next_deadline(
@@ -873,14 +905,91 @@ fn send_tui_passthrough_key(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WheelDirection {
+    Up,
+    Down,
+}
+
+fn handle_terminal_events<I>(
+    app: &mut App,
+    output_area: Rect,
+    serial: Option<&mut dyn Write>,
+    args: &TuiArgs,
+    events: I,
+) -> io::Result<()>
+where
+    I: IntoIterator<Item = Event>,
+{
+    let mut serial = serial;
+    let mut wheel_run = None;
+    let mut wheel_count = 0usize;
+
+    for event in events {
+        if let Event::Mouse(mouse) = event {
+            if let Some(direction) = mouse_wheel_direction(&mouse) {
+                if wheel_run == Some(direction) {
+                    wheel_count = wheel_count.saturating_add(1);
+                } else {
+                    flush_wheel_run(app, output_area, wheel_run, wheel_count);
+                    wheel_run = Some(direction);
+                    wheel_count = 1;
+                }
+                continue;
+            }
+
+            flush_wheel_run(app, output_area, wheel_run, wheel_count);
+            wheel_run = None;
+            wheel_count = 0;
+            handle_mouse(app, output_area, mouse);
+        } else {
+            flush_wheel_run(app, output_area, wheel_run, wheel_count);
+            wheel_run = None;
+            wheel_count = 0;
+
+            if let Event::Key(key) = event {
+                let serial = serial.as_mut().map(|port| &mut **port as &mut dyn Write);
+                handle_key(app, serial, args, key)?;
+                if app.should_quit {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    flush_wheel_run(app, output_area, wheel_run, wheel_count);
+    Ok(())
+}
+
+fn flush_wheel_run(
+    app: &mut App,
+    output_area: Rect,
+    direction: Option<WheelDirection>,
+    count: usize,
+) {
+    match direction {
+        Some(WheelDirection::Up) => app.scroll_up_by(output_area, count),
+        Some(WheelDirection::Down) => app.scroll_down_by(output_area, count),
+        None => {}
+    }
+}
+
+fn mouse_wheel_direction(mouse: &MouseEvent) -> Option<WheelDirection> {
+    match mouse.kind {
+        MouseEventKind::ScrollUp => Some(WheelDirection::Up),
+        MouseEventKind::ScrollDown => Some(WheelDirection::Down),
+        _ => None,
+    }
+}
+
 fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
-    let output_height = output_content_height(output_area);
-    let output_width = output_content_width(output_area);
-    let total_rows = app.filtered_visual_row_count(output_width);
     match mouse.kind {
         MouseEventKind::ScrollUp => app.scroll_up(output_area),
         MouseEventKind::ScrollDown => app.scroll_down(output_area),
         MouseEventKind::Down(MouseButton::Left) => {
+            let output_height = output_content_height(output_area);
+            let output_width = output_content_width(output_area);
+            let total_rows = app.filtered_visual_row_count(output_width);
             if let Some(offset) = scrollbar_offset_from_mouse(
                 output_area,
                 total_rows,
@@ -896,6 +1005,9 @@ fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) if app.dragging_scrollbar => {
+            let output_height = output_content_height(output_area);
+            let output_width = output_content_width(output_area);
+            let total_rows = app.filtered_visual_row_count(output_width);
             let offset =
                 scrollbar_offset_from_drag_row(output_area, total_rows, output_height, mouse.row);
             app.animate_to_scroll_offset(offset, output_area);
@@ -1608,6 +1720,51 @@ mod tests {
         app.scroll_down(output_area);
         assert_eq!(app.scroll_offset, 0);
         assert_eq!(app.empty_enter_restore_count, 0);
+    }
+
+    #[test]
+    fn wheel_burst_down_to_tail_then_up_uses_latest_direction() {
+        let mut app = app_with_lines(10);
+        let output_area = output_area_for_content(38, 4);
+        app.scroll_offset = 2;
+
+        handle_terminal_events(
+            &mut app,
+            output_area,
+            None,
+            &tui_args(),
+            vec![
+                Event::Mouse(mouse_scroll(MouseEventKind::ScrollDown)),
+                Event::Mouse(mouse_scroll(MouseEventKind::ScrollDown)),
+                Event::Mouse(mouse_scroll(MouseEventKind::ScrollDown)),
+                Event::Mouse(mouse_scroll(MouseEventKind::ScrollUp)),
+            ],
+        )
+        .expect("handle terminal burst");
+
+        assert_eq!(app.scroll_offset, WHEEL_SCROLL_LINES);
+        assert_eq!(app.status, "scrollback paused: 1 lines from bottom");
+    }
+
+    #[test]
+    fn wheel_burst_does_not_delay_quit_key_after_tail_follow() {
+        let mut app = app_with_lines(10);
+        let output_area = output_area_for_content(38, 4);
+        app.scroll_offset = 2;
+        let mut events = Vec::new();
+        for _ in 0..100 {
+            events.push(Event::Mouse(mouse_scroll(MouseEventKind::ScrollDown)));
+        }
+        events.push(Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+
+        handle_terminal_events(&mut app, output_area, None, &tui_args(), events)
+            .expect("handle terminal burst");
+
+        assert_eq!(app.scroll_offset, 0);
+        assert!(app.should_quit);
     }
 
     #[test]
@@ -2451,6 +2608,15 @@ mod tests {
 
     fn output_area_for_content(width: u16, height: u16) -> Rect {
         Rect::new(0, 0, width.saturating_add(2), height.saturating_add(2))
+    }
+
+    fn mouse_scroll(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        }
     }
 
     fn tui_args() -> TuiArgs {
