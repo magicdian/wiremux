@@ -46,7 +46,6 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "04-29-pr2-migrate-proto-api-boundary",
     "04-29-pr3-migrate-espressif-vendor-layout",
     "04-29-pr4-move-host-wiremux-path",
     "04-29-pr5-host-workspace-skeleton",
