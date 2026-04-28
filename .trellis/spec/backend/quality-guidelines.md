@@ -229,6 +229,12 @@ the demo, and host verification commands in the same task.
   per queued wheel event; cache, coalesce, or defer expensive scroll range work so
   reverse scrolling and quit keys remain responsive while live serial output is
   arriving.
+- TUI scrollbar buttons are explicit jump commands, not smooth-scroll deltas.
+  The down button must immediately re-enter live-following output by setting
+  `scroll_offset = 0` using the latest rendered-row range, even if serial rows
+  arrive during the same event burst. The up button must jump directly to the
+  oldest visible position. Do not animate button clicks through a long backlog;
+  reserve frame-by-frame animation for coarse scrollbar drag targets.
 - Interactive host loops must tolerate recoverable OS interruptions. On Unix,
   terminal resize can deliver `SIGWINCH` while the TUI is blocked in readiness
   polling, terminal event reads, terminal size queries, or serial reads. These
@@ -303,6 +309,7 @@ the demo, and host verification commands in the same task.
 | passthrough empty Enter echoes `CRLF` | TUI stores a completed empty prompt history row and renders the following current prompt row |
 | non-passthrough channel emits partial text then another channel emits output | TUI keeps ordinary line-oriented record display; per-channel stream editing is not applied |
 | user generates many mouse-wheel events, reaches live tail, then immediately scrolls upward or quits | TUI handles the latest direction/quit key promptly instead of draining stale wheel events first |
+| user clicks the scrollbar down button while new output is still arriving | TUI snaps to `scroll_offset = 0` and follows live output on the next render |
 
 ### 5. Good/Base/Bad Cases
 
@@ -321,6 +328,10 @@ the demo, and host verification commands in the same task.
 - Good: after a long scrollback session, a burst of wheel-down events that
   reaches live tail can be followed immediately by wheel-up or `Ctrl-C`; the TUI
   coalesces stale scroll events and preserves quit-key responsiveness.
+- Good: clicking the TUI scrollbar down button during active output immediately
+  returns to following live output. Clicking the up button jumps to the oldest
+  visible scrollback position without spending many frames animating through a
+  large buffer.
 - Base: telemetry and log channels continue emitting while console input is used.
 - Base: `wiremux passthrough --interactive-backend compat` works on every
   platform supported by `serialport`.
@@ -334,6 +345,9 @@ the demo, and host verification commands in the same task.
   displaces the existing device manifest/version status.
 - Bad: processing every queued mouse-wheel event with a fresh full scroll-range
   recomputation while keyboard quit events wait behind the mouse backlog.
+- Bad: treating the scrollbar down button as an animated target from a stale
+  row range, so new output arrives during catch-up and the TUI remains several
+  rows above live tail instead of entering live-following mode.
 - Bad: treating empty `CRLF` as a reusable incomplete prompt suppresses terminal
   Enter semantics and makes prompt history diverge from shell-like behavior.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
@@ -356,10 +370,12 @@ the demo, and host verification commands in the same task.
   mouse wheel pause/resume, append-while-frozen stability, filtered scroll
   counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
   drag continuation when the pointer leaves the scrollbar column, and scrollbar
-  bottom alignment at `scroll_offset = 0`. Responsiveness coverage for future
-  event-loop changes must include burst coalescing or equivalent behavior where
-  stale wheel-down events do not block a later wheel-up or quit key after live
-  tail is reached.
+  bottom alignment at `scroll_offset = 0`. Add coverage for scrollbar up/down
+  buttons as immediate jumps, including the case where the down button is clicked
+  while live output appends. Responsiveness coverage for future event-loop
+  changes must include burst coalescing or equivalent behavior where stale
+  wheel-down events do not block a later wheel-up or quit key after live tail is
+  reached.
 - Host unit tests cover TUI passthrough stream behavior: append until newline,
   split backspace echo, active passthrough output restoring live tail, and
   continuation of an incomplete passthrough channel line across interleaved

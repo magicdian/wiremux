@@ -439,9 +439,13 @@ Required behavior:
   running at 60/120 FPS.
 - TUI scroll recovery uses explicit user actions only: mouse wheel down to
   `scroll_offset = 0`, dragging the right-side output scrollbar to the bottom,
-  or pressing `Enter` twice while the input line is empty. `Enter` with
-  non-empty input must preserve the existing send behavior and must not count
-  toward the recovery gesture.
+  clicking the scrollbar down button, or pressing `Enter` twice while the input
+  line is empty. The scrollbar down button is a follow-live command, not an
+  animated scroll target: handle it by immediately setting `scroll_offset = 0`
+  against the latest rendered output after pending appends are accounted for.
+  Do not let new serial rows arriving during an animated catch-up keep the view
+  several rows above live tail. `Enter` with non-empty input must preserve the
+  existing send behavior and must not count toward the recovery gesture.
 - The TUI right-side scrollbar must use the same wrapped visual row model as the
   output pane. Build the scrollbar state from total rendered rows, viewport
   height, and the visible window's first row; do not model it as a one-cell
@@ -454,7 +458,10 @@ Required behavior:
   if the pointer leaves the column. Because terminal mouse drag events only
   report character-cell rows, large scrollback buffers can map one drag row to
   many content rows; animate the visible `scroll_offset` toward the target at
-  the TUI frame cadence instead of jumping in one render.
+  the TUI frame cadence instead of jumping in one render. Scrollbar up/down
+  button clicks are discrete commands and must bypass this drag animation; the
+  up button jumps directly to the oldest visible position and the down button
+  jumps directly to live tail.
 - On macOS, prefer `/dev/cu.*` over the paired `/dev/tty.*` device when the user passes a USB serial/JTAG path.
 - Use the Rust `serialport` backend for macOS, Linux, and Windows. Do not shell out to `stty` for normal operation.
 - Host transmit commands must reuse `encode_envelope()` and `build_frame_payload_with_max()` rather than duplicating protocol constants in `main.rs`.
@@ -469,6 +476,10 @@ Required behavior:
 - Good: `wiremux tui` is scrolled up while new channel-2 log rows arrive. The
   same historical rows stay visible until the user scrolls back to the bottom,
   drags the scrollbar to the bottom, or presses empty `Enter` twice.
+- Good: `wiremux tui` has a deep scrollback and live output continues arriving
+  while the user clicks the scrollbar down button. The next render follows live
+  tail with `scroll_offset = 0`; it does not spend multiple frames catching up
+  to a stale target offset.
 - Good: `wiremux tui` is filtered to a passthrough console channel, the device
   echoes `help`, telemetry/log channels interleave records before the device
   echoes backspace and `p`; TUI still renders one completed ch1 line `help`,
@@ -505,7 +516,8 @@ Required behavior:
 - Host TUI scrollback changes must test visible window calculation, frozen view
   behavior when matching lines are appended, empty-Enter recovery, filtered-line
   scroll counts, scrollbar row-to-offset mapping, drag behavior after leaving
-  the scrollbar column, and scrollbar position at live tail.
+  the scrollbar column, scrollbar button jump behavior, append-while-jumping to
+  live tail, and scrollbar position at live tail.
 - Host TUI passthrough changes must test single-channel stream append,
   split-record backspace echo, active-channel live-tail restoration, and stream
   continuation when other channel records interleave before the passthrough line
