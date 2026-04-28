@@ -416,6 +416,23 @@ impl App {
         self.status = "scrollback: following live output".to_string();
     }
 
+    fn jump_to_oldest_visible(&mut self, output_area: Rect) {
+        self.empty_enter_restore_count = 0;
+        self.scroll_target_offset = None;
+        self.dragging_scrollbar = false;
+
+        let max_offset = self.max_scroll_offset(output_area);
+        self.scroll_offset = max_offset;
+        if self.scroll_offset == 0 {
+            self.status = "scrollback: following live output".to_string();
+        } else {
+            self.status = format!(
+                "scrollback paused: {} lines from bottom",
+                self.scroll_offset
+            );
+        }
+    }
+
     fn follow_live_output(&mut self) {
         self.scroll_offset = 0;
         self.scroll_target_offset = None;
@@ -913,6 +930,13 @@ enum WheelDirection {
     Down,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollbarMouseTarget {
+    UpButton,
+    DownButton,
+    Track(usize),
+}
+
 fn handle_terminal_events<I>(
     app: &mut App,
     output_area: Rect,
@@ -992,18 +1016,23 @@ fn handle_mouse(app: &mut App, output_area: Rect, mouse: MouseEvent) {
             let output_height = output_content_height(output_area);
             let output_width = output_content_width(output_area);
             let total_rows = app.filtered_visual_row_count(output_width);
-            if let Some(offset) = scrollbar_offset_from_mouse(
+            match scrollbar_mouse_target(
                 output_area,
                 total_rows,
                 output_height,
                 mouse.column,
                 mouse.row,
             ) {
-                app.dragging_scrollbar = true;
-                app.animate_to_scroll_offset(offset, output_area);
-            } else {
-                app.dragging_scrollbar = false;
-                app.reset_empty_enter_restore();
+                Some(ScrollbarMouseTarget::UpButton) => app.jump_to_oldest_visible(output_area),
+                Some(ScrollbarMouseTarget::DownButton) => app.restore_auto_follow(),
+                Some(ScrollbarMouseTarget::Track(offset)) => {
+                    app.dragging_scrollbar = true;
+                    app.animate_to_scroll_offset(offset, output_area);
+                }
+                None => {
+                    app.dragging_scrollbar = false;
+                    app.reset_empty_enter_restore();
+                }
             }
         }
         MouseEventKind::Drag(MouseButton::Left) if app.dragging_scrollbar => {
@@ -1562,6 +1591,7 @@ fn scrollbar_position(total_lines: usize, output_height: usize, scroll_offset: u
     visible_window(total_lines, output_height, scroll_offset).0
 }
 
+#[cfg(test)]
 fn scrollbar_offset_from_mouse(
     output_area: Rect,
     total_lines: usize,
@@ -1569,6 +1599,20 @@ fn scrollbar_offset_from_mouse(
     column: u16,
     row: u16,
 ) -> Option<usize> {
+    match scrollbar_mouse_target(output_area, total_lines, output_height, column, row)? {
+        ScrollbarMouseTarget::UpButton => Some(max_scroll_offset(total_lines, output_height)),
+        ScrollbarMouseTarget::DownButton => Some(0),
+        ScrollbarMouseTarget::Track(offset) => Some(offset),
+    }
+}
+
+fn scrollbar_mouse_target(
+    output_area: Rect,
+    total_lines: usize,
+    output_height: usize,
+    column: u16,
+    row: u16,
+) -> Option<ScrollbarMouseTarget> {
     if output_area.width == 0 || output_area.height == 0 {
         return None;
     }
@@ -1579,12 +1623,20 @@ fn scrollbar_offset_from_mouse(
         return None;
     }
 
-    Some(scrollbar_offset_from_drag_row(
+    if row == output_area.y {
+        return Some(ScrollbarMouseTarget::UpButton);
+    }
+
+    if output_area.height > 1 && row == row_end.saturating_sub(1) {
+        return Some(ScrollbarMouseTarget::DownButton);
+    }
+
+    Some(ScrollbarMouseTarget::Track(scrollbar_offset_from_drag_row(
         output_area,
         total_lines,
         output_height,
         row,
-    ))
+    )))
 }
 
 fn scrollbar_offset_from_drag_row(
@@ -1685,6 +1737,20 @@ mod tests {
         assert_eq!(
             scrollbar_offset_from_mouse(output_area, 30, 10, 39, 5),
             Some(11)
+        );
+    }
+
+    #[test]
+    fn scrollbar_mouse_maps_buttons_to_extreme_offsets() {
+        let output_area = Rect::new(0, 0, 40, 12);
+
+        assert_eq!(
+            scrollbar_offset_from_mouse(output_area, 30, 10, 39, 0),
+            Some(20)
+        );
+        assert_eq!(
+            scrollbar_offset_from_mouse(output_area, 30, 10, 39, 11),
+            Some(0)
         );
     }
 
@@ -1818,6 +1884,48 @@ mod tests {
             },
         );
         assert!(!app.dragging_scrollbar);
+    }
+
+    #[test]
+    fn scrollbar_buttons_jump_without_animation_and_down_follows_appends() {
+        let mut app = app_with_lines(30);
+        let output_area = Rect::new(0, 0, 40, 12);
+        let scrollbar_column = output_area.x + output_area.width - 1;
+        let scrollbar_bottom_row = output_area.y + output_area.height - 1;
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: scrollbar_column,
+                row: output_area.y,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert_eq!(app.scroll_offset, 20);
+        assert_eq!(app.scroll_target_offset, None);
+        assert!(!app.dragging_scrollbar);
+        assert_eq!(app.status, "scrollback paused: 20 lines from bottom");
+
+        handle_mouse(
+            &mut app,
+            output_area,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: scrollbar_column,
+                row: scrollbar_bottom_row,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.scroll_target_offset, None);
+        assert!(!app.dragging_scrollbar);
+        assert_eq!(app.status, "scrollback: following live output");
+
+        app.push_line(None, "line 30\n".to_string());
+        assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.scroll_target_offset, None);
     }
 
     #[test]
