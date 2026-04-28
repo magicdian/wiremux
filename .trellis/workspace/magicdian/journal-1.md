@@ -1029,3 +1029,36 @@ Fixed TUI window resize exits caused by Interrupted system call. Added retry han
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Host TUI selectable output
+
+**Date**: 2026-04-28
+**Task**: Host TUI selectable output
+**Branch**: `dev`
+
+### Summary
+
+Implemented app-managed selection for host TUI output/status text with OSC52 copy actions, continuous edge auto-scroll while dragging, version 2604.28.1 metadata updates, and backend spec coverage for the TUI selection contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af9f2e0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
