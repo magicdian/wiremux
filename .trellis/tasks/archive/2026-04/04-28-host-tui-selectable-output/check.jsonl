@@ -1,0 +1,7 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "verify host Rust changes stay in correct boundaries"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "verify interactive error behavior is preserved"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "verify required host checks and console boundary"}
+{"file": "sources/host/src/tui.rs", "reason": "review TUI selection, render, mouse, tests"}
+{"file": "sources/host/Cargo.toml", "reason": "verify host version update"}

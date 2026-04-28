@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 #define ESP_WIREMUX_CHANNEL_SYSTEM 0
-#define ESP_WIREMUX_VERSION "2604.27.2"
+#define ESP_WIREMUX_VERSION "2604.28.1"
 
 /*
  * ESP-facing aliases keep applications on the esp_wiremux public API while
@@ -47,6 +47,34 @@ typedef enum {
     ESP_WIREMUX_CHANNEL_INTERACTION_LINE = WIREMUX_CHANNEL_INTERACTION_LINE,
     ESP_WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH = WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH,
 } esp_wiremux_channel_interaction_mode_t;
+
+typedef enum {
+    ESP_WIREMUX_NEWLINE_POLICY_UNSPECIFIED = WIREMUX_NEWLINE_POLICY_UNSPECIFIED,
+    ESP_WIREMUX_NEWLINE_POLICY_PRESERVE = WIREMUX_NEWLINE_POLICY_PRESERVE,
+    ESP_WIREMUX_NEWLINE_POLICY_LF = WIREMUX_NEWLINE_POLICY_LF,
+    ESP_WIREMUX_NEWLINE_POLICY_CR = WIREMUX_NEWLINE_POLICY_CR,
+    ESP_WIREMUX_NEWLINE_POLICY_CRLF = WIREMUX_NEWLINE_POLICY_CRLF,
+} esp_wiremux_newline_policy_t;
+
+typedef enum {
+    ESP_WIREMUX_ECHO_POLICY_UNSPECIFIED = WIREMUX_ECHO_POLICY_UNSPECIFIED,
+    ESP_WIREMUX_ECHO_POLICY_REMOTE = WIREMUX_ECHO_POLICY_REMOTE,
+    ESP_WIREMUX_ECHO_POLICY_LOCAL = WIREMUX_ECHO_POLICY_LOCAL,
+    ESP_WIREMUX_ECHO_POLICY_NONE = WIREMUX_ECHO_POLICY_NONE,
+} esp_wiremux_echo_policy_t;
+
+typedef enum {
+    ESP_WIREMUX_CONTROL_KEY_POLICY_UNSPECIFIED = WIREMUX_CONTROL_KEY_POLICY_UNSPECIFIED,
+    ESP_WIREMUX_CONTROL_KEY_POLICY_HOST_HANDLED = WIREMUX_CONTROL_KEY_POLICY_HOST_HANDLED,
+    ESP_WIREMUX_CONTROL_KEY_POLICY_FORWARDED = WIREMUX_CONTROL_KEY_POLICY_FORWARDED,
+} esp_wiremux_control_key_policy_t;
+
+typedef struct {
+    esp_wiremux_newline_policy_t input_newline_policy;
+    esp_wiremux_newline_policy_t output_newline_policy;
+    esp_wiremux_echo_policy_t echo_policy;
+    esp_wiremux_control_key_policy_t control_key_policy;
+} esp_wiremux_passthrough_policy_t;
 
 typedef enum {
     ESP_WIREMUX_FLUSH_IMMEDIATE = 0,
@@ -115,6 +143,7 @@ typedef struct {
     esp_wiremux_flush_policy_t flush_policy;
     esp_wiremux_backpressure_policy_t backpressure_policy;
     esp_wiremux_channel_interaction_mode_t interaction_mode;
+    esp_wiremux_passthrough_policy_t passthrough_policy;
     esp_wiremux_direction_policy_t input_policy;
     esp_wiremux_direction_policy_t output_policy;
 } esp_wiremux_channel_config_t;

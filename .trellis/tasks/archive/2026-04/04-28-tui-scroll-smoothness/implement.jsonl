@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host Rust/TUI file ownership and TUI scrollback contract"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "TUI FPS, dirty rendering, scrollback and required host checks"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Search existing scroll/render helpers before adding new logic"}

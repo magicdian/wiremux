@@ -28,6 +28,8 @@ sources/
 │       │   ├── wiremux_manifest.h
 │       │   ├── wiremux_batch.h
 │       │   ├── wiremux_compression.h
+│       │   ├── wiremux_host_session.h
+│       │   ├── wiremux_version.h
 │       │   └── wiremux_status.h
 │       ├── src/
 │           ├── wiremux_batch.c
@@ -35,7 +37,9 @@ sources/
 │           ├── wiremux_proto_internal.h
 │           ├── wiremux_envelope.c
 │           ├── wiremux_frame.c
-│           └── wiremux_manifest.c
+│           ├── wiremux_host_session.c
+│           ├── wiremux_manifest.c
+│           └── wiremux_version.c
 │       └── tests/
 │           └── wiremux_core_test.cpp
 ├── host/
@@ -87,6 +91,11 @@ The portable C core lives under `sources/core/c`.
   contract.
 - `include/wiremux_compression.h`: shared compression/decompression contract for
   Wiremux batch payloads.
+- `include/wiremux_host_session.h`: high-level host session API for mixed-stream
+  scanning, envelope decode, manifest parsing, batch expansion, compression
+  decode, host frame construction, and protocol compatibility events.
+- `include/wiremux_version.h`: protocol API version constants and compatibility
+  classification helpers.
 - `include/wiremux_status.h`: portable status codes used by core APIs before
   platform adapters map them to runtime-specific error types.
 - `src/wiremux_frame.c`: platform-independent frame encode/decode
@@ -99,10 +108,14 @@ The portable C core lives under `sources/core/c`.
   batch-record encode/decode implementation.
 - `src/wiremux_compression.c`: platform-independent heatshrink-style and LZ4
   codec implementation used by ESP and host-compatible tests.
+- `src/wiremux_host_session.c`: platform-independent host session state machine.
+- `src/wiremux_version.c`: platform-independent protocol API compatibility
+  helper.
 - `CMakeLists.txt`: host-side GoogleTest/GoogleMock test project for the
   portable core.
 - `tests/wiremux_core_test.cpp`: host-side GoogleTest coverage for CRC, frame,
-  envelope, manifest, and representative error/status branches.
+  envelope, manifest, host session, API versioning, and representative
+  error/status branches.
 
 Platform adapters must prefer this core for shared protocol primitives instead
 of duplicating frame constants, length checks, CRC implementations, or
@@ -388,8 +401,31 @@ Required behavior:
 - `tui` owns one serial handle, requests a manifest after connect, displays
   decoded output in a ratatui interface using `chN(name)> ` when manifest names
   are available, and sends bottom-line input through mux input frames. In
-  unfiltered mode TUI input targets channel 1; in channel filter mode it targets
-  the active channel.
+  unfiltered mode TUI is read-only and must not route typed input to any mux
+  channel. In channel filter mode, TUI input targets the active channel only
+  when the manifest descriptor for that channel includes `DIRECTION_INPUT`; the
+  manifest interaction mode then determines line vs passthrough input.
+- `tui` and `passthrough` are interactive input paths. Their serial read timeout
+  must stay short enough that a blocking read cannot make keyboard handling feel
+  delayed. Passive `listen` may use a longer read timeout, but do not share that
+  timeout with interactive loops unless the loop polls keyboard input before any
+  blocking serial read.
+- TUI passthrough output uses stream semantics only for channels whose manifest
+  advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/src/tui.rs` must
+  keep each passthrough channel's incomplete `OutputLine` independent: when a
+  ch1 console echo line is incomplete, interleaved ch2/ch3/ch4 log or telemetry
+  records must not force later ch1 echo bytes into a new ch1 line. Backspace
+  (`0x08` or `0x7f`) and line completion (`CR`, `LF`, `CRLF`) apply to the
+  latest incomplete line for the same channel, not merely to the global last
+  rendered line. Non-passthrough channels continue to use line-oriented record
+  display and must not inherit this per-channel stream editing behavior.
+- TUI passthrough prompt rendering is terminal-like. Empty `CR`, `LF`, or
+  `CRLF` from the active passthrough channel must complete a visible empty
+  prompt history row, so empty Enter behaves like a shell and advances history.
+  At live tail, render may append a virtual current prompt row after the latest
+  completed active-channel row; that row is presentation-only and must not be
+  stored in `App::lines`. The TUI cursor belongs in the upper output pane for
+  passthrough mode and in the bottom input box for line mode.
 - TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
   channel filters 1 through 9.
 - TUI output scrollback is an in-memory viewport over the existing bounded
@@ -397,17 +433,35 @@ Required behavior:
   output pane follows live tail output. Mouse wheel up increases
   `scroll_offset` and freezes the visible window; matching incoming lines must
   increase `scroll_offset` while frozen so the same historical rows stay visible.
+  Mouse-wheel scrolling should move by one wrapped visual row per wheel event
+  unless an explicit smooth-scroll accumulator exists; larger fixed jumps make
+  the output pane and scrollbar appear choppy even when the render loop is
+  running at 60/120 FPS.
 - TUI scroll recovery uses explicit user actions only: mouse wheel down to
   `scroll_offset = 0`, dragging the right-side output scrollbar to the bottom,
-  or pressing `Enter` twice while the input line is empty. `Enter` with
-  non-empty input must preserve the existing send behavior and must not count
-  toward the recovery gesture.
-- The TUI right-side scrollbar represents scrollable positions, not raw content
-  rows: `position = max_scroll_offset - scroll_offset`. At live tail
+  clicking the scrollbar down button, or pressing `Enter` twice while the input
+  line is empty. The scrollbar down button is a follow-live command, not an
+  animated scroll target: handle it by immediately setting `scroll_offset = 0`
+  against the latest rendered output after pending appends are accounted for.
+  Do not let new serial rows arriving during an animated catch-up keep the view
+  several rows above live tail. `Enter` with non-empty input must preserve the
+  existing send behavior and must not count toward the recovery gesture.
+- The TUI right-side scrollbar must use the same wrapped visual row model as the
+  output pane. Build the scrollbar state from total rendered rows, viewport
+  height, and the visible window's first row; do not model it as a one-cell
+  viewport over only the scrollable offset count. At live tail
   (`scroll_offset = 0`) the thumb must render at the bottom; at the oldest
-  visible position it must render at the top. Mouse dragging must start on the
-  scrollbar column, but once dragging is active, row movement should keep
-  updating the offset even if the pointer leaves the column.
+  visible position it must render at the top. Keep the thumb visually solid;
+  tiny fractional block changes can make terminal scrollbars look more stalled
+  and jittery. Mouse dragging must start on the scrollbar column, but once
+  dragging is active, row movement should keep updating the target offset even
+  if the pointer leaves the column. Because terminal mouse drag events only
+  report character-cell rows, large scrollback buffers can map one drag row to
+  many content rows; animate the visible `scroll_offset` toward the target at
+  the TUI frame cadence instead of jumping in one render. Scrollbar up/down
+  button clicks are discrete commands and must bypass this drag animation; the
+  up button jumps directly to the oldest visible position and the down button
+  jumps directly to live tail.
 - On macOS, prefer `/dev/cu.*` over the paired `/dev/tty.*` device when the user passes a USB serial/JTAG path.
 - Use the Rust `serialport` backend for macOS, Linux, and Windows. Do not shell out to `stty` for normal operation.
 - Host transmit commands must reuse `encode_envelope()` and `build_frame_payload_with_max()` rather than duplicating protocol constants in `main.rs`.
@@ -422,6 +476,19 @@ Required behavior:
 - Good: `wiremux tui` is scrolled up while new channel-2 log rows arrive. The
   same historical rows stay visible until the user scrolls back to the bottom,
   drags the scrollbar to the bottom, or presses empty `Enter` twice.
+- Good: `wiremux tui` has a deep scrollback and live output continues arriving
+  while the user clicks the scrollbar down button. The next render follows live
+  tail with `scroll_offset = 0`; it does not spend multiple frames catching up
+  to a stale target offset.
+- Good: `wiremux tui` is filtered to a passthrough console channel, the device
+  echoes `help`, telemetry/log channels interleave records before the device
+  echoes backspace and `p`; TUI still renders one completed ch1 line `help`,
+  not a separate ch1 line containing only `p`.
+- Good: `wiremux tui` is filtered to a passthrough console channel, the device
+  completes `available commands...\n`, and no new echo has arrived. At live tail
+  TUI shows a current `ch1(console)> ` prompt row with the cursor after the
+  prompt. If the user sends empty Enter and the device echoes `CRLF`, the empty
+  prompt remains in history and TUI shows the next current prompt row.
 - Base: frame arrives one byte at a time. Host emits no partial frame until length and CRC are complete.
 - Bad: ordinary text contains `WMUX` with unsupported version or oversized length. Host must resynchronize and preserve bytes as terminal output.
 - Bad: a TUI scrollbar uses the raw first visible row as its position; at live
@@ -433,8 +500,10 @@ Required behavior:
 
 ### Tests Required
 
-- Rust tests must cover valid frames, partial frames, false magic, bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
-- ESP frame encoder changes must be validated against Rust scanner output before release.
+- Portable C host session tests must cover valid frames, partial frames, false magic,
+  bad CRC, unsupported version, oversized payload, and one-byte chunk replay.
+- ESP frame encoder changes must be validated against core C host session output
+  before release.
 - Portable C core changes must pass `ctest --test-dir sources/core/c/build
   --output-on-failure` after configuring and building `sources/core/c`.
 - Bidirectional changes must keep the existing host frame-building and CLI parser
@@ -447,7 +516,137 @@ Required behavior:
 - Host TUI scrollback changes must test visible window calculation, frozen view
   behavior when matching lines are appended, empty-Enter recovery, filtered-line
   scroll counts, scrollbar row-to-offset mapping, drag behavior after leaving
-  the scrollbar column, and scrollbar position at live tail.
+  the scrollbar column, scrollbar button jump behavior, append-while-jumping to
+  live tail, and scrollbar position at live tail.
+- Host TUI passthrough changes must test single-channel stream append,
+  split-record backspace echo, active-channel live-tail restoration, and stream
+  continuation when other channel records interleave before the passthrough line
+  is completed. Prompt UX changes must also test terminal-like empty `CRLF`
+  history rows, virtual live-tail prompt rendering after completed output, and
+  cursor placement in the output pane for passthrough mode.
+
+## Scenario: Core Host Session and Protocol API Versioning
+
+### 1. Scope / Trigger
+
+Trigger: any change to host protocol decoding, manifest parsing, batch
+expansion, compression decode, protocol API versions, or Rust/C host SDK
+bindings.
+
+The portable C core owns protocol semantics. The Rust host owns serial
+transport, CLI/TUI presentation, and diagnostics formatting.
+
+### 2. Signatures
+
+C core:
+
+```c
+#define WIREMUX_PROTOCOL_API_VERSION_CURRENT 2u
+#define WIREMUX_PROTOCOL_API_VERSION_MIN_SUPPORTED 1u
+
+wiremux_protocol_compatibility_t
+wiremux_protocol_api_compatibility(uint32_t device_api_version);
+
+wiremux_status_t wiremux_host_session_init(
+    wiremux_host_session_t *session,
+    const wiremux_host_session_config_t *config);
+
+wiremux_status_t wiremux_host_session_feed(
+    wiremux_host_session_t *session,
+    const uint8_t *data,
+    size_t len);
+
+wiremux_status_t wiremux_host_session_finish(wiremux_host_session_t *session);
+```
+
+Rust host:
+
+```rust
+pub struct HostSession;
+
+impl HostSession {
+    pub fn new(max_payload_len: usize) -> Result<Self, u32>;
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<HostEvent>, u32>;
+    pub fn finish(&mut self) -> Result<Vec<HostEvent>, u32>;
+}
+```
+
+### 3. Contracts
+
+- `sources/core/proto/api/current/wiremux.proto` is the API used by new device
+  SDK builds.
+- `sources/core/proto/api/<version>/wiremux.proto` directories are frozen API
+  snapshots compiled into host SDK builds.
+- Host-side compatibility is compile-time bounded: a host build supports its
+  compiled current API and all older frozen API versions included in the source
+  tree.
+- A device with `DeviceManifest.protocol_version >
+  WIREMUX_PROTOCOL_API_VERSION_CURRENT` is unsupported. Host tools must emit a
+  deterministic diagnostic that tells the user to upgrade the host SDK/tool.
+- Frame version remains the byte-framing version. Protocol API version is the
+  manifest/schema/semantics version and must not be coupled to
+  `WIREMUX_FRAME_VERSION`.
+- Host session events expose callback-scope views. Core must not return heap
+  event objects or require host-side release/free calls.
+- Callers provide parser buffer and scratch workspace. Core uses scratch for
+  temporary batch decompression/expansion and reports deterministic size errors
+  when scratch is insufficient.
+- Rust FFI wrappers must copy any terminal bytes, record payloads, manifest
+  strings, or channel metadata they keep after the C callback returns.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| terminal bytes before a valid frame | emit terminal event(s), then decoded record/manifest events |
+| unsupported frame version | resynchronize as terminal bytes, not protocol API failure |
+| CRC mismatch | emit CRC error event and continue scanning |
+| envelope decode failure | emit decode error with `WIREMUX_HOST_DECODE_ENVELOPE` |
+| manifest decode failure | emit decode error with `WIREMUX_HOST_DECODE_MANIFEST` |
+| compressed batch fits scratch | decompress and emit inner record/manifest events |
+| compressed batch exceeds scratch | emit deterministic decode error; do not emit partial records |
+| device API version is older but within frozen host support | classify supported/degraded, not fatal |
+| device API version is newer than host current | classify unsupported-new and tell user to upgrade host SDK/tool |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `wiremux_host_session_feed()` receives mixed terminal text, a manifest
+  frame, and a compressed batch; Rust host receives terminal, manifest,
+  compatibility, and inner record events without parsing protobuf itself.
+- Base: current API version is `2`, and `api/current/wiremux.proto` matches
+  the latest frozen API snapshot.
+- Bad: Rust host decodes `MuxBatch` or `DeviceManifest` directly in CLI/TUI
+  paths after the core host session API exists.
+- Bad: C core allocates event objects and expects Rust to call a matching free
+  function across FFI.
+
+### 6. Tests Required
+
+- Portable C tests cover API compatibility classification, current/frozen proto
+  snapshot checks, mixed terminal/record event order, CRC errors, manifest
+  parsing, newer-device unsupported diagnostics, compressed batch expansion, and
+  scratch exhaustion.
+- Use GoogleMock when callback ordering matters.
+- Rust host tests must continue to cover CLI/TUI user-visible behavior after
+  migrating protocol internals behind `HostSession`.
+- Host `cargo test`, `cargo check`, and `cargo fmt --check` must pass after any
+  Rust binding change.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Rust CLI decodes DeviceManifest and MuxBatch directly while C core implements a
+separate parser with different compatibility rules.
+```
+
+#### Correct
+
+```text
+Rust CLI feeds bytes to wiremux_host_session_feed(), copies callback-scope
+events into Rust-owned structs, and only owns rendering/diagnostics behavior.
+```
 
 ## Scenario: Single-Process Console Verification
 
@@ -514,8 +713,9 @@ wiremux listen --port /dev/cu.usbmodem2101 --channel 1 --line help
 ### 1. Scope / Trigger
 
 Trigger: changing manifest channel metadata, host output prefixes, or ESP demo
-channel registration. This spans portable C manifest encoding, ESP component
-manifest emission, Rust manifest decoding, non-TUI display, and TUI rendering.
+channel registration. This spans portable C manifest encoding/decoding, ESP
+component manifest emission, the Rust host session wrapper, non-TUI display, and
+TUI rendering.
 
 ### 2. Signatures
 
@@ -589,8 +789,8 @@ chN(name)> payload
 
 - Portable C tests cover ASCII 15-byte clamp, UTF-8 boundary clamp, and invalid
   UTF-8 omission for manifest channel names.
-- Rust manifest tests cover `display_channel_name()` UTF-8 boundary clamp and
-  control character removal.
+- Rust host session/display tests cover `display_channel_name()` UTF-8 boundary
+  clamp and control character removal.
 - Rust CLI display tests cover manifest label cache, hidden manifest payload,
   `chN(name)> ` unfiltered output, and raw filtered output preservation.
 - TUI tests cover `App::channel_prefix()` with manifest names and fallback.

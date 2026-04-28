@@ -8,7 +8,8 @@ Host 侧首期使用 Rust 实现，目标是单文件可执行程序。
 wiremux listen --port /dev/tty.usbmodem2101 --baud 115200
 wiremux send --port /dev/tty.usbmodem2101 --channel 1 --line help
 wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
-wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
+wiremux passthrough --port /dev/tty.usbmodem2101 --channel 1
+wiremux tui --port /dev/tty.usbmodem2101 --baud 115200 --tui-fps 120
 ```
 
 当前能力：
@@ -30,7 +31,15 @@ wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
 - 非 mux 字节按普通终端输出保留。
 - 构造 host-to-device input `MuxEnvelope`，并通过同一个 `WMUX` frame 格式发送到指定 channel。
 - `wiremux tui` 提供 ratatui 交互界面，用同一个串口 handle 读取输出、发送输入、请求
-  manifest，并在界面内切换 channel 过滤。
+  manifest，并在界面内切换 channel 过滤。status 区域会显示当前 interactive
+  backend 和 FPS。
+- `wiremux passthrough --channel N` 会 attach 到一个 mux channel，把按键立即封装为
+  `MuxEnvelope(direction=input)` 发送；终端支持时 `Ctrl-]` 退出，通用退出序列是先按 `Esc` 再按 `x`。
+- `wiremux tui` 和 `wiremux passthrough` 都支持可选
+  `--interactive-backend auto|compat|mio`；默认 `auto` 在 Unix 上优先使用 `mio`，
+  不可用时回退到 `compat`，Windows 使用 `compat`。
+- `wiremux tui` 支持 `--tui-fps 60|120`；未指定时默认 60 fps，检测到 Ghostty 时
+  自动使用 120 fps。
 
 ## 输出格式
 
@@ -42,6 +51,15 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --lin
 
 这类模式适合 console channel，因为 payload 中的 `CRLF`、`CR`、`LF` 会按实际换行显示，
 不会被打印成 `\r` 或 `\n` 字符串。
+
+切换 demo console 到 passthrough 后，可以 attach 到 channel 1：
+
+```bash
+cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line "mux_console_mode passthrough"
+cargo run -- passthrough --port /dev/tty.usbmodem2101 --baud 115200 --channel 1
+```
+
+在 passthrough 会话里输入命令并按 Enter，终端支持时 `Ctrl-]` 退出；如果终端把 `Ctrl-]` 当作普通 `]`/`}` 发送，使用 `Esc` 然后 `x` 退出。
 
 不指定 `--channel` 时，host 会保留普通 terminal bytes，并用 `chN> ` 标识 decoded mux
 record 的 channel。如果 listen 被动收到设备启动时或命令触发的 manifest，后续输出会用
@@ -84,21 +102,25 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 - 拖动输出窗口右侧滚动条：按当前位置查看历史输出或回到底部。
 - 输入行为空时连续按两次 `Enter`：恢复自动跟随最新日志。
 - `Enter`：发送底部输入行。
-- `Esc`：清空底部输入行。
-- `Ctrl-C`：退出 TUI。
+- `Esc`：清空底部输入行；passthrough 输入下会在短暂等待后转发为 `Esc`。
+- `Ctrl-C`、`Ctrl-]`、或先按 `Esc` 再按 `x`：退出 TUI。
 
 输入路由：
 
-- 无过滤模式下，输入行默认通过 mux channel 1 发送，和 `listen --line` 的默认行为一致。
-- channel 过滤模式下，输入行通过当前过滤 channel 发送。
+- 无过滤模式下，TUI 为只读视图，不会把输入发送到 channel 1 或任何其他 channel。
+- channel 过滤模式下，只有 manifest 声明当前 channel 支持 `DIRECTION_INPUT` 时，
+  输入行才会通过当前过滤 channel 发送。
+- 底部输入区会显示当前输入状态；只读状态不会累积输入或显示可编辑光标。
 - TUI 不会把用户输入作为 raw serial bytes 直接写入串口；host-to-device 输入仍然封装为
   `WMUX` frame + `MuxEnvelope(direction=input)`。
+- 如果 manifest 声明当前输入 channel 的 `default_interaction_mode = PASSTHROUGH`，
+  TUI 会切换为逐键 passthrough 输入，不等待 `Enter` 聚合成完整命令行。
 
 连接成功后，TUI 会向 system channel 0 发送
 `payload_type = "wiremux.v1.DeviceManifestRequest"` 的 manifest 请求。设备返回
 `wiremux.v1.DeviceManifest` 后，TUI 会缓存并显示设备、channel 和 max payload 摘要。
-当前 MVP 的输入 UI 是 line-mode；proto/core 已经把 channel interaction mode 放到
-manifest 中，后续可以根据设备声明切换到 passthrough/key-stream 模式。
+输入模式由 manifest 中的 channel interaction mode 决定：未声明或 `LINE` 继续使用
+line-mode，`PASSTHROUGH` 使用逐键输入。
 
 ## 端口选择
 
@@ -171,7 +193,6 @@ sources/host/target/release/wiremux
 
 - 添加 capture/replay 子命令。
 - 增加 TUI 全局配置文件、运行时切换 port/baud，以及可配置快捷键。
-- 在设备支持 passthrough 后，让 TUI 根据 manifest 中的 interaction mode 切换输入模式。
 - 增加 service/broker 模式，由一个 host 进程独占真实串口并向多个 frontend 分发 channel。
 - 在 service/broker 基础上支持 Unix PTY 暴露，让用户用 `screen`、`minicom` 等工具打开单独 channel。
 - Windows native virtual COM 支持进入长期 roadmap，短期不作为首期跨平台虚拟设备目标。

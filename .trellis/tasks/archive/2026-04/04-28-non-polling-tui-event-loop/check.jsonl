@@ -1,0 +1,7 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify host Rust module placement and CLI/TUI ownership"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify serial error/disconnect behavior"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify host interactive tests and full-duplex contracts"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify diagnostics/debug output stays bounded"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Verify backend logic is shared rather than duplicated"}

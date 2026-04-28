@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host Rust TUI location and module boundary"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "TUI input and passthrough behavior contracts plus required host validation"}

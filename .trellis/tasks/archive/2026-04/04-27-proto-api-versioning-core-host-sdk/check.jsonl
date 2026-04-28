@@ -1,0 +1,9 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify deterministic parser and compatibility diagnostics"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify core/host/ESP protocol boundaries"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify required tests and forbidden protocol duplication"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify data flow across C core, Rust host, ESP SDK"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Verify duplicate protocol implementations are removed/quarantined"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify protocol versioning stays in constants/contracts not persistence"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify logging/diagnostics behavior does not regress"}

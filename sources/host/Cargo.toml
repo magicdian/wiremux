@@ -1,6 +1,6 @@
 [package]
 name = "wiremux"
-version = "2604.27.2"
+version = "2604.28.1"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -16,3 +16,8 @@ path = "src/main.rs"
 crossterm = "0.29"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 serialport = "4"
+
+[target.'cfg(unix)'.dependencies]
+mio = { version = "1", features = ["os-ext", "os-poll"] }
+signal-hook = "0.3"
+signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }

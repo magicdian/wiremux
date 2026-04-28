@@ -11,7 +11,7 @@
 #define WIREMUX_UNUSED
 #endif
 
-static size_t wiremux_varint_len(uint64_t value)
+static WIREMUX_UNUSED size_t wiremux_varint_len(uint64_t value)
 {
     size_t len = 1;
     while (value >= 0x80u) {
@@ -21,17 +21,17 @@ static size_t wiremux_varint_len(uint64_t value)
     return len;
 }
 
-static size_t wiremux_varint_field_len(uint32_t field_number, uint64_t value)
+static WIREMUX_UNUSED size_t wiremux_varint_field_len(uint32_t field_number, uint64_t value)
 {
     return wiremux_varint_len(((uint64_t)field_number << 3) | 0u) + wiremux_varint_len(value);
 }
 
-static size_t wiremux_bytes_field_len(uint32_t field_number, size_t len)
+static WIREMUX_UNUSED size_t wiremux_bytes_field_len(uint32_t field_number, size_t len)
 {
     return wiremux_varint_len(((uint64_t)field_number << 3) | 2u) + wiremux_varint_len(len) + len;
 }
 
-static uint8_t *wiremux_write_varint(uint8_t *out, uint64_t value)
+static WIREMUX_UNUSED uint8_t *wiremux_write_varint(uint8_t *out, uint64_t value)
 {
     while (value >= 0x80u) {
         *out++ = (uint8_t)(value | 0x80u);
@@ -41,16 +41,16 @@ static uint8_t *wiremux_write_varint(uint8_t *out, uint64_t value)
     return out;
 }
 
-static uint8_t *wiremux_write_varint_field(uint8_t *out, uint32_t field_number, uint64_t value)
+static WIREMUX_UNUSED uint8_t *wiremux_write_varint_field(uint8_t *out, uint32_t field_number, uint64_t value)
 {
     out = wiremux_write_varint(out, ((uint64_t)field_number << 3) | 0u);
     return wiremux_write_varint(out, value);
 }
 
-static uint8_t *wiremux_write_bytes_field(uint8_t *out,
-                                          uint32_t field_number,
-                                          const uint8_t *data,
-                                          size_t len)
+static WIREMUX_UNUSED uint8_t *wiremux_write_bytes_field(uint8_t *out,
+                                                         uint32_t field_number,
+                                                         const uint8_t *data,
+                                                         size_t len)
 {
     out = wiremux_write_varint(out, ((uint64_t)field_number << 3) | 2u);
     out = wiremux_write_varint(out, len);

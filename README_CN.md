@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[![Version](https://img.shields.io/badge/version-2604.27.2-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2604.28.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以在一个 UART、USB CDC、USB Serial/JTAG、TCP bridge 或其他有序字节 transport 上同时承载多个逻辑 channel，让日志、console 命令、telemetry 和诊断数据不再挤在同一个原始字节流里。
@@ -126,7 +126,8 @@ ESP_ERROR_CHECK(esp_wiremux_bind_esp_log(&log_config));
 cd sources/host
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
-cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
+cargo run -- passthrough --port /dev/tty.usbmodem2101 --baud 115200 --channel 1
+cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200 --tui-fps 120
 ```
 
 常用命令：
@@ -135,7 +136,8 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 - `listen --channel N`：只输出指定 channel 的 decoded payload。
 - `listen --line TEXT`：连接后发送一次 host-to-device input frame，然后继续用同一个串口 handle 监听。
 - `send`：发送一次 input frame 后退出。
-- `tui`：打开 ratatui 交互界面，支持 channel 过滤、滚动历史、manifest 展示和 line-mode 输入。
+- `passthrough --channel N`：attach 到一个 mux channel 并立即转发按键；`Ctrl-]` 或先按 `Esc` 再按 `x` 退出。可选 `--interactive-backend auto|compat|mio`，`auto` 在 Unix 上优先使用 `mio`，其他平台使用 `compat`。
+- `tui`：打开 ratatui 交互界面，支持 channel 过滤、滚动历史、可选中复制的输出/status 文本、manifest 展示、status 中的 backend/FPS 信息、原生输入光标以及 manifest 驱动的 line/passthrough 输入；`Ctrl-C`、`Ctrl-]` 或先按 `Esc` 再按 `x` 退出。可用 `--interactive-backend auto|compat|mio` 选择事件 backend，用 `--tui-fps 60|120` 覆盖默认 60 fps / Ghostty 自动 120 fps。
 
 macOS 上可以传入 `/dev/tty.usbmodem*`，host 工具会优先尝试配对的 `/dev/cu.usbmodem*`。
 

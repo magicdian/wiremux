@@ -30,8 +30,9 @@ State is in memory and bounded by configuration:
 - ESP channel metadata is registered at runtime with
   `esp_wiremux_register_channel()`.
 - Host CLI state is process-local in `sources/host/src/main.rs`.
-- Host frame scanning buffers only pending stream bytes in
-  `sources/host/src/frame.rs`.
+- Host protocol session state is process-local in the core C
+  `wiremux_host_session_t`, reached from the Rust wrapper in
+  `sources/host/src/host_session.rs`.
 - Protocol compatibility is represented by constants and protobuf-compatible
   fields, not by stored schema migrations.
 
@@ -41,11 +42,14 @@ Real examples:
 static mux_context_t s_mux;
 ```
 
-```rust
-pub struct FrameScanner {
-    buffer: Vec<u8>,
-    max_payload_len: usize,
-}
+```c
+typedef struct {
+    wiremux_host_session_config_t config;
+    size_t buffer_len;
+    uint32_t last_device_api_version;
+    uint32_t last_compatibility;
+    uint8_t manifest_seen;
+} wiremux_host_session_t;
 ```
 
 ```proto

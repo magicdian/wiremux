@@ -11,7 +11,7 @@ Core-owned concepts:
 - Frame layout: `WMUX` magic, version, flags, payload length, CRC32, payload.
 - Portable C frame/CRC API: `c/include/wiremux_frame.h` and
   `c/src/wiremux_frame.c`.
-- Schema: `proto/wiremux.proto`.
+- Schema: `proto/wiremux.proto`, with API snapshots under `proto/api/`.
 - Envelope fields: channel ID, direction, sequence, timestamp, payload kind,
   payload type, payload bytes, and flags.
 - Portable C envelope API: `c/include/wiremux_envelope.h` and
@@ -29,6 +29,13 @@ Core-owned concepts:
   transport name, native endianness, SDK name/version, and feature flags.
 - Parser behavior: mixed-stream resynchronization, length bounds, CRC validation,
   and deterministic handling of invalid candidate frames.
+- Protocol API version policy:
+  `WIREMUX_PROTOCOL_API_VERSION_CURRENT`,
+  `WIREMUX_PROTOCOL_API_VERSION_MIN_SUPPORTED`, and
+  `wiremux_protocol_api_compatibility()`.
+- Host session behavior: `c/include/wiremux_host_session.h` owns mixed-stream
+  scanning, envelope decode, manifest parsing, batch expansion, decompression,
+  manifest request frame construction, and protocol API compatibility events.
 
 Platform adapter responsibilities:
 
@@ -38,6 +45,8 @@ Platform adapter responsibilities:
   policy, and error-code mapping.
 - Platform-specific adapters such as ESP-IDF console binding and ESP log
   forwarding.
+- Host presentation, including CLI arguments, serial reconnect, TUI state,
+  stdout rendering, and diagnostics file formatting.
 
 The ESP-IDF adapter is named `esp-wiremux` on disk and uses public C identifiers
 with the `esp_wiremux_*` prefix. The host Rust crate and CLI use the product name
@@ -57,6 +66,25 @@ Current ESP adapter integration:
   decode to `wiremux.v1.MuxBatch`.
 - ESP runtime code continues to own FreeRTOS tasks, transport setup, timers, and
   ESP console/log bindings.
+
+Current Rust host integration:
+
+- `sources/host/build.rs` compiles `wiremux_core_c` into a static library for
+  the Rust host crate.
+- `sources/host/src/host_session.rs` wraps the C host session API and copies
+  callback-scope C views into Rust-owned events.
+- `listen` and `tui` feed serial bytes into `wiremux_host_session_feed()` and
+  render returned Rust events. The Rust layer owns transport and UI behavior,
+  while core owns protocol decode and compatibility decisions.
+
+Memory model:
+
+- Host session events are callback-scope views.
+- Core does not return heap-owned event objects or require a release/free API.
+- Callers provide parser buffer and scratch workspace; scratch exhaustion is a
+  deterministic decode error.
+- Rust copies any manifest, record, terminal, or diagnostic payload it needs
+  after a callback returns.
 
 Portable validation:
 

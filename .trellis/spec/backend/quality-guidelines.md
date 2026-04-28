@@ -20,6 +20,13 @@ operation.
 - Do not duplicate frame constants with different values across host and ESP code.
 - Do not parse mux frames by magic alone; always validate version, length, and CRC.
 - Do not place protocol state machines only in CLI/app entrypoints; keep them unit-testable.
+- Do not add new Rust-side protocol parsers for manifest, batch, compression, or
+  API compatibility in CLI/TUI paths when the C host session API can own the
+  behavior.
+- Do not couple `DeviceManifest.protocol_version` to `WIREMUX_FRAME_VERSION`;
+  frame version and protocol API version are separate contracts.
+- Do not return C heap-owned event objects across the Rust FFI boundary. Host
+  session events are callback-scope views and Rust must copy data it keeps.
 - Do not hard-code `/dev/tty.usbmodem2101` in implementation. It is only a local example path.
 - Do not make console mode a compile-time-only behavior. Public config must preserve line-mode and passthrough mode.
 - Do not call ESP logging APIs from mux internals after installing the log adapter.
@@ -80,6 +87,12 @@ Rules:
 - Portable batch/compression changes must test uncompressed batch records,
   batch metadata, heatshrink round-trip, LZ4 round-trip, unsupported codec, and
   small output errors.
+- Portable host session changes must test callback ordering, callback-scope
+  event copying, CRC errors, manifest parsing, batch expansion, compression
+  decode failures, scratch exhaustion, and API compatibility classification.
+- Protocol API changes must update `sources/core/proto/api/current/`, freeze a
+  numbered API snapshot when shipped, update `wiremux_version.h` constants, and
+  keep snapshot tests current.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.
@@ -110,7 +123,8 @@ typedef enum {
 } esp_wiremux_console_mode_t;
 ```
 
-`PASSTHROUGH` can return `ESP_ERR_NOT_SUPPORTED` until implemented, but the enum and config field must remain.
+`PASSTHROUGH` is implemented through configurable passthrough backends. Core
+backend names must remain platform-neutral; ESP-facing names may alias them.
 
 ## Scenario: Bidirectional Console Boundary
 
@@ -127,7 +141,33 @@ Host:
 wiremux listen --port <path> [--channel id]
 wiremux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
 wiremux send --port <path> --channel <id> [--line text]
-wiremux tui --port <path>
+wiremux passthrough --port <path> --channel <id> [--interactive-backend auto|compat|mio]
+wiremux tui --port <path> [--interactive-backend auto|compat|mio] [--tui-fps 60|120]
+```
+
+Rust host interactive backend:
+
+```rust
+pub enum InteractiveBackendMode {
+    Auto,
+    Compat,
+    Mio,
+}
+
+pub enum InteractiveEvent {
+    SerialBytes(Vec<u8>),
+    SerialEof,
+    SerialError(std::io::Error),
+    Terminal(crossterm::event::Event),
+    Timeout,
+}
+
+pub fn open_interactive_backend(
+    requested: &Path,
+    baud: u32,
+    mode: InteractiveBackendMode,
+    read_timeout: Duration,
+) -> io::Result<(PathBuf, ConnectedInteractiveBackend)>;
 ```
 
 ESP:
@@ -159,9 +199,92 @@ the demo, and host verification commands in the same task.
 - Host input frames use the same magic/version/length/CRC wrapper as device output frames.
 - Host input envelopes set `direction = input`.
 - Console line-mode sends complete command lines to the console channel.
-- TUI MVP input is line-based. Unfiltered TUI input targets channel 1; filtered
-  TUI input targets the active channel. It must not raw-write user text to the
-  serial stream.
+- TUI input mode is manifest-driven. Unfiltered TUI input is read-only and must
+  not fall back to channel 1. Filtered TUI input targets the active channel only
+  when the manifest descriptor includes `DIRECTION_INPUT`; `LINE` channels send
+  complete command lines on Enter and `PASSTHROUGH` channels send key bytes
+  promptly. TUI must not raw-write user text to the serial stream outside
+  `WMUX` frames.
+- Interactive host loops must not block keyboard handling behind the passive
+  listener's serial read timeout. `tui` and `passthrough` must consume
+  `InteractiveEvent` values from the shared interactive backend rather than each
+  owning an ad-hoc serial-read plus terminal-poll loop.
+- `--interactive-backend` is optional and defaults to `auto`. On Unix, `auto`
+  must prefer the `mio` backend and fall back to `compat` with a visible backend
+  label if `mio` cannot open. On non-Unix platforms, `auto` uses `compat`.
+  Explicit `mio` is Unix-only and must fail clearly when unsupported.
+- The compat backend may use serial/input reader threads and channels. The Unix
+  `mio` backend must keep the upper `tui`/`passthrough` business logic identical
+  by emitting the same `InteractiveEvent` variants.
+- TUI rendering is dirty-driven and capped by target FPS. `--tui-fps` accepts
+  only `60` or `120`; absent an override, the host defaults to 60 fps and may
+  select 120 fps for confidently detected Ghostty terminals. Scroll input must
+  not use large fixed row jumps that visually defeat the configured frame rate;
+  prefer one wrapped visual row per wheel event unless a dedicated smooth-scroll
+  accumulator renders intermediate positions across frames.
+- TUI scroll handling must preserve input responsiveness under bursty terminal
+  input. Mouse-wheel bursts and scrollbar drags may be coalesced, but they must
+  not require the event loop to process every stale scroll event before handling
+  `Ctrl-C`, `Ctrl-]`, or `Esc x`. Avoid doing full wrapped-row recomputation once
+  per queued wheel event; cache, coalesce, or defer expensive scroll range work so
+  reverse scrolling and quit keys remain responsive while live serial output is
+  arriving.
+- TUI scrollbar buttons are explicit jump commands, not smooth-scroll deltas.
+  The down button must immediately re-enter live-following output by setting
+  `scroll_offset = 0` using the latest rendered-row range, even if serial rows
+  arrive during the same event burst. The up button must jump directly to the
+  oldest visible position. Do not animate button clicks through a long backlog;
+  reserve frame-by-frame animation for coarse scrollbar drag targets.
+- TUI text selection is application-managed because crossterm mouse capture
+  prevents terminal-native selection from seeing ratatui's internal scrollback.
+  In `sources/host/src/tui.rs`, selection state must track pane
+  (`Output`/`Status`), anchor row/column, cursor row/column, active drag state,
+  pending clipboard text, and any edge auto-scroll direction. Rendering must
+  highlight selected spans from the same wrapped visual rows used by scrollback
+  and scrollbar math. Copy actions must operate on the selected application text
+  and write through OSC 52 initially; do not assume terminal-native
+  `Command-C` or `Ctrl-Shift-C` can copy an app-drawn highlight.
+- TUI output selection edge scrolling must be frame-driven after the pointer
+  reaches the output pane's top or bottom content row. A single
+  `MouseEventKind::Drag` may start `selection_auto_scroll`, but continued
+  scrolling must not require additional mouse movement; the main loop should
+  schedule the next render deadline while auto-scroll is active and advance the
+  selection cursor as the scrollback window moves. Stop edge auto-scroll on
+  mouse release, clearing the selection, or reaching the scroll limit.
+- Interactive host loops must tolerate recoverable OS interruptions. On Unix,
+  terminal resize can deliver `SIGWINCH` while the TUI is blocked in readiness
+  polling, terminal event reads, terminal size queries, or serial reads. These
+  paths must retry or continue on `std::io::ErrorKind::Interrupted` and must not
+  exit with `Interrupted system call`.
+- TUI status must continue to show device manifest metadata including
+  `DeviceManifest.protocol_version` as the device proto API version. Backend and
+  FPS status belong in the existing status area, not a separate debug panel.
+- TUI passthrough display is channel-local stream editing. In
+  `sources/host/src/tui.rs`, `complete_stream_line()`,
+  `backspace_stream_line()`, and `append_stream_segment()` must operate on the
+  latest incomplete `OutputLine` for the same channel. Do not use only
+  `lines.back_mut()` for passthrough stream editing, because interleaved log or
+  telemetry records from other channels can otherwise split a console echo line.
+- TUI passthrough prompt rendering must preserve terminal semantics. Empty
+  `CR`, `LF`, or `CRLF` echoes are completed prompt history rows, not reusable
+  input buffers. If the latest active-channel row is complete and the view is at
+  live tail, `sources/host/src/tui.rs` may append a virtual current prompt row
+  during rendering; this row must not mutate `App::lines` or scrollback history.
+  In passthrough mode, place the terminal cursor in the output pane after the
+  active channel prompt/echo. Cursor placement must account for visual wrapping
+  inside the output pane: previous wrapped rows and the active prompt/echo's
+  wrapped offset both affect the terminal row/column. Output visibility and
+  scrollbar range must use the same wrapped visual row count, not only logical
+  `OutputLine` count, so resizing the TUI narrower cannot hide overflow without
+  a scrollbar. The scrollbar renderer must use total rendered rows, output
+  content height, and the visible window's first rendered row; a one-cell
+  viewport over only `max_scroll_offset + 1` makes the thumb size and motion
+  misrepresent the real viewport. Keep the scrollbar thumb visually solid; tiny
+  fractional block glyph changes can make terminal scrollbars feel more stalled
+  and jittery. Dragging can still be coarse because terminal mouse events report
+  character-cell rows, so drag handlers should animate the visible scroll offset
+  toward the coarse target across frames instead of applying the full target
+  jump in one render. In line mode, place the cursor in the bottom input box.
 - Host manifest requests use system channel 0 with
   `payload_type = "wiremux.v1.DeviceManifestRequest"` and empty request payload.
 - Device manifest responses use `payload_type = "wiremux.v1.DeviceManifest"`
@@ -186,13 +309,79 @@ the demo, and host verification commands in the same task.
 | default USB Serial/JTAG driver missing | mux init installs driver before RX task starts |
 | serial disconnects during send/listen | host reconnect behavior remains deterministic |
 | host requests manifest on channel 0 | ESP emits a DeviceManifest response |
-| TUI submits input in unfiltered mode | host sends channel-1 mux input frame |
-| TUI submits input in channel filter mode | host sends mux input frame to active channel |
+| TUI submits input in unfiltered mode | host treats the view as read-only and sends no mux input frame |
+| TUI submits input in channel filter mode for an output-only channel | host treats the channel as read-only and sends no mux input frame |
+| TUI submits input in channel filter mode for an input-capable channel | host sends mux input frame to active channel |
+| `--interactive-backend auto` on Unix and mio opens | active backend label is `mio` |
+| `--interactive-backend auto` on Unix and mio fails but compat opens | active backend label reports compat fallback and interactive use continues |
+| `--interactive-backend mio` on non-Unix | command fails clearly before entering the interactive loop |
+| `--tui-fps 144` | CLI parse fails with allowed values `60` or `120` |
+| TUI/passthrough waits for serial data while the user types | keyboard handling is not gated by a long passive-listener read timeout |
+| window resize occurs while `wiremux tui` is running | TUI redraws/resizes and does not exit with `Interrupted system call` |
+| TUI receives manifest with protocol API version | status displays the device API version from `DeviceManifest.protocol_version` |
+| passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
+| passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
+| passthrough command output wraps inside a narrow output pane | scrollbar and cursor row/column follow visual wrapped rows, not the logical `OutputLine` index |
+| passthrough empty Enter echoes `CRLF` | TUI stores a completed empty prompt history row and renders the following current prompt row |
+| non-passthrough channel emits partial text then another channel emits output | TUI keeps ordinary line-oriented record display; per-channel stream editing is not applied |
+| user generates many mouse-wheel events, reaches live tail, then immediately scrolls upward or quits | TUI handles the latest direction/quit key promptly instead of draining stale wheel events first |
+| user clicks the scrollbar down button while new output is still arriving | TUI snaps to `scroll_offset = 0` and follows live output on the next render |
+| user drags output selection to the top content row and stops moving the mouse | TUI continues scrolling upward on render deadlines until the mouse is released or oldest visible output is reached |
+| user drags output selection to the bottom content row and stops moving the mouse | TUI continues scrolling downward on render deadlines until the mouse is released or live tail is reached |
+| user releases the mouse after selecting output/status text | TUI keeps the highlight and does not auto-copy by default |
+| user presses `Esc` while a selection exists | TUI clears the selection before treating `Esc` as the exit/input-clear prefix |
+| user presses `Ctrl-Shift-C`, `y`, `Enter`, or forwarded `Command-C` while a selection exists | TUI copies the selected application text through OSC 52 and keeps the highlight |
+| user presses terminal-native copy but the terminal intercepts the key before crossterm sees it | no app event is generated; document/use app-level copy keys instead of relying on native terminal selection |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: `listen --channel 1 --line help` executes the ESP console help command and returns console text through channel 1.
+- Good: in TUI passthrough mode, device echo `h e l p`, interleaved telemetry,
+  backspace echo, `p`, and `CRLF` renders as one ch1 `help` line.
+- Good: in TUI passthrough mode, a completed `available commands...\n` response
+  is followed visually by a current `ch1(console)> ` prompt row. Empty Enter
+  creates a completed empty prompt history row and advances to the next current
+  prompt, matching terminal behavior.
+- Good: `wiremux tui --interactive-backend auto` on Unix shows `backend mio` in
+  status when raw-fd readiness is available, while Windows shows `backend
+  compat`.
+- Good: TUI status shows `api=<version>` from the received device manifest so
+  users can see which proto API the device is using.
+- Good: after a long scrollback session, a burst of wheel-down events that
+  reaches live tail can be followed immediately by wheel-up or `Ctrl-C`; the TUI
+  coalesces stale scroll events and preserves quit-key responsiveness.
+- Good: clicking the TUI scrollbar down button during active output immediately
+  returns to following live output. Clicking the up button jumps to the oldest
+  visible scrollback position without spending many frames animating through a
+  large buffer.
+- Good: dragging an output selection to the top or bottom content row starts
+  continuous auto-scroll that keeps extending the highlighted range even if the
+  mouse stays still.
+- Good: selecting status text copies exactly the visible status row text through
+  the same app-level copy path as output selection.
 - Base: telemetry and log channels continue emitting while console input is used.
+- Base: `wiremux passthrough --interactive-backend compat` works on every
+  platform supported by `serialport`.
+- Bad: TUI passthrough append logic edits only the global last line, causing an
+  interleaved telemetry record to split a single console input echo into two
+  ch1 rows.
+- Bad: adding a Unix `mio` implementation by forking the whole TUI or
+  passthrough business loop instead of keeping the shared `InteractiveEvent`
+  boundary.
+- Bad: placing backend/FPS information in a separate TUI panel that hides or
+  displaces the existing device manifest/version status.
+- Bad: processing every queued mouse-wheel event with a fresh full scroll-range
+  recomputation while keyboard quit events wait behind the mouse backlog.
+- Bad: treating the scrollbar down button as an animated target from a stale
+  row range, so new output arrives during catch-up and the TUI remains several
+  rows above live tail instead of entering live-following mode.
+- Bad: implementing selection edge scroll only inside `MouseEventKind::Drag`,
+  which stalls auto-scroll whenever the pointer is held still at the pane edge.
+- Bad: relying on terminal-native selection/copy to read ratatui output while
+  `EnableMouseCapture` is active; the terminal selection engine cannot see
+  application-managed scrollback rows or highlights.
+- Bad: treating empty `CRLF` as a reusable incomplete prompt suppresses terminal
+  Enter semantics and makes prompt history diverge from shell-like behavior.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
 - Bad: `listen` in one process and `send` in another process race on the same serial device; use `listen --line` for single-device verification.
 
@@ -201,12 +390,40 @@ the demo, and host verification commands in the same task.
 - Host unit test builds an input frame and verifies the scanner decodes it back into the expected envelope fields.
 - Host unit tests cover `listen --line`, `--send-channel`, invalid channel, missing line for one-shot `send`, and macOS `tty` to `cu` preference.
 - Host unit tests cover `tui` parser behavior, manifest request frame
-  construction, and manifest decode with channel interaction modes.
+  construction, manifest decode with channel interaction modes,
+  `--interactive-backend` parsing, invalid backend values, `--tui-fps 60|120`,
+  and invalid FPS values.
+- Host TUI render tests must assert that the status area includes backend, FPS,
+  and device proto API version from `DeviceManifest.protocol_version`.
+- Host interactive event-loop tests must cover retry behavior for
+  `std::io::ErrorKind::Interrupted`, because unit tests cannot reliably deliver
+  real terminal resize signals in CI.
 - Host unit tests cover TUI scrollback behavior: live-tail visible-window math,
   mouse wheel pause/resume, append-while-frozen stability, filtered scroll
   counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
   drag continuation when the pointer leaves the scrollbar column, and scrollbar
-  bottom alignment at `scroll_offset = 0`.
+  bottom alignment at `scroll_offset = 0`. Add coverage for scrollbar up/down
+  buttons as immediate jumps, including the case where the down button is clicked
+  while live output appends. Responsiveness coverage for future event-loop
+  changes must include burst coalescing or equivalent behavior where stale
+  wheel-down events do not block a later wheel-up or quit key after live tail is
+  reached.
+- Host unit tests cover TUI application-managed selection: output selection
+  highlights and copies visible text, status selection copies status text,
+  `Esc` clears selection before exit-prefix handling, `Ctrl-Shift-C` without a
+  selection does not quit, explicit copy keeps the selection, OSC 52 output is
+  correctly encoded, edge drag scrolls up/down, and edge auto-scroll continues
+  on render/frame advancement without requiring another mouse event.
+- Host unit tests cover TUI passthrough stream behavior: append until newline,
+  split backspace echo, active passthrough output restoring live tail, and
+  continuation of an incomplete passthrough channel line across interleaved
+  records from other channels. Prompt behavior tests must cover empty `CRLF`
+  completing a history row, repeated empty newlines stacking prompt history,
+  virtual prompt rendering after completed output, virtual prompt rendering after
+  empty Enter, passthrough cursor placement in the output pane, and cursor
+  placement after narrow-pane wrapping of completed output plus active echo.
+  Scrollback tests must include a narrow-pane case where logical lines fit but
+  wrapped visual rows overflow and therefore require a scrollbar.
 - Portable C tests cover manifest encoding of channel interaction modes and
   channel-name UTF-8-safe truncation.
 - ESP inbound parser test or demo verification covers a valid input frame and bad CRC.
@@ -236,6 +453,20 @@ Correct single-process hardware check:
 
 ```text
 Host opens the serial port once, sends the input frame with `listen --line`, then keeps decoding output on the same handle.
+```
+
+#### Wrong
+
+```text
+Unix raw-fd readiness is implemented by maintaining a separate TUI loop from the
+compat backend, so passthrough escape handling and TUI status drift by platform.
+```
+
+#### Correct
+
+```text
+Unix mio and compat both emit `InteractiveEvent` values. TUI and passthrough own
+the protocol/session/status behavior above that shared backend boundary.
 ```
 
 ## Scenario: Release Versioning and ESP Registry Packaging

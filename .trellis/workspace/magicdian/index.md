@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
-- **Last Active**: 2026-04-27
+- **Total Sessions**: 26
+- **Last Active**: 2026-04-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~473 | Active |
+| `journal-1.md` | ~1064 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,20 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-04-28 | Host TUI selectable output | `af9f2e0` | `dev` |
+| 25 | 2026-04-28 | TUI scrollbar button live-follow fix | `a3d9df0`, `4a05402` | `dev` |
+| 24 | 2026-04-28 | TUI resize EINTR fix | `725c6dd` | `dev` |
+| 23 | 2026-04-28 | Fix TUI Scroll Burst Starvation | `7921a22`, `10f3346` | `dev` |
+| 22 | 2026-04-28 | Fix TUI scroll smoothness | `a61b094` | `dev` |
+| 21 | 2026-04-28 | Event-driven interactive backend | `77e5f0e` | `dev` |
+| 20 | 2026-04-28 | Reduce TUI passthrough input latency | `d8c807c` | `dev` |
+| 19 | 2026-04-28 | Passthrough input hint | `ee52e2b`, `9dcffe1` | `dev` |
+| 18 | 2026-04-28 | Fix TUI passthrough wrapped output | `5c57630`, `ec53ce5` | `dev` |
+| 17 | 2026-04-28 | TUI unclassified input read-only | `25d38df`, `d83c7a4` | `dev` |
+| 16 | 2026-04-27 | Polish TUI passthrough terminal experience | `7562092`, `1816fd8` | `dev` |
+| 15 | 2026-04-27 | Console passthrough mode 2604.27.3 | `a89bfcd` | `dev` |
+| 14 | 2026-04-27 | Registry example packaging release | `fec186f`, `a94bfc9` | `dev` |
+| 13 | 2026-04-27 | Core host session and protocol API versioning | `e41a832`, `d769242` | `dev` |
 | 12 | 2026-04-27 | Versioning and ESP Registry release setup | `9e4dd0b` | `dev` |
 | 11 | 2026-04-27 | Manifest channel name labels | `4328303` | `dev` |
 | 10 | 2026-04-27 | Clarify ESP enum aliases | `1de0107` | `dev` |

@@ -78,7 +78,13 @@ Implemented PR5-PR8: host serialport send/listen input framing, ESP32 inbound fr
 
 ### Main Changes
 
-(Add details)
+- Updated `sources/host/src/tui.rs` so the bottom input area renders a dedicated
+  subdued passthrough hint: `> passthrough: type in output pane`.
+- Kept line-mode input rendering and readonly rendering unchanged.
+- Added a TUI render test proving the passthrough hint appears and stale line
+  input text is hidden while passthrough mode is active.
+- Archived `.trellis/tasks/04-28-passthrough-input-hint` after the feature
+  commit.
 
 ### Git Commits
 
@@ -95,7 +101,10 @@ Implemented PR5-PR8: host serialport send/listen input framing, ESP32 inbound fr
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `cargo test` in `sources/host`
+- [OK] `cargo check` in `sources/host`
+- [OK] `cargo fmt --check` in `sources/host`
+- [OK] Human TUI validation passed
 
 ### Status
 
@@ -118,7 +127,12 @@ Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework:
 
 ### Main Changes
 
-(Add details)
+- Reduced the serial read timeout used by `wiremux tui` and `wiremux passthrough`
+  from the passive listener's 100ms timeout to a 5ms interactive timeout.
+- Kept `wiremux listen` on the existing longer timeout so passive listening
+  behavior remains unchanged.
+- Updated backend specs to capture the rule that interactive host loops must not
+  gate keyboard polling behind long blocking serial reads.
 
 ### Git Commits
 
@@ -129,7 +143,11 @@ Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework:
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `git diff --check`
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test` (76 tests)
+- [OK] Human passthrough test confirmed noticeably improved typing feel.
 
 ### Status
 
@@ -198,7 +216,14 @@ Added host-side GoogleTest/GoogleMock infrastructure for the portable C core, mi
 
 ### Main Changes
 
-(Add details)
+- Added a backend quality contract for TUI scroll responsiveness under bursty
+  terminal input.
+- Coalesced queued TUI mouse-wheel events into direction runs so stale
+  wheel-down bursts do not starve later wheel-up or quit keys.
+- Made wheel-down at live tail a cheap no-op and deferred expensive scroll range
+  recomputation to cases that need it.
+- Added regression tests for down-to-tail-then-up behavior and quit handling
+  after a stale wheel-down burst.
 
 ### Git Commits
 
@@ -480,6 +505,551 @@ Added YYMM.DD.BuildNumber versioning, Apache-2.0 metadata, ESP Registry package 
 | Hash | Message |
 |------|---------|
 | `9e4dd0b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 13: Core host session and protocol API versioning
+
+**Date**: 2026-04-27
+**Task**: Core host session and protocol API versioning
+**Branch**: `dev`
+
+### Summary
+
+Moved host protocol parsing/building into the portable C core, added protocol API version snapshots and compatibility checks, and archived the completed Trellis task.
+
+### Main Changes
+
+| Area | Result |
+|------|--------|
+| Core C | Added `wiremux_host_session_*` API, protocol API version helpers, manifest compatibility events, batch expansion, and gtest/gmock coverage. |
+| Rust host | Statically links the C core via `build.rs`; CLI/TUI runtime now use `HostSession`; old Rust-side frame/envelope/manifest/batch/codec/crc modules were removed. |
+| ESP/package | ESP manifest reports current protocol API version; ESP registry package generation includes the new core sources. |
+| Specs | Updated backend specs for core host session contracts, protocol version policy, memory model, and required tests. |
+
+Testing completed:
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cmake --build sources/core/c/build`
+- `ctest --test-dir sources/core/c/build --output-on-failure`
+- `git diff --check`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e41a832` | (see git log) |
+| `d769242` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 14: Registry example packaging release
+
+**Date**: 2026-04-27
+**Task**: Registry example packaging release
+**Branch**: `dev`
+
+### Summary
+
+Recorded completion of the 2604.27.2 ESP Registry patch that packages the ESP-IDF console demo as an esp-wiremux registry example and archives the finished task.
+
+### Main Changes
+
+| Area | Result |
+|------|--------|
+| Release | `fec186f` bumped declarations to `2604.27.2` and updated release documentation. |
+| ESP Registry | Package generation now copies `esp_wiremux_console_demo` into `esp-wiremux/examples/`, so the Registry examples tab can show the demo. |
+| Docs/specs | Trusted Uploader tag-ref behavior and package-generation expectations are documented. |
+| Task state | Archived `04-27-04-27-registry-example-2604-27-2` after confirming the work was already committed. |
+
+Finish-work checks rerun:
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cmake --build sources/core/c/build`
+- `ctest --test-dir sources/core/c/build --output-on-failure`
+- `tools/esp-registry/generate-packages.sh`
+- `git diff --check`
+- verified `dist/esp-registry/esp-wiremux/examples/esp_wiremux_console_demo` exists
+
+External tool gaps in this shell:
+- `compote --version` failed: `command not found`
+- `idf.py --version` failed: `command not found`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fec186f` | (see git log) |
+| `a94bfc9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 15: Console passthrough mode 2604.27.3
+
+**Date**: 2026-04-27
+**Task**: Console passthrough mode 2604.27.3
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Protocol/API | Added API v2 passthrough policy metadata and froze `sources/core/proto/api/2/wiremux.proto`; bumped protocol current version to 2. |
+| Host | Added `wiremux passthrough`, manifest-driven TUI passthrough input, `Ctrl-]`/`Esc x` attach exit handling, and TUI per-channel passthrough stream rendering across interleaved logs. |
+| ESP SDK | Implemented passthrough console binding with configurable backend aliases and passthrough policy emission. |
+| Demo/Docs | Updated ESP demo with `mux_console_mode line|passthrough`, docs, release metadata, and version `2604.27.3`. |
+| Specs | Captured passthrough stream contracts and tests in backend code-specs. |
+
+**Verification**:
+- `cargo fmt --check` in `sources/host`
+- `cargo check` in `sources/host`
+- `cargo test` in `sources/host` (`58 passed`)
+- `cmake --build sources/core/c/build`
+- `ctest --test-dir sources/core/c/build --output-on-failure` (`35 passed`)
+- `idf.py build` attempted for ESP demo, but `idf.py` is not installed in this environment.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a89bfcd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 16: Polish TUI passthrough terminal experience
+
+**Date**: 2026-04-27
+**Task**: Polish TUI passthrough terminal experience
+**Branch**: `dev`
+
+### Summary
+
+Improved TUI passthrough UX with Esc-x exit parity, terminal-native cursor placement, shell-like prompt rendering, docs, specs, and focused host tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7562092` | (see git log) |
+| `1816fd8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 17: TUI unclassified input read-only
+
+**Date**: 2026-04-28
+**Task**: TUI unclassified input read-only
+**Branch**: `dev`
+
+### Summary
+
+Made the TUI all-channel view read-only, gated channel input on manifest DIRECTION_INPUT, kept passthrough active only for explicit input-capable channels, updated host docs/specs, and archived the task after user acceptance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `25d38df` | (see git log) |
+| `d83c7a4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 18: Fix TUI passthrough wrapped output
+
+**Date**: 2026-04-28
+**Task**: Fix TUI passthrough wrapped output
+**Branch**: `dev`
+
+### Summary
+
+Fixed TUI passthrough rendering so wrapped output rows drive visible scrollback, scrollbar range, and cursor placement; added narrow-pane regression tests and archived the task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5c57630` | (see git log) |
+| `ec53ce5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 19: Passthrough input hint
+
+**Date**: 2026-04-28
+**Task**: Passthrough input hint
+**Branch**: `dev`
+
+### Summary
+
+Added a subdued passthrough hint to the host TUI bottom input area so users can see that typing belongs in the output pane; archived the completed task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ee52e2b` | (see git log) |
+| `9dcffe1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 20: Reduce TUI passthrough input latency
+
+**Date**: 2026-04-28
+**Task**: Reduce TUI passthrough input latency
+**Branch**: `dev`
+
+### Summary
+
+Reduced interactive host serial read timeout for TUI and passthrough so keyboard polling is no longer gated by the passive listener timeout; documented the latency rule in backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8c807c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 21: Event-driven interactive backend
+
+**Date**: 2026-04-28
+**Task**: Event-driven interactive backend
+**Branch**: `dev`
+
+### Summary
+
+Added shared interactive backends for TUI and passthrough, Unix mio support, compat fallback, TUI FPS/status display, docs, tests, and backend spec contracts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `77e5f0e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 22: Fix TUI scroll smoothness
+
+**Date**: 2026-04-28
+**Task**: Fix TUI scroll smoothness
+**Branch**: `dev`
+
+### Summary
+
+Improved host TUI scrollback smoothness by reducing wheel scroll granularity, using viewport-aware scrollbar state, animating coarse scrollbar drag targets across frames, fixing live scrollback status labels, and documenting the TUI scrollbar behavior in backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a61b094` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 23: Fix TUI Scroll Burst Starvation
+
+**Date**: 2026-04-28
+**Task**: Fix TUI Scroll Burst Starvation
+**Branch**: `dev`
+
+### Summary
+
+Captured the TUI scroll responsiveness contract, then fixed host TUI wheel burst starvation by coalescing queued scroll events, making live-tail wheel-down cheap, and adding regression tests for wheel-up and quit responsiveness.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7921a22` | docs: capture tui scroll responsiveness contract |
+| `10f3346` | fix(tui): coalesce scroll wheel bursts |
+
+### Testing
+
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 24: TUI resize EINTR fix
+
+**Date**: 2026-04-28
+**Task**: TUI resize EINTR fix
+**Branch**: `dev`
+
+### Summary
+
+Fixed TUI window resize exits caused by Interrupted system call. Added retry handling for interactive terminal/serial operations, documented the recoverable EINTR contract in backend specs, and verified with cargo fmt --check, cargo check, cargo test, plus manual resize testing.
+
+### Main Changes
+
+- Added shared `retry_interrupted()` handling for host interactive terminal operations.
+- Kept TUI and passthrough interactive loops alive when resize-driven `SIGWINCH`
+  interrupts `poll`, terminal reads, terminal size queries, or serial reads.
+- Captured the recoverable `ErrorKind::Interrupted` contract in backend error
+  handling and quality specs.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `725c6dd` | (see git log) |
+
+### Testing
+
+- [OK] Human verified `wiremux tui` no longer exits during window resize.
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo test` - 86 tests passed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 25: TUI scrollbar button live-follow fix
+
+**Date**: 2026-04-28
+**Task**: TUI scrollbar button live-follow fix
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Spec | Captured the TUI scrollbar button contract: up/down buttons are direct jump commands, while drag targets may animate. |
+| TUI | Fixed scrollbar button mouse handling so the up button jumps to oldest visible scrollback and the down button immediately restores live-following output. |
+| Tests | Added coverage for button hit mapping, direct jump behavior, and live output appending after the down-button action. |
+
+**Verification**:
+- `cargo fmt --check` in `sources/host`
+- `cargo check` in `sources/host`
+- `cargo test` in `sources/host` (88 tests passed)
+- `git diff --check`
+
+**Updated Files**:
+- `.trellis/spec/backend/directory-structure.md`
+- `.trellis/spec/backend/quality-guidelines.md`
+- `sources/host/src/tui.rs`
+- `.trellis/tasks/archive/2026-04/04-28-fix-tui-scrollbar-button-live-follow/`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a3d9df0` | (see git log) |
+| `4a05402` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 26: Host TUI selectable output
+
+**Date**: 2026-04-28
+**Task**: Host TUI selectable output
+**Branch**: `dev`
+
+### Summary
+
+Implemented app-managed selection for host TUI output/status text with OSC52 copy actions, continuous edge auto-scroll while dragging, version 2604.28.1 metadata updates, and backend spec coverage for the TUI selection contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af9f2e0` | (see git log) |
 
 ### Testing
 

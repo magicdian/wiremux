@@ -33,6 +33,40 @@ typedef enum {
     WIREMUX_CHANNEL_INTERACTION_PASSTHROUGH = 2,
 } wiremux_channel_interaction_mode_t;
 
+typedef enum {
+    WIREMUX_NEWLINE_POLICY_UNSPECIFIED = 0,
+    WIREMUX_NEWLINE_POLICY_PRESERVE = 1,
+    WIREMUX_NEWLINE_POLICY_LF = 2,
+    WIREMUX_NEWLINE_POLICY_CR = 3,
+    WIREMUX_NEWLINE_POLICY_CRLF = 4,
+} wiremux_newline_policy_t;
+
+typedef enum {
+    WIREMUX_ECHO_POLICY_UNSPECIFIED = 0,
+    WIREMUX_ECHO_POLICY_REMOTE = 1,
+    WIREMUX_ECHO_POLICY_LOCAL = 2,
+    WIREMUX_ECHO_POLICY_NONE = 3,
+} wiremux_echo_policy_t;
+
+typedef enum {
+    WIREMUX_CONTROL_KEY_POLICY_UNSPECIFIED = 0,
+    WIREMUX_CONTROL_KEY_POLICY_HOST_HANDLED = 1,
+    WIREMUX_CONTROL_KEY_POLICY_FORWARDED = 2,
+} wiremux_control_key_policy_t;
+
+typedef enum {
+    WIREMUX_PASSTHROUGH_BACKEND_RAW_CALLBACK = 1,
+    WIREMUX_PASSTHROUGH_BACKEND_LINE_DISCIPLINE = 2,
+    WIREMUX_PASSTHROUGH_BACKEND_REPL = 3,
+} wiremux_passthrough_backend_t;
+
+typedef struct {
+    uint32_t input_newline_policy;
+    uint32_t output_newline_policy;
+    uint32_t echo_policy;
+    uint32_t control_key_policy;
+} wiremux_passthrough_policy_t;
+
 typedef struct {
     uint32_t channel_id;
     const char *name;
@@ -47,6 +81,7 @@ typedef struct {
     const uint32_t *interaction_modes;
     size_t interaction_mode_count;
     uint32_t default_interaction_mode;
+    wiremux_passthrough_policy_t passthrough_policy;
 } wiremux_channel_descriptor_t;
 
 typedef struct {

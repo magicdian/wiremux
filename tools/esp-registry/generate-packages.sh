@@ -80,7 +80,9 @@ idf_component_register(
         "src/wiremux_compression.c"
         "src/wiremux_frame.c"
         "src/wiremux_envelope.c"
+        "src/wiremux_host_session.c"
         "src/wiremux_manifest.c"
+        "src/wiremux_version.c"
     INCLUDE_DIRS
         "include"
 )

@@ -1,0 +1,7 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Protocol API, host CLI, ESP component layout, release version contracts"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Host diagnostics, ESP inbound validation, deterministic errors"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required tests and protocol API snapshot rules"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "ESP logging recursion and diagnostics boundary"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Proto policy flows across core C, Rust host, ESP SDK"}

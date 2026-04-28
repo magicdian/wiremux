@@ -1,0 +1,9 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Deterministic mixed-stream parser and protocol error handling"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Core C, Rust host, ESP protocol boundary and host CLI contracts"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-language API version and data-flow changes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required C/Rust tests and protocol quality rules"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Removing duplicated Rust/C protocol logic"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Protocol compatibility and manifest/version contracts without persistence"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Preserve diagnostics/logging boundary while migrating host session"}
