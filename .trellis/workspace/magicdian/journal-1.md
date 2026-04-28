@@ -829,3 +829,36 @@ Reduced interactive host serial read timeout for TUI and passthrough so keyboard
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Event-driven interactive backend
+
+**Date**: 2026-04-28
+**Task**: Event-driven interactive backend
+**Branch**: `dev`
+
+### Summary
+
+Added shared interactive backends for TUI and passthrough, Unix mio support, compat fallback, TUI FPS/status display, docs, tests, and backend spec contracts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `77e5f0e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

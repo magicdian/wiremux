@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-04-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~822 | Active |
+| `journal-1.md` | ~864 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-04-28 | Event-driven interactive backend | `77e5f0e` | `dev` |
 | 20 | 2026-04-28 | Reduce TUI passthrough input latency | `d8c807c` | `dev` |
 | 19 | 2026-04-28 | Passthrough input hint | `ee52e2b`, `9dcffe1` | `dev` |
 | 18 | 2026-04-28 | Fix TUI passthrough wrapped output | `5c57630`, `ec53ce5` | `dev` |
