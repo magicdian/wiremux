@@ -46,7 +46,6 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "04-29-pr6-profile-skeleton-docs",
     "04-29-pr7-wiremux-build-orchestrator-mvp",
     "04-29-pr8-ci-release-validation-pass"
   ],
