@@ -38,14 +38,14 @@ After flashing, stop `idf.py monitor` before running the host tool. Only one pro
 Send a command and listen to the console channel from one process:
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 ```
 
 Run the other demo commands the same way:
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_manifest
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_hello
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line mux_log
@@ -92,7 +92,7 @@ idf.py build flash monitor
 ```
 
 If VS Code reports that this is not a complete ESP-IDF project, open the folder
-`sources/esp32/examples/esp_wiremux_console_demo` directly and make sure the ESP-IDF
+`sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` directly and make sure the ESP-IDF
 extension has a configured `IDF_PATH`. The root `CMakeLists.txt`,
 `sdkconfig.defaults`, and `main/CMakeLists.txt` are all project-local.
 

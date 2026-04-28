@@ -1,0 +1,5 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Check source layout and path references"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Check required validation commands and release rules"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Check host/core/vendor/build boundary consistency"}

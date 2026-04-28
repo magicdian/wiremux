@@ -82,6 +82,6 @@ channel 1 line-mode console 输入、channel 2 ESP log 输出、channel 3 teleme
 
 ## 源码
 
-Canonical source: {{repository_url}}/tree/main/sources/esp32/components/esp-wiremux
+Canonical source: {{repository_url}}/tree/main/sources/vendor/espressif/generic/components/esp-wiremux
 
 Release packaging: {{repository_url}}/blob/main/tools/esp-registry/generate-packages.sh

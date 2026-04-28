@@ -4,6 +4,13 @@ version = "2604.28.1"
 edition = "2021"
 license = "Apache-2.0"
 
+[features]
+default = []
+generic = []
+esp32 = []
+all-vendors = ["generic", "esp32"]
+all-features = ["all-vendors"]
+
 [lib]
 name = "wiremux"
 path = "src/lib.rs"

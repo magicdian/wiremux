@@ -183,7 +183,7 @@ interrupted operation and keep the UI running.
 
 `usb_serial_jtag_read_bytes()` dereferences the driver object internally. If the mux RX task starts before `usb_serial_jtag_driver_install()`, ESP32 can panic with `LoadProhibited` at boot.
 
-Fix: keep driver preparation inside the default transport path in `sources/esp32/components/esp-wiremux/src/esp_wiremux.c`, before task creation. If an application supplies custom transport callbacks, that application owns its transport driver initialization.
+Fix: keep driver preparation inside the default transport path in `sources/vendor/espressif/generic/components/esp-wiremux/src/esp_wiremux.c`, before task creation. If an application supplies custom transport callbacks, that application owns its transport driver initialization.
 
 ### Passing combined direction flags as envelope direction
 

@@ -9,12 +9,17 @@
 There are no frontend components in the current codebase. This file intentionally
 does not prescribe a component framework because the project has not chosen one.
 
-Current interactive behavior is implemented as:
+Current interactive behavior is implemented at pre-migration paths:
 
-- Rust CLI argument parsing and serial I/O in `sources/host/src/main.rs`.
+- Rust CLI argument parsing and serial I/O in `sources/host/wiremux/crates/wiremux-cli/src/main.rs`.
 - ESP-IDF console commands in
-  `sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.
-- ESP mux adapters in `sources/esp32/components/esp-wiremux/src/`.
+  `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.
+- ESP mux adapters in `sources/vendor/espressif/generic/components/esp-wiremux/src/`.
+
+Target paths after the source-layout migration are
+`sources/host/wiremux/crates/wiremux-cli/src/main.rs`,
+`sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`, and
+`sources/vendor/espressif/generic/components/esp-wiremux/src/`.
 
 ## Component Structure
 
@@ -71,7 +76,7 @@ wiremux send --port <path> --channel <id> --line <text>
 ```
 
 ESP console command examples live in
-`sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`:
+`sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`:
 
 - `help`
 - `hello`

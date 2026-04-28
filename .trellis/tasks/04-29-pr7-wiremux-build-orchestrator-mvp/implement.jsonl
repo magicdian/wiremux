@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Source layout, protocol, host, and vendor ownership boundaries"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required checks and protocol/release quality rules"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer source layout and build orchestration boundaries"}

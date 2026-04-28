@@ -10,18 +10,22 @@ No frontend build, lint, or test pipeline exists today. Frontend work must not b
 treated as established until the repository contains an actual app and its
 commands are documented here.
 
-Current quality gates are backend/runtime gates:
+Current quality gates are backend/runtime gates at pre-migration paths:
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo fmt --check
 cargo check
 cargo test
 ```
 
 ESP-IDF changes should be built from
-`sources/esp32/examples/esp_wiremux_console_demo` with `idf.py build` when ESP-IDF is
+`sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` with `idf.py build` when ESP-IDF is
 available.
+
+After the source-layout migration, host commands move under
+`sources/host/wiremux` and the generic ESP-IDF example moves under
+`sources/vendor/espressif/generic/examples/esp_wiremux_console_demo`.
 
 ## Forbidden Patterns
 

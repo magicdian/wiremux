@@ -1,0 +1,62 @@
+{
+  "id": "source-layout-build-productization",
+  "name": "source-layout-build-productization",
+  "title": "brainstorm: source layout and build productization",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "magicdian",
+  "assignee": "magicdian",
+  "createdAt": "2026-04-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 0,
+  "next_action": [
+    {
+      "phase": 1,
+      "action": "brainstorm"
+    },
+    {
+      "phase": 2,
+      "action": "research"
+    },
+    {
+      "phase": 3,
+      "action": "implement"
+    },
+    {
+      "phase": 4,
+      "action": "check"
+    },
+    {
+      "phase": 5,
+      "action": "update-spec"
+    },
+    {
+      "phase": 6,
+      "action": "record-session"
+    }
+  ],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "04-29-pr1-docs-source-layout-build-spec",
+    "04-29-pr2-migrate-proto-api-boundary",
+    "04-29-pr3-migrate-espressif-vendor-layout",
+    "04-29-pr4-move-host-wiremux-path",
+    "04-29-pr5-host-workspace-skeleton",
+    "04-29-pr6-profile-skeleton-docs",
+    "04-29-pr7-wiremux-build-orchestrator-mvp",
+    "04-29-pr8-ci-release-validation-pass"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

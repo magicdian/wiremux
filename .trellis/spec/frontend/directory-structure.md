@@ -12,14 +12,20 @@ committed.
 
 The current user-facing surfaces are:
 
-- Rust host CLI: `sources/host/src/main.rs`
-- ESP-IDF demo application: `sources/esp32/examples/esp_wiremux_console_demo/`
+- Rust host CLI: current `sources/host/wiremux/crates/wiremux-cli/src/main.rs`, target
+  `sources/host/wiremux/crates/wiremux-cli/src/main.rs`
+- ESP-IDF demo application: current
+  `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`, target
+  `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`
 - Documentation: `docs/zh/`
 
 Do not create frontend directories or imply a frontend architecture unless the
 task explicitly asks for a UI.
 
 ## Actual Directory Layout
+
+This is the current pre-migration layout. New architecture work should use the
+target source layout in `docs/source-layout-build.md`.
 
 ```text
 docs/
@@ -76,13 +82,13 @@ behavior:
 - `docs/zh/getting-started.md`
 - `docs/zh/host-tool.md`
 - `docs/zh/esp-idf-console-integration.md`
-- `sources/host/src/main.rs`
-- `sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`
+- `sources/host/wiremux/crates/wiremux-cli/src/main.rs`
+- `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`
 
 ## Forbidden Patterns
 
 - Do not add `src/components`, `app/`, or `pages/` at repository root.
-- Do not add frontend dependencies to `sources/host/Cargo.toml`.
+- Do not add frontend dependencies to `sources/host/wiremux/crates/wiremux-cli/Cargo.toml`.
 - Do not describe a React/Vite/Next architecture as existing until those files
   are committed.
 - Do not build a UI that bypasses the `WMUX` frame and `MuxEnvelope` protocol

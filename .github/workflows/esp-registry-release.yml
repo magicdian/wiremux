@@ -37,11 +37,20 @@ jobs:
             exit 1
           fi
 
+      - name: Install ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: v5.4.1
+
       - name: Generate ESP Registry packages
         shell: bash
         env:
           WIREMUX_ESP_REGISTRY_NAMESPACE: ${{ env.ESP_REGISTRY_NAMESPACE }}
-        run: tools/esp-registry/generate-packages.sh
+        run: |
+          set -euo pipefail
+          tools/wiremux-build doctor
+          tools/wiremux-build check all
+          tools/wiremux-build package esp-registry
 
       - name: Upload wiremux-core
         uses: espressif/upload-components-ci-action@v2

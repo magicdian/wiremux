@@ -10,6 +10,15 @@ Backend work in this repository covers the ESP-IDF C component, the ESP-IDF demo
 application, and the Rust host CLI/library. There is no database layer and no web
 frontend in the current codebase.
 
+The source tree is migrating toward the product layout in
+`docs/source-layout-build.md`: shared API definitions in `sources/api`,
+platform-neutral core code in `sources/core`, profiles in `sources/profiles`,
+host code in `sources/host/wiremux`, and Espressif code in
+`sources/vendor/espressif`. Treat older `sources/host`, `sources/esp32`, and
+`sources/api/proto` as the protocol schema path, and treat older
+`sources/core/proto` references as historical pre-migration paths unless a task is
+explicitly updating operational commands before those moves land.
+
 ---
 
 ## Guidelines Index

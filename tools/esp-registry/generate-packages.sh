@@ -30,8 +30,8 @@ if ! printf '%s\n' "${VERSION}" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]+$'; then
 fi
 
 CORE_SRC="${ROOT_DIR}/sources/core/c"
-ESP_SRC="${ROOT_DIR}/sources/esp32/components/esp-wiremux"
-ESP_EXAMPLE_SRC="${ROOT_DIR}/sources/esp32/examples/esp_wiremux_console_demo"
+ESP_SRC="${ROOT_DIR}/sources/vendor/espressif/generic/components/esp-wiremux"
+ESP_EXAMPLE_SRC="${ROOT_DIR}/sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
 README_TEMPLATE_DIR="${ROOT_DIR}/docs/esp-registry"
 CORE_PKG="${OUTPUT_DIR}/wiremux-core"
 ESP_PKG="${OUTPUT_DIR}/esp-wiremux"
@@ -131,7 +131,7 @@ description: "Wiremux ESP-IDF adapter component"
 license: "Apache-2.0"
 repository: "${REPOSITORY_URL}"
 repository_info:
-  path: "sources/esp32/components/esp-wiremux"
+  path: "sources/vendor/espressif/generic/components/esp-wiremux"
 documentation: "${REPOSITORY_URL}/blob/main/docs/esp-registry-release.md"
 tags:
   - wiremux

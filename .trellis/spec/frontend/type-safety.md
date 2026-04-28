@@ -10,23 +10,29 @@ There is no TypeScript frontend in this repository. Current type safety comes
 from Rust types, C structs/enums, ESP-IDF `esp_err_t`, and the protobuf-compatible
 wire schema.
 
-Important existing type definitions:
+Important existing type definitions, using current pre-migration paths:
 
 - `MuxEnvelope`, `DecodeError`, `FrameScanner`, and `StreamEvent` in
-  `sources/host/src/`.
+  `sources/host/wiremux/crates/wiremux-cli/src/`. Target host crate path: `sources/host/wiremux/crates/wiremux-cli/src/`.
 - `esp_wiremux_config_t`, `esp_wiremux_channel_config_t`, and payload enums
-  in `sources/esp32/components/esp-wiremux/include/esp_wiremux.h`.
+  in `sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux.h`. Target
+  Espressif component path:
+  `sources/vendor/espressif/generic/components/esp-wiremux/include/`.
 - `esp_wiremux_frame_header_t` and frame constants in
-  `sources/esp32/components/esp-wiremux/include/esp_wiremux_frame.h`.
+  `sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux_frame.h`.
 - `MuxEnvelope`, `ChannelDescriptor`, and `DeviceManifest` in
-  `sources/core/proto/wiremux.proto`.
+  `sources/api/proto/wiremux.proto`.
 
 ## Type Organization
 
 Current organization:
 
-- Rust public protocol modules are exported from `sources/host/src/lib.rs`.
-- Rust CLI-only argument structs stay private in `sources/host/src/main.rs`.
+- Rust public protocol modules are currently exported from
+  `sources/host/wiremux/crates/wiremux-cli/src/lib.rs`; target path is
+  `sources/host/wiremux/crates/wiremux-cli/src/lib.rs`.
+- Rust CLI-only argument structs currently stay private in
+  `sources/host/wiremux/crates/wiremux-cli/src/main.rs`; target path is
+  `sources/host/wiremux/crates/wiremux-cli/src/main.rs`.
 - ESP public API types live in component headers under `include/`.
 - ESP private implementation structs stay in `src/*.c`.
 - Cross-language field numbers live in the proto file and must remain stable.
