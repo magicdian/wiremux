@@ -978,3 +978,54 @@ Fixed TUI window resize exits caused by Interrupted system call. Added retry han
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: TUI scrollbar button live-follow fix
+
+**Date**: 2026-04-28
+**Task**: TUI scrollbar button live-follow fix
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Spec | Captured the TUI scrollbar button contract: up/down buttons are direct jump commands, while drag targets may animate. |
+| TUI | Fixed scrollbar button mouse handling so the up button jumps to oldest visible scrollback and the down button immediately restores live-following output. |
+| Tests | Added coverage for button hit mapping, direct jump behavior, and live output appending after the down-button action. |
+
+**Verification**:
+- `cargo fmt --check` in `sources/host`
+- `cargo check` in `sources/host`
+- `cargo test` in `sources/host` (88 tests passed)
+- `git diff --check`
+
+**Updated Files**:
+- `.trellis/spec/backend/directory-structure.md`
+- `.trellis/spec/backend/quality-guidelines.md`
+- `sources/host/src/tui.rs`
+- `.trellis/tasks/archive/2026-04/04-28-fix-tui-scrollbar-button-live-follow/`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a3d9df0` | (see git log) |
+| `4a05402` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

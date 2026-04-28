@@ -1,0 +1,4 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify TUI scrollback contract"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify tests and quality gates"}
