@@ -192,6 +192,7 @@ fn read_serial_thread(
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
             Err(err) => {
                 let _ = tx.send(SerialReadEvent::Error(err));
                 break;
@@ -284,18 +285,27 @@ pub fn wait_terminal_event(deadline: Option<Instant>) -> io::Result<InteractiveE
     if timeout.is_zero() {
         return Ok(InteractiveEvent::Timeout);
     }
-    if event::poll(timeout)? {
-        Ok(InteractiveEvent::Terminal(event::read()?))
+    if retry_interrupted(|| event::poll(timeout))? {
+        Ok(InteractiveEvent::Terminal(retry_interrupted(event::read)?))
     } else {
         Ok(InteractiveEvent::Timeout)
     }
 }
 
 pub(crate) fn drain_terminal_event() -> io::Result<Option<Event>> {
-    if event::poll(Duration::ZERO)? {
-        Ok(Some(event::read()?))
+    if retry_interrupted(|| event::poll(Duration::ZERO))? {
+        Ok(Some(retry_interrupted(event::read)?))
     } else {
         Ok(None)
+    }
+}
+
+pub(crate) fn retry_interrupted<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    loop {
+        match op() {
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
     }
 }
 
@@ -401,7 +411,7 @@ mod unix_mio {
 
             let timeout =
                 deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-            self.poll.poll(&mut self.events, timeout)?;
+            super::retry_interrupted(|| self.poll.poll(&mut self.events, timeout))?;
             if self.events.is_empty() {
                 return Ok(InteractiveEvent::Timeout);
             }
@@ -417,6 +427,7 @@ mod unix_mio {
                             }
                             Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
                             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                             Err(err) => return Ok(InteractiveEvent::SerialError(err)),
                         }
                     }
@@ -427,7 +438,7 @@ mod unix_mio {
                     }
                     SIGNAL_TOKEN => {
                         if self.signals.pending().any(|signal| signal == SIGWINCH) {
-                            let (cols, rows) = crossterm::terminal::size()?;
+                            let (cols, rows) = super::retry_interrupted(crossterm::terminal::size)?;
                             return Ok(InteractiveEvent::Terminal(Event::Resize(cols, rows)));
                         }
                     }
@@ -463,3 +474,39 @@ mod unix_mio {
 
 #[cfg(unix)]
 use unix_mio::UnixMioBackend;
+
+#[cfg(test)]
+mod tests {
+    use super::retry_interrupted;
+    use std::cell::Cell;
+    use std::io;
+
+    #[test]
+    fn retry_interrupted_retries_until_success() {
+        let attempts = Cell::new(0);
+
+        let value = retry_interrupted(|| {
+            let next = attempts.get() + 1;
+            attempts.set(next);
+            if next < 3 {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                Ok("ready")
+            }
+        })
+        .expect("interrupted operations should be retried");
+
+        assert_eq!(value, "ready");
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[test]
+    fn retry_interrupted_preserves_non_interrupted_error() {
+        let err = retry_interrupted(|| -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::WouldBlock))
+        })
+        .expect_err("non-interrupted errors should still propagate");
+
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+    }
+}

@@ -650,7 +650,9 @@ fn run_loop(
                 dirty = true;
             }
             InteractiveEvent::Terminal(event) => {
-                let output_area = output_area_from_terminal_area(terminal.size()?.into());
+                let output_area = output_area_from_terminal_area(
+                    interactive::retry_interrupted(|| terminal.size())?.into(),
+                );
                 let events = collect_terminal_burst(event)?;
                 if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
                     handle_terminal_events(&mut app, output_area, Some(serial), &args, events)?;

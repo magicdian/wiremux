@@ -78,6 +78,26 @@ CLI reporting rules:
 - Scratch workspace exhaustion during batch decompression is a decode error, not
   undefined behavior. It must not emit partial decoded records.
 
+### Host Interactive I/O
+
+Interactive host paths (`tui` and `passthrough`) must treat
+`std::io::ErrorKind::Interrupted` as a recoverable interruption, not as a fatal
+disconnect or command error. On Unix, `SIGWINCH` during terminal resize can
+interrupt `poll`, terminal event reads, terminal size queries, or serial reads;
+these operations must retry or continue and then let the normal resize event
+flow redraw the UI. Non-`Interrupted` I/O errors must still propagate through the
+existing `InteractiveEvent::SerialError` or command error paths.
+
+Required behavior:
+
+| Condition | Behavior |
+|-----------|----------|
+| terminal resize interrupts `mio::Poll::poll()` | retry the poll wait and continue the TUI loop |
+| terminal event `poll/read` returns `Interrupted` | retry the terminal operation |
+| resize handling calls terminal size and receives `Interrupted` | retry the size query |
+| serial read returns `Interrupted` in an interactive backend | continue reading; do not report EOF or disconnect |
+| serial read returns any other unexpected error | report it through the normal serial error path |
+
 ### ESP Producer APIs
 
 `esp_wiremux_write()` must validate before enqueueing:
@@ -151,6 +171,13 @@ The host runs on mixed terminal streams. A bad frame candidate must not terminat
 Do not regress the current single-handle console path. `listen --line` must be
 able to send a channel input frame after connecting and then keep decoding output
 on the same serial handle.
+
+### Treating `Interrupted` as fatal in interactive loops
+
+Window resize and other Unix signals may surface as `EINTR` while the TUI is
+waiting for terminal or serial readiness. Do not let `ErrorKind::Interrupted`
+escape the interactive event loop as `error: Interrupted system call`; retry the
+interrupted operation and keep the UI running.
 
 ### Calling USB Serial/JTAG read before driver install
 

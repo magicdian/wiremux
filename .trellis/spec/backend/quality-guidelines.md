@@ -229,6 +229,11 @@ the demo, and host verification commands in the same task.
   per queued wheel event; cache, coalesce, or defer expensive scroll range work so
   reverse scrolling and quit keys remain responsive while live serial output is
   arriving.
+- Interactive host loops must tolerate recoverable OS interruptions. On Unix,
+  terminal resize can deliver `SIGWINCH` while the TUI is blocked in readiness
+  polling, terminal event reads, terminal size queries, or serial reads. These
+  paths must retry or continue on `std::io::ErrorKind::Interrupted` and must not
+  exit with `Interrupted system call`.
 - TUI status must continue to show device manifest metadata including
   `DeviceManifest.protocol_version` as the device proto API version. Backend and
   FPS status belong in the existing status area, not a separate debug panel.
@@ -290,6 +295,7 @@ the demo, and host verification commands in the same task.
 | `--interactive-backend mio` on non-Unix | command fails clearly before entering the interactive loop |
 | `--tui-fps 144` | CLI parse fails with allowed values `60` or `120` |
 | TUI/passthrough waits for serial data while the user types | keyboard handling is not gated by a long passive-listener read timeout |
+| window resize occurs while `wiremux tui` is running | TUI redraws/resizes and does not exit with `Interrupted system call` |
 | TUI receives manifest with protocol API version | status displays the device API version from `DeviceManifest.protocol_version` |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
 | passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
@@ -343,6 +349,9 @@ the demo, and host verification commands in the same task.
   and invalid FPS values.
 - Host TUI render tests must assert that the status area includes backend, FPS,
   and device proto API version from `DeviceManifest.protocol_version`.
+- Host interactive event-loop tests must cover retry behavior for
+  `std::io::ErrorKind::Interrupted`, because unit tests cannot reliably deliver
+  real terminal resize signals in CI.
 - Host unit tests cover TUI scrollback behavior: live-tail visible-window math,
   mouse wheel pause/resume, append-while-frozen stability, filtered scroll
   counts, empty-input double-Enter recovery, scrollbar row-to-offset mapping,
