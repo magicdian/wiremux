@@ -405,6 +405,11 @@ Required behavior:
   channel. In channel filter mode, TUI input targets the active channel only
   when the manifest descriptor for that channel includes `DIRECTION_INPUT`; the
   manifest interaction mode then determines line vs passthrough input.
+- `tui` and `passthrough` are interactive input paths. Their serial read timeout
+  must stay short enough that a blocking read cannot make keyboard handling feel
+  delayed. Passive `listen` may use a longer read timeout, but do not share that
+  timeout with interactive loops unless the loop polls keyboard input before any
+  blocking serial read.
 - TUI passthrough output uses stream semantics only for channels whose manifest
   advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/src/tui.rs` must
   keep each passthrough channel's incomplete `OutputLine` independent: when a

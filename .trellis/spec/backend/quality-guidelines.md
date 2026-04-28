@@ -180,6 +180,10 @@ the demo, and host verification commands in the same task.
   complete command lines on Enter and `PASSTHROUGH` channels send key bytes
   promptly. TUI must not raw-write user text to the serial stream outside
   `WMUX` frames.
+- Interactive host loops must not block keyboard polling behind the passive
+  listener's serial read timeout. `tui` and `passthrough` should either use a
+  short serial read timeout or otherwise structure the loop so key handling is
+  checked before a potentially long blocking read.
 - TUI passthrough display is channel-local stream editing. In
   `sources/host/src/tui.rs`, `complete_stream_line()`,
   `backspace_stream_line()`, and `append_stream_segment()` must operate on the
@@ -225,6 +229,7 @@ the demo, and host verification commands in the same task.
 | TUI submits input in unfiltered mode | host treats the view as read-only and sends no mux input frame |
 | TUI submits input in channel filter mode for an output-only channel | host treats the channel as read-only and sends no mux input frame |
 | TUI submits input in channel filter mode for an input-capable channel | host sends mux input frame to active channel |
+| TUI/passthrough waits for serial data while the user types | keyboard polling is not gated by a long passive-listener read timeout |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
 | passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
 | passthrough command output wraps inside a narrow output pane | scrollbar and cursor row/column follow visual wrapped rows, not the logical `OutputLine` index |

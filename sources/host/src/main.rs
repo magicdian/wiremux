@@ -17,6 +17,8 @@ use wiremux::host_session::{
 mod tui;
 
 const PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS: u64 = 750;
+const DEFAULT_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(100);
+const INTERACTIVE_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(5);
 
 #[derive(Debug)]
 enum CliCommand {
@@ -325,7 +327,8 @@ fn send(args: SendArgs) -> io::Result<()> {
 
 fn passthrough(args: PassthroughArgs) -> io::Result<()> {
     let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.port)?;
-    let (connected_port, mut port) = open_available_port(&args.port, args.baud)?;
+    let (connected_port, mut port) =
+        open_available_port_with_timeout(&args.port, args.baud, INTERACTIVE_SERIAL_READ_TIMEOUT)?;
     writeln!(
         diagnostics,
         "[wiremux] passthrough connected: {} channel={}",
@@ -556,10 +559,18 @@ fn open_available_port(
     requested: &Path,
     baud: u32,
 ) -> io::Result<(PathBuf, Box<dyn serialport::SerialPort>)> {
+    open_available_port_with_timeout(requested, baud, DEFAULT_SERIAL_READ_TIMEOUT)
+}
+
+fn open_available_port_with_timeout(
+    requested: &Path,
+    baud: u32,
+    read_timeout: Duration,
+) -> io::Result<(PathBuf, Box<dyn serialport::SerialPort>)> {
     let mut last_err = None;
 
     for candidate in port_candidates(requested) {
-        match open_serial_port(&candidate, baud) {
+        match open_serial_port(&candidate, baud, read_timeout) {
             Ok(port) => return Ok((candidate, port)),
             Err(err) => last_err = Some(err),
         }
@@ -573,12 +584,16 @@ fn open_available_port(
     }))
 }
 
-fn open_serial_port(path: &Path, baud: u32) -> io::Result<Box<dyn serialport::SerialPort>> {
+fn open_serial_port(
+    path: &Path,
+    baud: u32,
+    read_timeout: Duration,
+) -> io::Result<Box<dyn serialport::SerialPort>> {
     let path = path
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "serial path is not UTF-8"))?;
     serialport::new(path, baud)
-        .timeout(Duration::from_millis(100))
+        .timeout(read_timeout)
         .open()
         .map_err(|err| io::Error::other(err.to_string()))
 }

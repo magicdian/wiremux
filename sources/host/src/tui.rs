@@ -28,9 +28,10 @@ use wiremux::host_session::{
 use super::{
     build_frame_error_to_io, build_input_frame, build_manifest_request_frame,
     channel_supports_passthrough, create_diagnostics_file, is_passthrough_escape_exit_suffix,
-    is_passthrough_exit_key, is_passthrough_meta_exit_key, open_available_port,
+    is_passthrough_exit_key, is_passthrough_meta_exit_key, open_available_port_with_timeout,
     passthrough_key_payload, passthrough_policy_for_channel, printable_payload,
-    write_envelope_diagnostics, TuiArgs, PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
+    write_envelope_diagnostics, TuiArgs, INTERACTIVE_SERIAL_READ_TIMEOUT,
+    PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
 };
 
 const MAX_LINES: usize = 1000;
@@ -476,7 +477,11 @@ fn run_loop(
     loop {
         if serial.is_none() && last_connect_attempt.elapsed() >= reconnect_delay {
             last_connect_attempt = Instant::now();
-            match open_available_port(&args.port, args.baud) {
+            match open_available_port_with_timeout(
+                &args.port,
+                args.baud,
+                INTERACTIVE_SERIAL_READ_TIMEOUT,
+            ) {
                 Ok((path, mut port)) => {
                     app.connected_port = Some(path.display().to_string());
                     app.status = format!("connected {}", path.display());
