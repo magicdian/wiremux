@@ -1,6 +1,6 @@
 [package]
 name = "interactive"
-version = "2604.29.7"
+version = "2604.29.8"
 edition = "2021"
 license = "Apache-2.0"
 

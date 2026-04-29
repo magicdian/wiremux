@@ -276,6 +276,10 @@ impl App {
         if !virtual_serial_supported {
             virtual_serial_config.enabled = false;
         }
+        let virtual_serial = VirtualSerialBroker::with_source_port(
+            virtual_serial_config.clone(),
+            serial.port.clone(),
+        );
         Self {
             lines: VecDeque::new(),
             input: String::new(),
@@ -301,7 +305,7 @@ impl App {
             config_path,
             settings: None,
             reconnect_requested: false,
-            virtual_serial: VirtualSerialBroker::new(virtual_serial_config.clone()),
+            virtual_serial,
             virtual_serial_config,
             virtual_serial_supported,
         }
@@ -961,6 +965,9 @@ fn run_loop(
                 app.push_marker("disconnected: EOF");
                 app.connected_port = None;
                 app.backend_label = "disconnected".to_string();
+                app.manifest = None;
+                app.input.clear();
+                app.virtual_serial.clear_endpoints();
                 backend = None;
                 dirty = true;
             }
@@ -972,6 +979,9 @@ fn run_loop(
                 writeln!(diagnostics, "[wiremux] disconnected: {err}")?;
                 app.connected_port = None;
                 app.backend_label = "disconnected".to_string();
+                app.manifest = None;
+                app.input.clear();
+                app.virtual_serial.clear_endpoints();
                 backend = None;
                 dirty = true;
             }
@@ -1010,6 +1020,7 @@ fn run_loop(
                     app.backend_label = "disconnected".to_string();
                     app.manifest = None;
                     app.input.clear();
+                    app.virtual_serial.clear_endpoints();
                     backend = None;
                     host_session = HostSession::new(args.max_payload_len).map_err(|status| {
                         io::Error::new(
@@ -1608,6 +1619,7 @@ fn apply_settings_choice(field: SettingsField, selected: usize, profile: &mut Se
 }
 
 fn apply_settings_profile(app: &mut App, profile: SerialProfile) {
+    app.virtual_serial.set_source_port(profile.port.clone());
     app.serial = profile;
     app.reconnect_requested = true;
     app.status = "settings applied; reconnecting".to_string();

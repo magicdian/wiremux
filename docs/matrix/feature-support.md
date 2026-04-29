@@ -24,7 +24,7 @@ Legend:
 | TUI manifest-driven passthrough input | Supported | Supported | Supported | Requires passthrough interaction metadata. |
 | TUI application-managed text selection | Supported | Supported | Supported | Uses OSC 52 for copy where supported by the terminal. |
 | Generic enhanced host mode | Supported | Supported | Partial | Windows compiles the interface but virtual serial activation is unsupported for now. |
-| Generic virtual serial endpoints | Supported | Supported | Planned | Requires generic enhanced or higher host build; generic builds cannot enable it from config or TUI. Unix PTY backend first; Windows virtual COM backend is future work. |
+| Generic virtual serial endpoints | Supported | Supported | Planned | Requires generic enhanced or higher host build; generic builds cannot enable it from config or TUI. Unix PTY backend exposes stable `tty.wiremux-*` aliases and removes them on disconnect; Windows virtual COM backend is future work. |
 | Virtual serial output mirroring | Supported | Supported | Planned | Mirrors every manifest channel to its endpoint when virtual serial is enabled; non-passthrough text records are line-delimited for terminal clients. |
 | Virtual serial input ownership gate | Supported | Supported | Planned | Host owns input by default; TUI can hand ownership to virtual serial. |
 | Output-only channel read-only virtual endpoint | Supported | Supported | Planned | Writes are rejected or discarded without sending device frames. |

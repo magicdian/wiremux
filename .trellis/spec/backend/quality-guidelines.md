@@ -574,6 +574,17 @@ sources/host/wiremux/crates/tui/src/lib.rs
 - Unix/macOS use PTY endpoints opened through `VirtualSerialEndpointIo`.
   Windows may compile the interface but returns unsupported until a virtual COM
   backend is implemented.
+- Unix/macOS PTY slave names are OS-assigned. The virtual serial broker exposes
+  stable `tty.wiremux-*` aliases for clients, removes aliases when endpoints are
+  dropped, and recreates the same aliases after reconnect when the manifest
+  still describes the same channel set.
+- macOS endpoint shutdown should best-effort `revoke(2)` the real PTY slave
+  before alias removal so terminal clients with an already-open descriptor can
+  observe disconnect. Linux has no portable equivalent, so alias cleanup remains
+  the common contract there.
+- Duplicate unchanged manifests must not recreate PTY endpoints. Reuse existing
+  endpoints when channel ID, alias name, input capability, and output record
+  mode still match.
 - Text payloads mirrored to terminal clients normalize LF to CRLF. Non-empty
   non-passthrough text mux records that do not already end in CR or LF receive a
   synthetic CRLF record break. Channels advertising
@@ -582,6 +593,10 @@ sources/host/wiremux/crates/tui/src/lib.rs
 - PTY output backpressure is bounded per endpoint. `WouldBlock`, `TimedOut`, and
   `Interrupted` write results keep pending bytes queued for later flush; queue
   overflow drops only overflow bytes and should not spam TUI status.
+- Unix PTY `EIO` after a terminal client closes the slave side is a normal
+  client-disconnect condition for the virtual endpoint. It must not terminate
+  the TUI; treat reads as no input and writes as backpressure/no progress until
+  a client opens the alias again.
 
 ### 4. Validation & Error Matrix
 
@@ -597,7 +612,10 @@ sources/host/wiremux/crates/tui/src/lib.rs
 | Non-passthrough text payload ending `\n` | endpoint receives exactly one terminal CRLF ending |
 | Passthrough text payload `partial` | endpoint receives `partial` with no synthetic record break |
 | PTY write returns `WouldBlock` | unwritten bytes remain queued and later flush without diagnostics noise |
+| PTY read/write returns `EIO` after client exit | TUI keeps running; endpoint waits for a future client open |
 | Platform has no backend | endpoint status is unsupported; TUI continues running |
+| Physical serial disconnects | active virtual endpoints are dropped and stable aliases disappear |
+| Duplicate unchanged manifest | existing PTYs and aliases are reused, not recreated |
 
 ### 5. Good/Base/Bad Cases
 
