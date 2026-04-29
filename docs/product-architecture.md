@@ -186,8 +186,14 @@ accept writes only when the input-ownership gate grants ownership to the virtual
 endpoint. For non-passthrough text channels, the broker maps mux record
 boundaries to terminal line endings so tools such as `minicom` and `screen`
 render each record as a separate line; passthrough channels preserve byte-stream
-semantics. Vendor enhanced adapters may later request ownership for special
-endpoints, for example an ESP32 aggregate flashing PTY.
+semantics. On Unix-style hosts, PTY numbers are still allocated by the OS, but
+the broker exposes stable `tty.wiremux-*` aliases for terminal tools. These
+aliases are removed when the backing serial device disconnects or the host exits
+normally, then recreated with the same names after the next manifest sync. On
+macOS, endpoint shutdown also best-effort revokes the real PTY slave so clients
+with an already-open descriptor can observe disconnect.
+Vendor enhanced adapters may later request ownership for special endpoints, for
+example an ESP32 aggregate flashing PTY.
 
 ## Profile Discovery
 

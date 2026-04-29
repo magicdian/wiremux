@@ -666,6 +666,7 @@ pub enum VirtualSerialInputEvent {
 pub struct VirtualSerialBroker {
     config: VirtualSerialConfig,
     enabled: bool,
+    source_port: Option<PathBuf>,
     endpoints: Vec<VirtualSerialEndpoint>,
 }
 
@@ -689,6 +690,9 @@ enum VirtualSerialEndpointBackend {
 
 trait VirtualSerialEndpointIo {
     fn path(&self) -> &Path;
+    fn real_path(&self) -> &Path {
+        self.path()
+    }
     fn write_output(&mut self, bytes: &[u8]) -> io::Result<usize>;
     fn read_input(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>>;
 }
@@ -699,8 +703,15 @@ impl VirtualSerialBroker {
         Self {
             config,
             enabled,
+            source_port: None,
             endpoints: Vec::new(),
         }
+    }
+
+    pub fn with_source_port(config: VirtualSerialConfig, source_port: PathBuf) -> Self {
+        let mut broker = Self::new(config);
+        broker.source_port = Some(source_port);
+        broker
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -709,6 +720,17 @@ impl VirtualSerialBroker {
 
     pub fn config(&self) -> &VirtualSerialConfig {
         &self.config
+    }
+
+    pub fn set_source_port(&mut self, source_port: PathBuf) {
+        if self.source_port.as_ref() != Some(&source_port) {
+            self.source_port = Some(source_port);
+            self.endpoints.clear();
+        }
+    }
+
+    pub fn clear_endpoints(&mut self) {
+        self.endpoints.clear();
     }
 
     pub fn set_enabled(&mut self, enabled: bool, manifest: Option<&DeviceManifest>) {
@@ -728,11 +750,22 @@ impl VirtualSerialBroker {
             return;
         }
 
-        self.endpoints = manifest
-            .channels
-            .iter()
-            .map(|channel| self.create_endpoint(manifest, channel))
-            .collect();
+        let mut old_endpoints = std::mem::take(&mut self.endpoints);
+        let mut endpoints = Vec::with_capacity(manifest.channels.len());
+
+        for channel in &manifest.channels {
+            let spec = self.endpoint_spec(manifest, channel);
+            if let Some(index) = old_endpoints
+                .iter()
+                .position(|endpoint| endpoint.matches_spec(&spec))
+            {
+                endpoints.push(old_endpoints.swap_remove(index));
+            } else {
+                endpoints.push(self.create_endpoint(spec));
+            }
+        }
+
+        self.endpoints = endpoints;
     }
 
     pub fn endpoint_infos(&self) -> Vec<VirtualSerialEndpointInfo> {
@@ -868,14 +901,27 @@ impl VirtualSerialBroker {
         Ok(events)
     }
 
-    fn create_endpoint(
+    fn endpoint_spec(
         &self,
         manifest: &DeviceManifest,
         channel: &ChannelDescriptor,
-    ) -> VirtualSerialEndpoint {
-        let name = virtual_serial_name(&self.config.name_template, manifest, channel);
-        let input_capable = channel.directions.contains(&DIRECTION_INPUT);
-        let backend = match open_virtual_serial_endpoint(&name) {
+    ) -> VirtualSerialEndpointSpec {
+        let name = virtual_serial_name(
+            &self.config.name_template,
+            manifest,
+            channel,
+            self.source_port.as_deref(),
+        );
+        VirtualSerialEndpointSpec {
+            channel_id: channel.channel_id,
+            name,
+            input_capable: channel.directions.contains(&DIRECTION_INPUT),
+            output_record_delimited: virtual_serial_record_delimited_output(channel),
+        }
+    }
+
+    fn create_endpoint(&self, spec: VirtualSerialEndpointSpec) -> VirtualSerialEndpoint {
+        let backend = match open_virtual_serial_endpoint(&spec.name) {
             Ok(backend) => VirtualSerialEndpointBackend::Active(backend),
             Err(err) if err.kind() == io::ErrorKind::Unsupported => {
                 VirtualSerialEndpointBackend::Unsupported(err.to_string())
@@ -883,17 +929,24 @@ impl VirtualSerialBroker {
             Err(err) => VirtualSerialEndpointBackend::Failed(err.to_string()),
         };
         VirtualSerialEndpoint {
-            channel_id: channel.channel_id,
-            name,
-            input_capable,
+            channel_id: spec.channel_id,
+            name: spec.name,
+            input_capable: spec.input_capable,
             input_owner: VirtualSerialInputOwner::Host,
-            output_record_delimited: virtual_serial_record_delimited_output(channel),
+            output_record_delimited: spec.output_record_delimited,
             output_previous_was_cr: false,
             output_pending: Vec::new(),
             output_dropped_bytes: 0,
             backend,
         }
     }
+}
+
+struct VirtualSerialEndpointSpec {
+    channel_id: u32,
+    name: String,
+    input_capable: bool,
+    output_record_delimited: bool,
 }
 
 fn terminal_text_output_bytes(
@@ -926,6 +979,13 @@ fn virtual_serial_record_delimited_output(channel: &ChannelDescriptor) -> bool {
 }
 
 impl VirtualSerialEndpoint {
+    fn matches_spec(&self, spec: &VirtualSerialEndpointSpec) -> bool {
+        self.channel_id == spec.channel_id
+            && self.name == spec.name
+            && self.input_capable == spec.input_capable
+            && self.output_record_delimited == spec.output_record_delimited
+    }
+
     fn enqueue_output(&mut self, bytes: &[u8]) {
         let available = VIRTUAL_SERIAL_OUTPUT_QUEUE_LIMIT.saturating_sub(self.output_pending.len());
         let queued_len = bytes.len().min(available);
@@ -949,9 +1009,10 @@ impl VirtualSerialEndpoint {
 
     fn info(&self) -> VirtualSerialEndpointInfo {
         let (path, status) = match &self.backend {
-            VirtualSerialEndpointBackend::Active(backend) => {
-                (Some(backend.path().to_path_buf()), "active".to_string())
-            }
+            VirtualSerialEndpointBackend::Active(backend) => (
+                Some(backend.path().to_path_buf()),
+                format!("active real={}", backend.real_path().display()),
+            ),
             VirtualSerialEndpointBackend::Unsupported(reason) => {
                 (None, format!("unsupported: {reason}"))
             }
@@ -972,12 +1033,20 @@ fn virtual_serial_name(
     template: &str,
     manifest: &DeviceManifest,
     channel: &ChannelDescriptor,
+    source_port: Option<&Path>,
 ) -> String {
-    let device = sanitize_virtual_serial_name_part(&manifest.device_name);
+    let device = source_port
+        .map(source_port_virtual_serial_name_part)
+        .unwrap_or_else(|| sanitize_virtual_serial_name_part(&manifest.device_name));
     let channel_name = if channel.name.is_empty() {
-        format!("ch{}", channel.channel_id)
+        String::new()
     } else {
         sanitize_virtual_serial_name_part(&channel.name)
+    };
+    let channel_name = if channel_name.is_empty() {
+        format!("ch{}", channel.channel_id)
+    } else {
+        channel_name
     };
     template
         .replace(
@@ -993,7 +1062,7 @@ fn sanitize_virtual_serial_name_part(value: &str) -> String {
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch.to_ascii_lowercase()
+                ch
             } else {
                 '-'
             }
@@ -1003,9 +1072,26 @@ fn sanitize_virtual_serial_name_part(value: &str) -> String {
         .to_string()
 }
 
+fn source_port_virtual_serial_name_part(path: &Path) -> String {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    let file_name = file_name.as_ref();
+    let value = file_name
+        .strip_prefix("tty.")
+        .or_else(|| file_name.strip_prefix("cu."))
+        .unwrap_or(file_name);
+    truncate_chars(&sanitize_virtual_serial_name_part(value), 15)
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
 #[cfg(unix)]
 fn open_virtual_serial_endpoint(_name: &str) -> io::Result<Box<dyn VirtualSerialEndpointIo>> {
-    unix_virtual_serial::UnixVirtualSerialEndpoint::open()
+    unix_virtual_serial::UnixVirtualSerialEndpoint::open(_name)
         .map(|endpoint| Box::new(endpoint) as Box<dyn VirtualSerialEndpointIo>)
 }
 
@@ -1271,6 +1357,8 @@ fn open_mio_backend(
 
 #[cfg(unix)]
 mod unix_virtual_serial {
+    use std::env;
+    use std::fs;
     use std::io::{self, Read, Write};
     use std::os::fd::AsRawFd;
     use std::path::{Path, PathBuf};
@@ -1283,24 +1371,46 @@ mod unix_virtual_serial {
     pub(super) struct UnixVirtualSerialEndpoint {
         master: PtyMaster,
         path: PathBuf,
+        real_path: PathBuf,
+        alias_path: Option<PathBuf>,
     }
 
     impl UnixVirtualSerialEndpoint {
-        pub(super) fn open() -> io::Result<Self> {
+        pub(super) fn open(name: &str) -> io::Result<Self> {
             let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).map_err(nix_error_to_io)?;
             grantpt(&master).map_err(nix_error_to_io)?;
             unlockpt(&master).map_err(nix_error_to_io)?;
-            let path = unsafe { ptsname(&master) }
+            let real_path = unsafe { ptsname(&master) }
                 .map(PathBuf::from)
                 .map_err(nix_error_to_io)?;
             set_nonblocking(&master)?;
-            Ok(Self { master, path })
+            let alias_path = create_stable_alias(name, &real_path)?;
+            let path = alias_path.clone().unwrap_or_else(|| real_path.clone());
+            Ok(Self {
+                master,
+                path,
+                real_path,
+                alias_path,
+            })
+        }
+    }
+
+    impl Drop for UnixVirtualSerialEndpoint {
+        fn drop(&mut self) {
+            revoke_real_path_if_supported(&self.real_path);
+            if let Some(alias_path) = &self.alias_path {
+                remove_alias_if_ours(alias_path, &self.real_path);
+            }
         }
     }
 
     impl VirtualSerialEndpointIo for UnixVirtualSerialEndpoint {
         fn path(&self) -> &Path {
             &self.path
+        }
+
+        fn real_path(&self) -> &Path {
+            &self.real_path
         }
 
         fn write_output(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -1315,6 +1425,7 @@ mod unix_virtual_serial {
                 {
                     Ok(0)
                 }
+                Err(err) if is_pty_client_gone_error(&err) => Ok(0),
                 Err(err) => Err(err),
             }
         }
@@ -1324,9 +1435,14 @@ mod unix_virtual_serial {
                 Ok(read_len) => Ok(Some(read_len)),
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(None),
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(None),
+                Err(err) if is_pty_client_gone_error(&err) => Ok(None),
                 Err(err) => Err(err),
             }
         }
+    }
+
+    pub(super) fn is_pty_client_gone_error(err: &io::Error) -> bool {
+        err.raw_os_error() == Some(nix::libc::EIO)
     }
 
     fn set_nonblocking(master: &PtyMaster) -> io::Result<()> {
@@ -1334,6 +1450,94 @@ mod unix_virtual_serial {
         let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
         fcntl(master.as_raw_fd(), FcntlArg::F_SETFL(flags)).map_err(nix_error_to_io)?;
         Ok(())
+    }
+
+    fn create_stable_alias(name: &str, real_path: &Path) -> io::Result<Option<PathBuf>> {
+        let alias_name = format!("tty.{name}");
+        let dev_alias = Path::new("/dev").join(&alias_name);
+        match replace_stale_symlink(&dev_alias, real_path) {
+            Ok(()) => return Ok(Some(dev_alias)),
+            Err(err) if should_fallback_alias_dir(&err) => {}
+            Err(err) => return Err(err),
+        }
+
+        let fallback_dir = default_alias_dir();
+        fs::create_dir_all(&fallback_dir)?;
+        let fallback_alias = fallback_dir.join(alias_name);
+        replace_stale_symlink(&fallback_alias, real_path)?;
+        Ok(Some(fallback_alias))
+    }
+
+    fn replace_stale_symlink(alias_path: &Path, real_path: &Path) -> io::Result<()> {
+        match fs::symlink_metadata(alias_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target = fs::read_link(alias_path)?;
+                if target.exists() && target != real_path {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!(
+                            "{} already points to active {}",
+                            alias_path.display(),
+                            target.display()
+                        ),
+                    ));
+                }
+                fs::remove_file(alias_path)?;
+            }
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "{} already exists and is not a symlink",
+                        alias_path.display()
+                    ),
+                ));
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+
+        std::os::unix::fs::symlink(real_path, alias_path)
+    }
+
+    fn remove_alias_if_ours(alias_path: &Path, real_path: &Path) {
+        if fs::read_link(alias_path).is_ok_and(|target| target == real_path) {
+            let _ = fs::remove_file(alias_path);
+        }
+    }
+
+    fn should_fallback_alias_dir(err: &io::Error) -> bool {
+        !matches!(err.kind(), io::ErrorKind::AlreadyExists)
+    }
+
+    fn default_alias_dir() -> PathBuf {
+        if let Some(path) = env::var_os("WIREMUX_VIRTUAL_SERIAL_DIR") {
+            return PathBuf::from(path);
+        }
+        PathBuf::from("/tmp/wiremux/tty")
+    }
+
+    #[cfg(target_os = "macos")]
+    fn revoke_real_path_if_supported(path: &Path) {
+        use std::ffi::CString;
+        use std::os::raw::c_char;
+        use std::os::unix::ffi::OsStrExt;
+
+        extern "C" {
+            fn revoke(path: *const c_char) -> i32;
+        }
+
+        let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+            return;
+        };
+        unsafe {
+            revoke(path.as_ptr());
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn revoke_real_path_if_supported(_path: &Path) {
+        // Linux has no portable revoke(2) equivalent for PTY slaves.
     }
 
     fn nix_error_to_io(err: nix::Error) -> io::Error {
@@ -1488,14 +1692,17 @@ mod tests {
     use super::{
         is_passthrough_exit_key, is_passthrough_meta_exit_key, paired_tty_cu_path,
         passthrough_key_payload, port_candidates, requested_file_name_starts_with,
-        retry_interrupted, terminal_text_output_bytes, usbmodem_fragment,
-        virtual_serial_record_delimited_output, HostConfig, SerialConfig, SerialFlowControl,
-        SerialParity, SerialProfileOverrides, VirtualSerialConfig, VirtualSerialEndpoint,
-        VirtualSerialEndpointBackend, VirtualSerialEndpointIo, VirtualSerialExport,
-        VirtualSerialInputOwner,
+        retry_interrupted, source_port_virtual_serial_name_part, terminal_text_output_bytes,
+        usbmodem_fragment, virtual_serial_name, virtual_serial_record_delimited_output, HostConfig,
+        SerialConfig, SerialFlowControl, SerialParity, SerialProfileOverrides, VirtualSerialBroker,
+        VirtualSerialConfig, VirtualSerialEndpoint, VirtualSerialEndpointBackend,
+        VirtualSerialEndpointIo, VirtualSerialExport, VirtualSerialInputOwner,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use host_session::{ChannelDescriptor, CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_OUTPUT};
+    use host_session::{
+        ChannelDescriptor, DeviceManifest, CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_INPUT,
+        DIRECTION_OUTPUT,
+    };
     use std::cell::Cell;
     use std::collections::VecDeque;
     use std::io;
@@ -1701,6 +1908,132 @@ name_template = "wiremux-{device}-{channel_id}"
     }
 
     #[test]
+    fn virtual_serial_name_uses_source_port_and_channel_fallbacks() {
+        let manifest = DeviceManifest {
+            device_name: "esp-wiremux".to_string(),
+            firmware_version: String::new(),
+            protocol_version: 0,
+            max_channels: 0,
+            channels: Vec::new(),
+            native_endianness: 0,
+            max_payload_len: 0,
+            transport: String::new(),
+            feature_flags: 0,
+            sdk_name: String::new(),
+            sdk_version: String::new(),
+        };
+        let named = ChannelDescriptor {
+            name: "telemetry".to_string(),
+            ..test_channel_descriptor(3, Vec::new(), 0)
+        };
+        let emoji = ChannelDescriptor {
+            channel_id: 4,
+            name: "🚗🎒😄".to_string(),
+            ..test_channel_descriptor(4, Vec::new(), 0)
+        };
+
+        assert_eq!(
+            source_port_virtual_serial_name_part(&PathBuf::from("/dev/tty.HUAWEIFreeClip2345")),
+            "HUAWEIFreeClip2"
+        );
+        assert_eq!(
+            virtual_serial_name(
+                "wiremux-{device}-{channel}",
+                &manifest,
+                &named,
+                Some(Path::new("/dev/tty.usbmodem41301")),
+            ),
+            "wiremux-usbmodem41301-telemetry"
+        );
+        assert_eq!(
+            virtual_serial_name(
+                "wiremux-{device}-{channel}",
+                &manifest,
+                &emoji,
+                Some(Path::new("/dev/tty.usbmodem41301")),
+            ),
+            "wiremux-usbmodem41301-ch4"
+        );
+    }
+
+    #[test]
+    fn virtual_serial_sync_reuses_matching_endpoint() {
+        struct NullEndpoint;
+
+        impl VirtualSerialEndpointIo for NullEndpoint {
+            fn path(&self) -> &Path {
+                Path::new("/dev/tty.wiremux-test")
+            }
+
+            fn real_path(&self) -> &Path {
+                Path::new("/dev/ttys999")
+            }
+
+            fn write_output(&mut self, buf: &[u8]) -> io::Result<usize> {
+                Ok(buf.len())
+            }
+
+            fn read_input(&mut self, _buf: &mut [u8]) -> io::Result<Option<usize>> {
+                Ok(None)
+            }
+        }
+
+        let mut broker = VirtualSerialBroker::with_source_port(
+            VirtualSerialConfig::default(),
+            PathBuf::from("/dev/tty.usbmodem41301"),
+        );
+        broker.endpoints.push(VirtualSerialEndpoint {
+            channel_id: 3,
+            name: "wiremux-usbmodem41301-telemetry".to_string(),
+            input_capable: true,
+            input_owner: VirtualSerialInputOwner::VirtualSerial,
+            output_record_delimited: true,
+            output_previous_was_cr: false,
+            output_pending: b"pending".to_vec(),
+            output_dropped_bytes: 0,
+            backend: VirtualSerialEndpointBackend::Active(Box::new(NullEndpoint)),
+        });
+        let manifest = DeviceManifest {
+            device_name: "esp-wiremux".to_string(),
+            firmware_version: String::new(),
+            protocol_version: 0,
+            max_channels: 0,
+            channels: vec![ChannelDescriptor {
+                channel_id: 3,
+                name: "telemetry".to_string(),
+                description: String::new(),
+                directions: vec![DIRECTION_INPUT, DIRECTION_OUTPUT],
+                payload_kinds: Vec::new(),
+                payload_types: Vec::new(),
+                flags: 0,
+                default_payload_kind: 0,
+                interaction_modes: Vec::new(),
+                default_interaction_mode: 0,
+                passthrough_policy: Default::default(),
+            }],
+            native_endianness: 0,
+            max_payload_len: 0,
+            transport: String::new(),
+            feature_flags: 0,
+            sdk_name: String::new(),
+            sdk_version: String::new(),
+        };
+
+        broker.sync_manifest(&manifest);
+
+        assert_eq!(broker.endpoints.len(), 1);
+        assert_eq!(
+            broker.input_owner(3),
+            Some(VirtualSerialInputOwner::VirtualSerial)
+        );
+        assert_eq!(broker.endpoints[0].output_pending, b"pending");
+        assert_eq!(
+            broker.endpoint_path_for_channel(3),
+            Some(PathBuf::from("/dev/tty.wiremux-test"))
+        );
+    }
+
+    #[test]
     fn virtual_serial_output_backpressure_is_queued() {
         struct ScriptedEndpoint {
             writes: Rc<std::cell::RefCell<VecDeque<usize>>>,
@@ -1752,6 +2085,13 @@ name_template = "wiremux-{device}-{channel_id}"
             .expect("later writable poll should drain pending output");
         assert_eq!(&*output.borrow(), b"abcdef");
         assert!(endpoint.output_pending.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_pty_client_gone_error_is_nonfatal() {
+        let err = io::Error::from_raw_os_error(nix::libc::EIO);
+        assert!(super::unix_virtual_serial::is_pty_client_gone_error(&err));
     }
 
     #[test]

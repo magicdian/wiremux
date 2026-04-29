@@ -195,6 +195,14 @@ export = "all-manifest-channels"
 name_template = "wiremux-{device}-{channel}"
 ```
 
+Unix/macOS 上真实 PTY 节点仍然由系统分配，但 wiremux 会优先创建稳定 alias：
+`/dev/tty.wiremux-<device>-<channel>`。如果 `/dev` 不可写，会 fallback 到用户可写
+目录 `/tmp/wiremux/tty`；也可以用 `WIREMUX_VIRTUAL_SERIAL_DIR` 指定 alias 目录。
+物理串口断开或 wiremux 正常退出时，alias 会被移除；设备重连并重新收到 manifest
+后，同名 alias 会重新创建并指向新的真实 PTY。`kill -9` 不保证清理，下一次启动会
+best-effort 替换已经失效的 wiremux symlink。macOS 上关闭虚拟端点时还会
+best-effort `revoke(2)` 真实 PTY，让已打开该端点的终端工具更容易感知断开。
+
 settings 面板的视觉和交互约束记录在：
 
 ```text

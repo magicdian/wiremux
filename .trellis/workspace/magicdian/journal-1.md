@@ -1380,3 +1380,60 @@ Added generic-enhanced host mode and virtual serial PTY overlay, including manif
 ### Next Steps
 
 - None - task complete
+
+
+## Session 35: Stable virtual serial aliases
+
+**Date**: 2026-04-29
+**Task**: Stable virtual serial aliases
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+Implemented stable virtual serial aliases and lifecycle cleanup for the generic-enhanced host TUI.
+
+| Area | Summary |
+|------|---------|
+| Virtual serial aliases | Added stable `tty.wiremux-*` aliases for Unix PTYs, preferring `/dev` and falling back to `/tmp/wiremux/tty` unless `WIREMUX_VIRTUAL_SERIAL_DIR` is set. |
+| Reconnect lifecycle | Drops virtual endpoints on physical serial disconnect and normal TUI/profile reconnect so aliases disappear and are recreated after the next manifest sync. |
+| macOS client behavior | Added best-effort `revoke(2)` on real PTY slaves during endpoint shutdown so clients like minicom can observe disconnect and reconnect to the stable alias. |
+| Endpoint stability | Reuses matching endpoints on duplicate unchanged manifests instead of recreating PTYs. |
+| Client close handling | Treats Unix PTY `EIO` after a terminal client exits as nonfatal endpoint disconnect/backpressure so the TUI keeps running. |
+| Version | Bumped release version to `2604.29.8` across host crates, ESP component metadata, top-level version files, and release docs. |
+
+Validation:
+- Human hardware/minicom validation passed, including wiremux restart reconnect and minicom-first-exit behavior.
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cargo check --features generic`
+- `cargo check --features generic-enhanced`
+- `cargo check --features esp32`
+- `cargo check --features all-vendors`
+- `cargo check --features all-features`
+- `cargo test --features generic`
+- `cargo test --features generic-enhanced`
+- `cargo test --features all-features`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `15ae983` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
