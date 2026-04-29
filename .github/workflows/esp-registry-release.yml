@@ -9,7 +9,7 @@ permissions:
   id-token: write
 
 jobs:
-  publish:
+  validate:
     runs-on: ubuntu-latest
     env:
       ESP_REGISTRY_NAMESPACE: magicdian
@@ -37,29 +37,56 @@ jobs:
             exit 1
           fi
 
+      - name: Validate host-side checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/wiremux-build doctor
+          tools/wiremux-build check core
+          tools/wiremux-build check host
+
       - name: Install ESP-IDF
         uses: espressif/install-esp-idf-action@v1
         with:
           version: v5.4.1
 
-      - name: Generate ESP Registry packages
+      - name: Validate ESP vendor build and generate packages
         shell: bash
         env:
           WIREMUX_ESP_REGISTRY_NAMESPACE: ${{ env.ESP_REGISTRY_NAMESPACE }}
         run: |
           set -euo pipefail
-          tools/wiremux-build doctor
-          tools/wiremux-build check all
+          tools/wiremux-build check vendor-espressif
           tools/wiremux-build package esp-registry
 
-      - name: Upload wiremux-core
-        uses: espressif/upload-components-ci-action@v2
+      - name: Upload ESP Registry package artifact
+        uses: actions/upload-artifact@v4
         with:
-          namespace: ${{ env.ESP_REGISTRY_NAMESPACE }}
-          components: wiremux-core:dist/esp-registry/wiremux-core
+          name: esp-registry-packages
+          path: dist/esp-registry
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Upload esp-wiremux
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    env:
+      ESP_REGISTRY_NAMESPACE: magicdian
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - wiremux-core
+          - esp-wiremux
+    steps:
+      - name: Download ESP Registry package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: esp-registry-packages
+          path: dist/esp-registry
+
+      - name: Upload component
         uses: espressif/upload-components-ci-action@v2
         with:
           namespace: ${{ env.ESP_REGISTRY_NAMESPACE }}
-          components: esp-wiremux:dist/esp-registry/esp-wiremux
+          components: ${{ matrix.component }}:dist/esp-registry/${{ matrix.component }}
