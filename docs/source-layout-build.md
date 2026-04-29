@@ -10,6 +10,10 @@ only and does not move runtime source files.
 sources/
 +-- api/
 |   `-- proto/
+|       `-- versions/
+|           +-- current/
+|           +-- 1/
+|           `-- 2/
 +-- core/
 |   `-- c/
 +-- profiles/
@@ -36,7 +40,9 @@ tools/
 Top-level responsibilities:
 
 - `sources/api`: stable API definitions shared across host, core, profiles, and
-  vendor integrations. Protobuf files migrate here from `sources/core/proto`.
+  vendor integrations. Protobuf files migrate here from `sources/core/proto`,
+  with `sources/api/proto/versions/current` as the latest schema and numbered
+  directories as frozen API snapshots.
 - `sources/core`: platform-neutral Wiremux protocol implementation. The C core
   remains under `sources/core/c`.
 - `sources/profiles`: profile contracts and reusable profile implementations.

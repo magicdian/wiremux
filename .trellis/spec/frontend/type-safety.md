@@ -21,7 +21,7 @@ Important existing type definitions, using current pre-migration paths:
 - `esp_wiremux_frame_header_t` and frame constants in
   `sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux_frame.h`.
 - `MuxEnvelope`, `ChannelDescriptor`, and `DeviceManifest` in
-  `sources/api/proto/wiremux.proto`.
+  `sources/api/proto/versions/current/wiremux.proto`.
 
 ## Type Organization
 

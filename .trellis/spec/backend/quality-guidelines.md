@@ -94,7 +94,7 @@ Rules:
 - Portable host session changes must test callback ordering, callback-scope
   event copying, CRC errors, manifest parsing, batch expansion, compression
   decode failures, scratch exhaustion, and API compatibility classification.
-- Protocol API changes update `sources/api/proto/api/current/`. Freeze a
+- Protocol API changes update `sources/api/proto/versions/current/`. Freeze a
   numbered API snapshot when shipped, update `wiremux_version.h` constants, and
   keep snapshot tests current.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.

@@ -63,8 +63,7 @@ sources/
 │           └── wiremux_core_test.cpp
 ├── api/
 │   └── proto/
-│       ├── wiremux.proto
-│       └── api/
+│       └── versions/
 │           ├── current/wiremux.proto
 │           ├── 1/wiremux.proto
 │           └── 2/wiremux.proto
@@ -100,7 +99,8 @@ Keep protocol parsing in the library crate and CLI behavior in `src/main.rs`.
 - `src/frame.rs`: binary frame constants, encoder helpers, mixed-stream scanner.
 - `src/crc32.rs`: CRC32 implementation used by the frame scanner.
 - `src/lib.rs`: public module exports for tests and later tools.
-- `sources/api/proto/wiremux.proto`: stable envelope and manifest schema.
+- `sources/api/proto/versions/current/wiremux.proto`: stable envelope and
+  manifest schema used by new device SDK builds.
 
 Do not put parser state machines directly in `main.rs`; they must stay
 unit-testable without a serial device.
@@ -607,9 +607,9 @@ impl HostSession {
 
 ### 3. Contracts
 
-- `sources/api/proto/api/current/wiremux.proto` is the API used by new device
+- `sources/api/proto/versions/current/wiremux.proto` is the API used by new device
   SDK builds.
-- `sources/api/proto/api/<version>/wiremux.proto` directories are frozen API
+- `sources/api/proto/versions/<version>/wiremux.proto` directories are frozen API
   snapshots compiled into host SDK builds.
 - Host-side compatibility is compile-time bounded: a host build supports its
   compiled current API and all older frozen API versions included in the source
@@ -647,7 +647,7 @@ impl HostSession {
 - Good: `wiremux_host_session_feed()` receives mixed terminal text, a manifest
   frame, and a compressed batch; Rust host receives terminal, manifest,
   compatibility, and inner record events without parsing protobuf itself.
-- Base: current API version is `2`, and `api/current/wiremux.proto` matches
+- Base: current API version is `2`, and `versions/current/wiremux.proto` matches
   the latest frozen API snapshot.
 - Bad: Rust host decodes `MuxBatch` or `DeviceManifest` directly in CLI/TUI
   paths after the core host session API exists.

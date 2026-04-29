@@ -18,7 +18,7 @@ The actual product surface is:
   `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`.
 - Current Rust host CLI/library code under `sources/host/`, migrating to
   `sources/host/wiremux/`.
-- Protocol schema under `sources/api/proto/wiremux.proto`.
+- Protocol schema under `sources/api/proto/versions/current/wiremux.proto`.
 - Chinese user documentation under `docs/zh/`.
 
 Do not introduce a database, embedded key-value store, or migration framework
@@ -101,7 +101,8 @@ in the same change. That update must document:
 - How migrations are run in development and release workflows.
 - Rollback or forward-only policy.
 - Good/base/bad test cases for schema evolution.
-- How schema changes relate to `sources/api/proto/wiremux.proto`.
+- How schema changes relate to
+  `sources/api/proto/versions/current/wiremux.proto`.
 
 ## Naming Conventions
 

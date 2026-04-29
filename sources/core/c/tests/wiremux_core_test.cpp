@@ -1086,14 +1086,14 @@ TEST(WiremuxVersionTest, ClassifiesCompileTimeSupportedApiRange)
               WIREMUX_PROTOCOL_COMPAT_UNSUPPORTED_NEW);
 }
 
-TEST(WiremuxVersionTest, CurrentAndFrozenApiSnapshotsMatchCanonicalProto)
+TEST(WiremuxVersionTest, CurrentAndFrozenApiSnapshotsMatch)
 {
     const std::string root = WIREMUX_CORE_SOURCE_DIR;
-    const std::string canonical = ReadFile((root + "/../../api/proto/wiremux.proto").c_str());
-    ASSERT_FALSE(canonical.empty());
-    EXPECT_EQ(ReadFile((root + "/../../api/proto/api/current/wiremux.proto").c_str()), canonical);
-    EXPECT_NE(ReadFile((root + "/../../api/proto/api/1/wiremux.proto").c_str()), canonical);
-    EXPECT_EQ(ReadFile((root + "/../../api/proto/api/2/wiremux.proto").c_str()), canonical);
+    const std::string current =
+        ReadFile((root + "/../../api/proto/versions/current/wiremux.proto").c_str());
+    ASSERT_FALSE(current.empty());
+    EXPECT_NE(ReadFile((root + "/../../api/proto/versions/1/wiremux.proto").c_str()), current);
+    EXPECT_EQ(ReadFile((root + "/../../api/proto/versions/2/wiremux.proto").c_str()), current);
 }
 
 TEST(WiremuxHostSessionTest, EmitsTerminalAndRecordEventsInOrder)

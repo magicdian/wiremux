@@ -1,8 +1,8 @@
 # Wiremux Protocol API Snapshots
 
-`current/` is the API surface used by new device SDK builds. Numbered
-directories are frozen API snapshots that host SDK builds must keep supporting
-at compile time.
+`current/` is the single latest protocol schema used by new device SDK builds.
+Numbered directories are frozen API snapshots that host SDK builds must keep
+supporting at compile time.
 
 Version rules:
 

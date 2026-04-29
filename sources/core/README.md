@@ -11,7 +11,8 @@ Core-owned concepts:
 - Frame layout: `WMUX` magic, version, flags, payload length, CRC32, payload.
 - Portable C frame/CRC API: `c/include/wiremux_frame.h` and
   `c/src/wiremux_frame.c`.
-- Schema: `proto/wiremux.proto`, with API snapshots under `proto/api/`.
+- Schema: `../api/proto/versions/current/wiremux.proto`, with frozen API
+  snapshots under `../api/proto/versions/`.
 - Envelope fields: channel ID, direction, sequence, timestamp, payload kind,
   payload type, payload bytes, and flags.
 - Portable C envelope API: `c/include/wiremux_envelope.h` and
