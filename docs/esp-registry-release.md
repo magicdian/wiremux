@@ -6,7 +6,7 @@ This project uses one release version for host and SDK artifacts.
 
 Version format: `YYMM.DD.BuildNumber`.
 
-Current release: `2604.29.1`.
+Current release: `2604.29.2`.
 
 When publishing another release on the same date, increment `BuildNumber`. When
 publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
@@ -18,6 +18,7 @@ Examples:
 - `2604.27.2`: second release on 2026-04-27.
 - `2604.28.1`: first release on 2026-04-28.
 - `2604.29.1`: proto API path cleanup release on 2026-04-29.
+- `2604.29.2`: release workflow split into validate/publish on 2026-04-29.
 
 Before a release, update:
 
@@ -165,16 +166,23 @@ is visible.
 
 ## GitHub Release CI
 
-The CI workflow publishes when a GitHub Release is published. The workflow checks
-that the release tag version matches `VERSION` and that the tagged commit is
-contained in `origin/main` before uploading. It runs:
+The CI workflow publishes when a GitHub Release is published. It is split into
+`validate` and `publish` jobs. The workflow checks that the release tag version
+matches `VERSION` and that the tagged commit is contained in `origin/main`
+before uploading.
+
+`validate` runs:
 
 - `tools/wiremux-build doctor`
-- `tools/wiremux-build check all`
+- `tools/wiremux-build check core`
+- `tools/wiremux-build check host`
+- install ESP-IDF `v5.4.1`
+- `tools/wiremux-build check vendor-espressif`
 - `tools/wiremux-build package esp-registry`
 
-The workflow installs ESP-IDF `v5.4.1` before checks. In CI, vendor-espressif
-validation is strict: missing or mismatched `idf.py` fails validation.
+`publish` runs only after `validate` succeeds, and uploads generated packages
+from artifact output. In CI, vendor-espressif validation is strict: missing or
+mismatched `idf.py` fails validation.
 
 Registry setup required before the first CI upload:
 
@@ -190,7 +198,7 @@ Registry setup required before the first CI upload:
 5. Ensure the workflow namespace matches the registry namespace.
 
 GitHub Release events run from tag refs, for example
-`refs/tags/v2604.29.1`. Do not set Trusted Uploader Branch to `main` for this
+`refs/tags/v2604.29.2`. Do not set Trusted Uploader Branch to `main` for this
 workflow, or the registry OIDC authorization will not match. The workflow itself
 still fetches `origin/main` and fails before upload if the tagged release commit
 is not contained in `main`.

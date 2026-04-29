@@ -6,6 +6,7 @@
 .DS_Store
 /sources/vendor/espressif/generic/examples/*/dependencies.lock
 /sources/vendor/espressif/generic/examples/*/managed_components/
+/sources/vendor/espressif/generic/examples/*/.clangd
 .vscode/
 .idea/
 *.iml
