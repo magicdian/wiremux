@@ -1,0 +1,6 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "verify virtual serial overlay behavior and tests"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "verify host crate boundaries and TUI behavior"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "verify PTY error handling and cleanup behavior"}
+{"file": "docs/zh/host-tool.md", "reason": "verify user-facing host documentation"}

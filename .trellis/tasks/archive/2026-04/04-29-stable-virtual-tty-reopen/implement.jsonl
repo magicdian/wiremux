@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "virtual serial PTY backpressure and interactive error behavior"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "host interactive/tui crate boundaries and TUI reconnect contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "generic enhanced virtual serial overlay contracts and tests"}
+{"file": "docs/product-architecture.md", "reason": "document virtual serial broker behavior"}
