@@ -1268,3 +1268,36 @@ Refined wiremux-build check/build command targets, removed bootstrap cargo trace
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: Split host Rust workspace crates
+
+**Date**: 2026-04-29
+**Task**: Split host Rust workspace crates
+**Branch**: `dev`
+
+### Summary
+
+Split the host Rust workspace into host-session, interactive, tui, and cli crates; preserved the public wiremux binary, bumped version to 2604.29.5, updated host workspace specs, and validated the host build/test matrix.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1036384` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
