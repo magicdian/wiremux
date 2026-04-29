@@ -15,6 +15,8 @@ wiremux tui --port /dev/tty.usbmodem2101 --baud 115200 --tui-fps 120
 当前能力：
 
 - 使用 `serialport` backend 打开指定设备路径，并配置波特率。
+- 支持 host 全局配置文件保存默认物理串口 profile：串口路径、波特率、数据位、
+  停止位、校验位和流控。
 - 从 mixed stream 中扫描 `WMUX` magic。
 - 校验 version、length、CRC32。
 - C core 侧也提供同等的单帧 decode/validate API，ESP 入站路径复用该公共规则。
@@ -40,6 +42,7 @@ wiremux tui --port /dev/tty.usbmodem2101 --baud 115200 --tui-fps 120
   不可用时回退到 `compat`，Windows 使用 `compat`。
 - `wiremux tui` 支持 `--tui-fps 60|120`；未指定时默认 60 fps，检测到 Ghostty 时
   自动使用 120 fps。
+- CLI 显式传入的串口参数只覆盖当前运行，不会自动写回全局配置。
 
 ## 输出格式
 
@@ -97,6 +100,8 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 
 - `Ctrl-B` 后按 `0`：无过滤模式，显示普通 terminal bytes 和所有 mux channel。
 - `Ctrl-B` 后按 `1..9`：切到对应 channel 的过滤视图。
+- `Ctrl-B` 后按 `s`：打开 settings 面板，按 menuconfig 风格编辑物理串口
+  profile，并可显式保存为默认配置。
 - 鼠标滚轮向上：查看更早的输出，并暂停自动跟随最新日志。
 - 鼠标滚轮向下到底部：恢复自动跟随最新日志。
 - 拖动输出窗口右侧滚动条：按当前位置查看历史输出或回到底部。
@@ -121,6 +126,68 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 `wiremux.v1.DeviceManifest` 后，TUI 会缓存并显示设备、channel 和 max payload 摘要。
 输入模式由 manifest 中的 channel interaction mode 决定：未声明或 `LINE` 继续使用
 line-mode，`PASSTHROUGH` 使用逐键输入。
+
+## 全局配置与串口 profile
+
+host 工具会读取全局配置文件中的默认物理串口 profile。macOS 默认路径是：
+
+```text
+~/Library/Application Support/wiremux/config.toml
+```
+
+如果设置了 `XDG_CONFIG_HOME`，则使用：
+
+```text
+$XDG_CONFIG_HOME/wiremux/config.toml
+```
+
+也可以用 `WIREMUX_CONFIG` 指向一个显式配置文件路径。
+
+配置示例：
+
+```toml
+[serial]
+port = "/dev/cu.usbserial-0001"
+baud = 115200
+data_bits = 8
+stop_bits = 1
+parity = "none"
+flow_control = "none"
+```
+
+字段含义：
+
+- `port`：真实设备串口路径。
+- `baud`：真实设备 transport 的波特率。
+- `data_bits`：数据位，支持 `5`、`6`、`7`、`8`。
+- `stop_bits`：停止位，支持 `1`、`2`。
+- `parity`：校验位，支持 `"none"`、`"odd"`、`"even"`。
+- `flow_control`：流控，支持 `"none"`、`"software"`、`"hardware"`。
+
+优先级：
+
+```text
+CLI 参数 > 全局配置 > 内置默认
+```
+
+因此可以用下面的命令临时覆盖默认配置：
+
+```bash
+wiremux tui --port /dev/cu.usbmodem2101 --baud 921600 --data-bits 8 --stop-bits 1 --parity none --flow-control none
+```
+
+如果没有传 `--port`，`wiremux tui`、`listen`、`send` 和 `passthrough` 会尝试使用
+配置文件里的 `serial.port`。如果 CLI 和配置文件都没有提供 port，命令会报错。
+
+TUI settings 面板只编辑真实物理串口 profile。虚拟通道 baud、virtual TTY、broker
+和 channel QoS 不属于本轮配置模型；未来即使虚拟 TTY 暴露 termios 兼容属性，也不应
+和真实物理串口 profile 混用。
+
+settings 面板的视觉和交互约束记录在：
+
+```text
+docs/wiremux-tui-menuconfig-style.md
+```
 
 ## 端口选择
 

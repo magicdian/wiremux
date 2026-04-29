@@ -494,14 +494,20 @@ wrapped by a general control request/response protocol.
 Current listener:
 
 ```bash
-wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]
-wiremux listen --port <path> [--channel output_id] [--send-channel input_id] [--line text]
-wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]
-wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500]
+wiremux listen [--port <path>] [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id]
+wiremux listen [--port <path>] [--channel output_id] [--send-channel input_id] [--line text]
+wiremux send [--port <path>] --channel <id> --line <text> [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--max-payload bytes]
+wiremux tui [--port <path>] [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--max-payload bytes] [--reconnect-delay-ms 500]
 ```
 
 Required behavior:
 
+- Commands that accept a physical serial target resolve a `SerialProfile` from
+  CLI overrides, global config, and built-in defaults in that priority order.
+  `port` may come from config; if neither CLI nor config provides it, the command
+  fails before opening a serial backend.
+- The shared serial profile lives in the host interactive boundary so `cli` and
+  `tui` can use it without `tui` depending on `cli`.
 - At listen startup, create a diagnostics file under
   `std::env::temp_dir()/wiremux/` and print one stdout marker:
   `wiremux> diagnostics: <path>`.

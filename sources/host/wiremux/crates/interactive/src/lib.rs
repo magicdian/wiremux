@@ -1,3 +1,5 @@
+use std::env;
+use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -7,9 +9,326 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use host_session::{PassthroughPolicy, NEWLINE_POLICY_CR, NEWLINE_POLICY_CRLF, NEWLINE_POLICY_LF};
+use serde::{Deserialize, Serialize};
+use serialport::{DataBits, FlowControl, Parity, SerialPortBuilder, StopBits};
 
 pub const PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS: u64 = 750;
 pub const INTERACTIVE_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(5);
+pub const DEFAULT_BAUD: u32 = 115_200;
+pub const DEFAULT_DATA_BITS: u8 = 8;
+pub const DEFAULT_STOP_BITS: u8 = 1;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostConfig {
+    #[serde(default)]
+    pub serial: SerialConfig,
+}
+
+impl HostConfig {
+    pub fn load_default() -> io::Result<Self> {
+        Self::load(default_config_path())
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        match fs::read_to_string(path) {
+            Ok(text) => toml::from_str(&text)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string())),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let text = toml::to_string_pretty(self)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+        fs::write(path, text)
+    }
+
+    pub fn from_serial_profile(profile: &SerialProfile) -> Self {
+        Self {
+            serial: SerialConfig::from_profile(profile),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialConfig {
+    #[serde(default)]
+    pub port: Option<PathBuf>,
+    #[serde(default = "default_baud")]
+    pub baud: u32,
+    #[serde(default = "default_data_bits")]
+    pub data_bits: u8,
+    #[serde(default = "default_stop_bits")]
+    pub stop_bits: u8,
+    #[serde(default)]
+    pub parity: SerialParity,
+    #[serde(default)]
+    pub flow_control: SerialFlowControl,
+}
+
+impl Default for SerialConfig {
+    fn default() -> Self {
+        Self {
+            port: None,
+            baud: DEFAULT_BAUD,
+            data_bits: DEFAULT_DATA_BITS,
+            stop_bits: DEFAULT_STOP_BITS,
+            parity: SerialParity::None,
+            flow_control: SerialFlowControl::None,
+        }
+    }
+}
+
+impl SerialConfig {
+    pub fn from_profile(profile: &SerialProfile) -> Self {
+        Self {
+            port: Some(profile.port.clone()),
+            baud: profile.baud,
+            data_bits: profile.data_bits,
+            stop_bits: profile.stop_bits,
+            parity: profile.parity,
+            flow_control: profile.flow_control,
+        }
+    }
+
+    pub fn resolve_profile(
+        &self,
+        overrides: SerialProfileOverrides,
+    ) -> Result<SerialProfile, String> {
+        let port = overrides
+            .port
+            .or_else(|| self.port.clone())
+            .ok_or_else(|| {
+                "serial port is required; pass --port <path> or configure [serial].port".to_string()
+            })?;
+        let profile = SerialProfile {
+            port,
+            baud: overrides.baud.unwrap_or(self.baud),
+            data_bits: overrides.data_bits.unwrap_or(self.data_bits),
+            stop_bits: overrides.stop_bits.unwrap_or(self.stop_bits),
+            parity: overrides.parity.unwrap_or(self.parity),
+            flow_control: overrides.flow_control.unwrap_or(self.flow_control),
+        };
+        profile.validate()?;
+        Ok(profile)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SerialProfileOverrides {
+    pub port: Option<PathBuf>,
+    pub baud: Option<u32>,
+    pub data_bits: Option<u8>,
+    pub stop_bits: Option<u8>,
+    pub parity: Option<SerialParity>,
+    pub flow_control: Option<SerialFlowControl>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SerialProfile {
+    pub port: PathBuf,
+    pub baud: u32,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: SerialParity,
+    pub flow_control: SerialFlowControl,
+}
+
+impl SerialProfile {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.baud == 0 {
+            return Err("baud must be greater than 0".to_string());
+        }
+        data_bits_to_serialport(self.data_bits)?;
+        stop_bits_to_serialport(self.stop_bits)?;
+        Ok(())
+    }
+
+    pub fn summary(&self) -> String {
+        format!(
+            "{} {} {}{}{} flow={}",
+            self.port.display(),
+            self.baud,
+            self.data_bits,
+            self.parity.short_label(),
+            self.stop_bits,
+            self.flow_control
+        )
+    }
+
+    pub fn apply_to_builder(&self, builder: SerialPortBuilder) -> io::Result<SerialPortBuilder> {
+        let data_bits = data_bits_to_serialport(self.data_bits)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let stop_bits = stop_bits_to_serialport(self.stop_bits)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        Ok(builder
+            .data_bits(data_bits)
+            .stop_bits(stop_bits)
+            .parity(self.parity.into())
+            .flow_control(self.flow_control.into()))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SerialParity {
+    None,
+    Odd,
+    Even,
+}
+
+impl Default for SerialParity {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl SerialParity {
+    pub const VALUES: [Self; 3] = [Self::None, Self::Odd, Self::Even];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "odd" => Some(Self::Odd),
+            "even" => Some(Self::Even),
+            _ => None,
+        }
+    }
+
+    fn short_label(self) -> &'static str {
+        match self {
+            Self::None => "N",
+            Self::Odd => "O",
+            Self::Even => "E",
+        }
+    }
+}
+
+impl fmt::Display for SerialParity {
+    fn fmt(&self, frame: &mut fmt::Formatter<'_>) -> fmt::Result {
+        frame.write_str(match self {
+            Self::None => "none",
+            Self::Odd => "odd",
+            Self::Even => "even",
+        })
+    }
+}
+
+impl From<SerialParity> for Parity {
+    fn from(value: SerialParity) -> Self {
+        match value {
+            SerialParity::None => Self::None,
+            SerialParity::Odd => Self::Odd,
+            SerialParity::Even => Self::Even,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SerialFlowControl {
+    None,
+    Software,
+    Hardware,
+}
+
+impl Default for SerialFlowControl {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl SerialFlowControl {
+    pub const VALUES: [Self; 3] = [Self::None, Self::Software, Self::Hardware];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "software" => Some(Self::Software),
+            "hardware" => Some(Self::Hardware),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for SerialFlowControl {
+    fn fmt(&self, frame: &mut fmt::Formatter<'_>) -> fmt::Result {
+        frame.write_str(match self {
+            Self::None => "none",
+            Self::Software => "software",
+            Self::Hardware => "hardware",
+        })
+    }
+}
+
+impl From<SerialFlowControl> for FlowControl {
+    fn from(value: SerialFlowControl) -> Self {
+        match value {
+            SerialFlowControl::None => Self::None,
+            SerialFlowControl::Software => Self::Software,
+            SerialFlowControl::Hardware => Self::Hardware,
+        }
+    }
+}
+
+pub fn default_config_path() -> PathBuf {
+    if let Some(path) = env::var_os("WIREMUX_CONFIG") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(path).join("wiremux/config.toml");
+    }
+    if let Some(home) = env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        #[cfg(target_os = "macos")]
+        {
+            return home.join("Library/Application Support/wiremux/config.toml");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            return home.join(".config/wiremux/config.toml");
+        }
+    }
+    PathBuf::from("wiremux-config.toml")
+}
+
+fn default_baud() -> u32 {
+    DEFAULT_BAUD
+}
+
+fn default_data_bits() -> u8 {
+    DEFAULT_DATA_BITS
+}
+
+fn default_stop_bits() -> u8 {
+    DEFAULT_STOP_BITS
+}
+
+fn data_bits_to_serialport(value: u8) -> Result<DataBits, String> {
+    match value {
+        5 => Ok(DataBits::Five),
+        6 => Ok(DataBits::Six),
+        7 => Ok(DataBits::Seven),
+        8 => Ok(DataBits::Eight),
+        _ => Err(format!(
+            "invalid data bits: {value}; expected 5, 6, 7, or 8"
+        )),
+    }
+}
+
+fn stop_bits_to_serialport(value: u8) -> Result<StopBits, String> {
+    match value {
+        1 => Ok(StopBits::One),
+        2 => Ok(StopBits::Two),
+        _ => Err(format!("invalid stop bits: {value}; expected 1 or 2")),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractiveBackendMode {
@@ -88,15 +407,14 @@ impl Write for ConnectedInteractiveBackend {
 }
 
 pub fn open_interactive_backend(
-    requested: &Path,
-    baud: u32,
+    profile: &SerialProfile,
     mode: InteractiveBackendMode,
     read_timeout: Duration,
 ) -> io::Result<(PathBuf, ConnectedInteractiveBackend)> {
     let mut last_err = None;
 
-    for candidate in port_candidates(requested) {
-        match open_candidate(&candidate, baud, mode, read_timeout) {
+    for candidate in port_candidates(&profile.port) {
+        match open_candidate(&candidate, profile, mode, read_timeout) {
             Ok(backend) => return Ok((candidate, backend)),
             Err(err) => last_err = Some(err),
         }
@@ -105,7 +423,7 @@ pub fn open_interactive_backend(
     Err(last_err.unwrap_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            format!("no candidate ports found for {}", requested.display()),
+            format!("no candidate ports found for {}", profile.port.display()),
         )
     }))
 }
@@ -251,27 +569,27 @@ fn ascii_control_byte(ch: char) -> Option<u8> {
 
 fn open_candidate(
     path: &Path,
-    baud: u32,
+    profile: &SerialProfile,
     mode: InteractiveBackendMode,
     read_timeout: Duration,
 ) -> io::Result<ConnectedInteractiveBackend> {
     match mode {
-        InteractiveBackendMode::Auto => open_auto_backend(path, baud, read_timeout),
-        InteractiveBackendMode::Compat => open_compat_backend(path, baud, read_timeout),
-        InteractiveBackendMode::Mio => open_mio_backend(path, baud, read_timeout),
+        InteractiveBackendMode::Auto => open_auto_backend(path, profile, read_timeout),
+        InteractiveBackendMode::Compat => open_compat_backend(path, profile, read_timeout),
+        InteractiveBackendMode::Mio => open_mio_backend(path, profile, read_timeout),
     }
 }
 
 fn open_auto_backend(
     path: &Path,
-    baud: u32,
+    profile: &SerialProfile,
     read_timeout: Duration,
 ) -> io::Result<ConnectedInteractiveBackend> {
     #[cfg(unix)]
     {
-        match open_mio_backend(path, baud, read_timeout) {
+        match open_mio_backend(path, profile, read_timeout) {
             Ok(backend) => return Ok(backend),
-            Err(mio_err) => match open_compat_backend(path, baud, read_timeout) {
+            Err(mio_err) => match open_compat_backend(path, profile, read_timeout) {
                 Ok(mut backend) => {
                     backend.label = format!("compat (mio fallback: {mio_err})");
                     return Ok(backend);
@@ -294,14 +612,14 @@ fn open_auto_backend(
 
 fn open_compat_backend(
     path: &Path,
-    baud: u32,
+    profile: &SerialProfile,
     read_timeout: Duration,
 ) -> io::Result<ConnectedInteractiveBackend> {
     let path_text = path
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "serial path is not UTF-8"))?;
-    let write_port = serialport::new(path_text, baud)
-        .timeout(read_timeout)
+    let write_port = profile
+        .apply_to_builder(serialport::new(path_text, profile.baud).timeout(read_timeout))?
         .open()
         .map_err(|err| io::Error::other(err.to_string()))?;
     let read_port = write_port
@@ -456,14 +774,14 @@ pub fn retry_interrupted<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result
 #[cfg(unix)]
 fn open_mio_backend(
     path: &Path,
-    baud: u32,
+    profile: &SerialProfile,
     read_timeout: Duration,
 ) -> io::Result<ConnectedInteractiveBackend> {
     Ok(ConnectedInteractiveBackend {
         label: "mio".to_string(),
         inner: ConnectedInteractiveBackendInner::Mio(UnixMioBackend::open(
             path,
-            baud,
+            profile,
             read_timeout,
         )?),
     })
@@ -472,7 +790,7 @@ fn open_mio_backend(
 #[cfg(not(unix))]
 fn open_mio_backend(
     _path: &Path,
-    _baud: u32,
+    _profile: &SerialProfile,
     _read_timeout: Duration,
 ) -> io::Result<ConnectedInteractiveBackend> {
     Err(io::Error::new(
@@ -511,12 +829,16 @@ mod unix_mio {
     }
 
     impl UnixMioBackend {
-        pub(super) fn open(path: &Path, baud: u32, read_timeout: Duration) -> io::Result<Self> {
+        pub(super) fn open(
+            path: &Path,
+            profile: &super::SerialProfile,
+            read_timeout: Duration,
+        ) -> io::Result<Self> {
             let path_text = path.to_str().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "serial path is not UTF-8")
             })?;
-            let mut port = serialport::new(path_text, baud)
-                .timeout(read_timeout)
+            let mut port = profile
+                .apply_to_builder(serialport::new(path_text, profile.baud).timeout(read_timeout))?
                 .open_native()
                 .map_err(|err| io::Error::other(err.to_string()))?;
             port.set_timeout(Duration::from_millis(1))
@@ -624,12 +946,92 @@ mod tests {
     use super::{
         is_passthrough_exit_key, is_passthrough_meta_exit_key, paired_tty_cu_path,
         passthrough_key_payload, port_candidates, requested_file_name_starts_with,
-        retry_interrupted, usbmodem_fragment,
+        retry_interrupted, usbmodem_fragment, HostConfig, SerialConfig, SerialFlowControl,
+        SerialParity, SerialProfileOverrides,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::cell::Cell;
     use std::io;
     use std::path::PathBuf;
+
+    #[test]
+    fn serial_config_resolves_profile_with_defaults_and_overrides() {
+        let config = HostConfig {
+            serial: SerialConfig {
+                port: Some(PathBuf::from("/dev/tty.usbserial-a")),
+                baud: 115_200,
+                data_bits: 8,
+                stop_bits: 1,
+                parity: SerialParity::None,
+                flow_control: SerialFlowControl::None,
+            },
+        };
+
+        let profile = config
+            .serial
+            .resolve_profile(SerialProfileOverrides {
+                baud: Some(921_600),
+                data_bits: Some(7),
+                parity: Some(SerialParity::Even),
+                ..Default::default()
+            })
+            .expect("profile resolves");
+
+        assert_eq!(profile.port, PathBuf::from("/dev/tty.usbserial-a"));
+        assert_eq!(profile.baud, 921_600);
+        assert_eq!(profile.data_bits, 7);
+        assert_eq!(profile.stop_bits, 1);
+        assert_eq!(profile.parity, SerialParity::Even);
+        assert_eq!(profile.flow_control, SerialFlowControl::None);
+    }
+
+    #[test]
+    fn serial_config_rejects_missing_port_and_invalid_options() {
+        let missing = SerialConfig::default()
+            .resolve_profile(SerialProfileOverrides::default())
+            .expect_err("missing port should fail");
+        assert!(missing.contains("serial port is required"));
+
+        let invalid = SerialConfig {
+            port: Some(PathBuf::from("/dev/tty.usbserial-a")),
+            data_bits: 9,
+            ..Default::default()
+        }
+        .resolve_profile(SerialProfileOverrides::default())
+        .expect_err("invalid data bits should fail");
+        assert!(invalid.contains("invalid data bits"));
+    }
+
+    #[test]
+    fn host_config_round_trips_toml() {
+        let input = r#"
+[serial]
+port = "/dev/tty.usbserial-a"
+baud = 921600
+data_bits = 7
+stop_bits = 2
+parity = "even"
+flow_control = "hardware"
+"#;
+        let config: HostConfig = toml::from_str(input).expect("toml parses");
+        let profile = config
+            .serial
+            .resolve_profile(SerialProfileOverrides::default())
+            .expect("profile resolves");
+
+        assert_eq!(profile.port, PathBuf::from("/dev/tty.usbserial-a"));
+        assert_eq!(profile.baud, 921_600);
+        assert_eq!(profile.data_bits, 7);
+        assert_eq!(profile.stop_bits, 2);
+        assert_eq!(profile.parity, SerialParity::Even);
+        assert_eq!(profile.flow_control, SerialFlowControl::Hardware);
+
+        let serialized =
+            toml::to_string(&HostConfig::from_serial_profile(&profile)).expect("toml serializes");
+        assert!(serialized.contains("baud = 921600"));
+        assert!(serialized.contains("data_bits = 7"));
+        assert!(serialized.contains("parity = \"even\""));
+    }
 
     #[test]
     fn retry_interrupted_retries_until_success() {

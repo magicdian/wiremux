@@ -1,13 +1,15 @@
 [package]
 name = "interactive"
-version = "2604.29.5"
+version = "2604.29.6"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
 crossterm = "0.29"
 host-session = { path = "../host-session" }
+serde = { version = "1", features = ["derive"] }
 serialport = "4"
+toml = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 mio = { version = "1", features = ["os-ext", "os-poll"] }

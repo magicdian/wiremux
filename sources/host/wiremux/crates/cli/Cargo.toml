@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-version = "2604.29.5"
+version = "2604.29.6"
 edition = "2021"
 license = "Apache-2.0"
 

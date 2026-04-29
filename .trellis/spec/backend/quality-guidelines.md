@@ -142,11 +142,11 @@ full-duplex mux behavior.
 Host:
 
 ```bash
-wiremux listen --port <path> [--channel id]
-wiremux listen --port <path> [--channel output_id] [--send-channel input_id] --line <text>
-wiremux send --port <path> --channel <id> [--line text]
-wiremux passthrough --port <path> --channel <id> [--interactive-backend auto|compat|mio]
-wiremux tui --port <path> [--interactive-backend auto|compat|mio] [--tui-fps 60|120]
+wiremux listen [--port <path>] [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--channel id]
+wiremux listen [--port <path>] [--channel output_id] [--send-channel input_id] --line <text>
+wiremux send [--port <path>] --channel <id> [--line text]
+wiremux passthrough [--port <path>] --channel <id> [--interactive-backend auto|compat|mio]
+wiremux tui [--port <path>] [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--interactive-backend auto|compat|mio] [--tui-fps 60|120]
 ```
 
 Rust host interactive backend:
@@ -167,8 +167,7 @@ pub enum InteractiveEvent {
 }
 
 pub fn open_interactive_backend(
-    requested: &Path,
-    baud: u32,
+    profile: &SerialProfile,
     mode: InteractiveBackendMode,
     read_timeout: Duration,
 ) -> io::Result<(PathBuf, ConnectedInteractiveBackend)>;
@@ -203,6 +202,15 @@ the demo, and host verification commands in the same task.
 - Host input frames use the same magic/version/length/CRC wrapper as device output frames.
 - Host input envelopes set `direction = input`.
 - Console line-mode sends complete command lines to the console channel.
+- Host physical serial configuration is modeled as a `SerialProfile` with
+  `port`, `baud`, `data_bits`, `stop_bits`, `parity`, and `flow_control`.
+  CLI overrides have priority over global config, and global config has
+  priority over built-in defaults. If neither CLI nor config supplies `port`,
+  commands requiring a device must fail clearly before opening a backend.
+- TUI settings edit only the physical serial profile. Applying a changed profile
+  must drop the current backend, reset the host session, reconnect with the new
+  profile, and request the manifest again. Saving defaults must be an explicit
+  action and must not happen simply because CLI flags were used.
 - TUI input mode is manifest-driven. Unfiltered TUI input is read-only and must
   not fall back to channel 1. Filtered TUI input targets the active channel only
   when the manifest descriptor includes `DIRECTION_INPUT`; `LINE` channels send
@@ -263,6 +271,11 @@ the demo, and host verification commands in the same task.
 - TUI status must continue to show device manifest metadata including
   `DeviceManifest.protocol_version` as the device proto API version. Backend and
   FPS status belong in the existing status area, not a separate debug panel.
+  TUI status must also distinguish the requested physical target from the
+  resolved connected path.
+- TUI settings panels must follow `docs/wiremux-tui-menuconfig-style.md` for
+  row grammar, popup behavior, dirty tracking, `Esc` behavior, and the `80x24`
+  minimum viewport overlay.
 - TUI passthrough display is channel-local stream editing. In
   `sources/host/wiremux/crates/tui/src/lib.rs`, `complete_stream_line()`,
   `backspace_stream_line()`, and `append_stream_segment()` must operate on the
@@ -312,6 +325,11 @@ the demo, and host verification commands in the same task.
 | console command fails | host can observe command error text or return status |
 | default USB Serial/JTAG driver missing | mux init installs driver before RX task starts |
 | serial disconnects during send/listen | host reconnect behavior remains deterministic |
+| config supplies `serial.port` and CLI omits `--port` | host resolves the physical serial profile from config |
+| CLI supplies serial profile flags | CLI values override config values for this run only |
+| invalid `--data-bits`, `--stop-bits`, `--parity`, or `--flow-control` | CLI parse fails before opening a serial backend |
+| TUI applies a changed serial profile | current backend is closed, host session is reset, and reconnect uses the new profile |
+| TUI saves defaults | `[serial]` config is written explicitly and not as a side effect of temporary CLI overrides |
 | host requests manifest on channel 0 | ESP emits a DeviceManifest response |
 | TUI submits input in unfiltered mode | host treats the view as read-only and sends no mux input frame |
 | TUI submits input in channel filter mode for an output-only channel | host treats the channel as read-only and sends no mux input frame |
@@ -351,6 +369,12 @@ the demo, and host verification commands in the same task.
   compat`.
 - Good: TUI status shows `api=<version>` from the received device manifest so
   users can see which proto API the device is using.
+- Good: `wiremux tui` can start without `--port` when the global config contains
+  `[serial].port`; passing `--port` or `--baud` overrides the config only for
+  the current run.
+- Good: `Ctrl-B s` opens a menuconfig-style settings panel. Editing data bits
+  from `8` to `7` and applying reconnects the current TUI session with the new
+  physical serial profile.
 - Good: after a long scrollback session, a burst of wheel-down events that
   reaches live tail can be followed immediately by wheel-up or `Ctrl-C`; the TUI
   coalesces stale scroll events and preserves quit-key responsiveness.
@@ -374,6 +398,11 @@ the demo, and host verification commands in the same task.
   boundary.
 - Bad: placing backend/FPS information in a separate TUI panel that hides or
   displaces the existing device manifest/version status.
+- Bad: storing virtual channel baud in the physical serial profile. Virtual TTY
+  termios compatibility metadata, broker behavior, and channel QoS are separate
+  future concerns.
+- Bad: saving CLI override values into global config implicitly; save defaults
+  must remain an explicit TUI/settings action.
 - Bad: processing every queued mouse-wheel event with a fresh full scroll-range
   recomputation while keyboard quit events wait behind the mouse backlog.
 - Bad: treating the scrollbar down button as an animated target from a stale
@@ -397,6 +426,12 @@ the demo, and host verification commands in the same task.
   construction, manifest decode with channel interaction modes,
   `--interactive-backend` parsing, invalid backend values, `--tui-fps 60|120`,
   and invalid FPS values.
+- Host unit tests cover serial profile config resolution, config-vs-CLI
+  precedence, TOML round-trip, valid and invalid serial option values, and
+  mapping the resolved profile into serial backend builders.
+- Host TUI tests cover opening the settings panel, applying a changed serial
+  profile and requesting reconnect, rendering the small-viewport settings
+  overlay, and status display for requested target vs connected path.
 - Host TUI render tests must assert that the status area includes backend, FPS,
   and device proto API version from `DeviceManifest.protocol_version`.
 - Host interactive event-loop tests must cover retry behavior for

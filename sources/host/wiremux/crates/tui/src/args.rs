@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use interactive::InteractiveBackendMode;
+use interactive::{InteractiveBackendMode, SerialProfile};
 
 #[derive(Debug, Clone)]
 pub struct TuiArgs {
-    pub port: PathBuf,
-    pub baud: u32,
+    pub serial: SerialProfile,
+    pub config_path: PathBuf,
     pub max_payload_len: usize,
     pub reconnect_delay_ms: u64,
     pub interactive_backend: InteractiveBackendMode,

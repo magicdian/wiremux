@@ -1301,3 +1301,44 @@ Split the host Rust workspace into host-session, interactive, tui, and cli crate
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: Host serial config and TUI settings
+
+**Date**: 2026-04-29
+**Task**: Host serial config and TUI settings
+**Branch**: `dev`
+
+### Summary
+
+Implemented host global physical serial profile config, menuconfig-style TUI settings with runtime reconnect, version bump to 2604.29.6, docs/spec updates, and validation via cargo fmt, cargo test, and tools/wiremux-build check host.
+
+### Main Changes
+
+- Added global host physical serial profile config with CLI override precedence.
+- Added TUI settings panel for port, baud, data bits, stop bits, parity, and flow control.
+- Added runtime apply/reconnect and explicit save-defaults behavior.
+- Adapted the menuconfig-style settings guide into `docs/wiremux-tui-menuconfig-style.md`.
+- Updated host docs, Trellis specs, release docs, and version metadata to `2604.29.6`.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `32f3435` | feat(host): add serial profile config and TUI settings |
+
+### Testing
+
+- [OK] User manually verified TUI settings persist to `~/Library/Application Support/wiremux/config.toml`.
+- [OK] `cargo fmt --check`
+- [OK] `cargo test`
+- [OK] `tools/wiremux-build check host`
+- [OK] `git diff --check`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
