@@ -1,194 +1,24 @@
+use cli::args::{parse_args, usage, CliCommand, ListenArgs, PassthroughArgs, SendArgs};
+use cli::diagnostics::create_diagnostics_file;
+use cli::display::DisplayOutput;
+use cli::serial::open_available_port;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use std::collections::HashMap;
-use std::env;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use wiremux::host_session::{
-    self, display_channel_name, BuildFrameError, DeviceManifest, HostDecodeStage, HostEvent,
-    HostSession, MuxEnvelope, PassthroughPolicy, ProtocolCompatibilityKind,
-    CHANNEL_INTERACTION_PASSTHROUGH, DEFAULT_MAX_PAYLOAD_LEN, NEWLINE_POLICY_CR,
-    NEWLINE_POLICY_CRLF, NEWLINE_POLICY_LF,
+use host_session::{
+    build_frame_error_to_io, build_input_frame, build_manifest_request_frame,
+    channel_supports_passthrough, decode_error_marker, passthrough_policy_for_channel,
+    printable_payload, write_envelope_diagnostics, DeviceManifest, HostCrcError, HostEvent,
+    HostSession, ProtocolCompatibility, ProtocolCompatibilityKind,
 };
-
-mod interactive;
-mod tui;
-
-const PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS: u64 = 750;
-const DEFAULT_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(100);
-const INTERACTIVE_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(5);
-
-#[derive(Debug)]
-enum CliCommand {
-    Listen(ListenArgs),
-    Send(SendArgs),
-    Passthrough(PassthroughArgs),
-    Tui(TuiArgs),
-}
-
-#[derive(Debug)]
-struct ListenArgs {
-    port: PathBuf,
-    baud: u32,
-    max_payload_len: usize,
-    reconnect_delay_ms: u64,
-    channel: Option<u32>,
-    send_channel: Option<u8>,
-    line: Option<String>,
-}
-
-#[derive(Debug)]
-struct SendArgs {
-    port: PathBuf,
-    baud: u32,
-    max_payload_len: usize,
-    channel: u8,
-    line: String,
-}
-
-#[derive(Debug)]
-struct PassthroughArgs {
-    port: PathBuf,
-    baud: u32,
-    max_payload_len: usize,
-    channel: u8,
-    interactive_backend: interactive::InteractiveBackendMode,
-}
-
-#[derive(Debug, Clone)]
-struct TuiArgs {
-    port: PathBuf,
-    baud: u32,
-    max_payload_len: usize,
-    reconnect_delay_ms: u64,
-    interactive_backend: interactive::InteractiveBackendMode,
-    tui_fps: Option<u16>,
-}
-
-struct DisplayOutput<W: Write> {
-    out: W,
-    channel_filter: Option<u32>,
-    line_open: bool,
-    line_channel: Option<u32>,
-    channel_names: HashMap<u32, String>,
-}
-
-impl<W: Write> DisplayOutput<W> {
-    fn new(out: W, channel_filter: Option<u32>) -> Self {
-        Self {
-            out,
-            channel_filter,
-            line_open: false,
-            line_channel: None,
-            channel_names: HashMap::new(),
-        }
-    }
-
-    fn write_terminal(&mut self, bytes: &[u8]) -> io::Result<()> {
-        if self.channel_filter.is_some() {
-            return Ok(());
-        }
-
-        self.out.write_all(bytes)?;
-        self.update_line_state(bytes, None);
-        Ok(())
-    }
-
-    fn write_record(&mut self, envelope: &MuxEnvelope) -> io::Result<()> {
-        if self
-            .channel_filter
-            .is_some_and(|channel| channel != envelope.channel_id)
-        {
-            return Ok(());
-        }
-
-        if self.channel_filter.is_some() {
-            self.out.write_all(&envelope.payload)?;
-            return Ok(());
-        }
-
-        self.prepare_unfiltered_record(envelope.channel_id)?;
-        write!(self.out, "{}> ", self.channel_prefix(envelope.channel_id))?;
-        self.line_open = true;
-        self.line_channel = Some(envelope.channel_id);
-        self.out.write_all(&envelope.payload)?;
-        self.update_line_state(&envelope.payload, Some(envelope.channel_id));
-        Ok(())
-    }
-
-    fn update_manifest(&mut self, manifest: &DeviceManifest) {
-        self.channel_names.clear();
-        for channel in &manifest.channels {
-            if let Some(name) = display_channel_name(&channel.name) {
-                self.channel_names.insert(channel.channel_id, name);
-            }
-        }
-    }
-
-    fn channel_prefix(&self, channel_id: u32) -> String {
-        match self.channel_names.get(&channel_id) {
-            Some(name) => format!("ch{channel_id}({name})"),
-            None => format!("ch{channel_id}"),
-        }
-    }
-
-    fn write_marker_line(&mut self, message: &str) -> io::Result<()> {
-        if self.line_open {
-            self.out.write_all(b"\n")?;
-        }
-        writeln!(self.out, "wiremux> {message}")?;
-        self.line_open = false;
-        self.line_channel = None;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.out.flush()
-    }
-
-    fn prepare_unfiltered_record(&mut self, channel_id: u32) -> io::Result<()> {
-        if !self.line_open || self.line_channel == Some(channel_id) {
-            return Ok(());
-        }
-
-        match self.line_channel {
-            Some(previous_channel) => {
-                self.out.write_all(b"\n")?;
-                writeln!(
-                    self.out,
-                    "wiremux> continued after partial ch{} line",
-                    previous_channel
-                )?;
-            }
-            None => {
-                self.out.write_all(b"\n")?;
-            }
-        }
-        self.line_open = false;
-        self.line_channel = None;
-        Ok(())
-    }
-
-    fn update_line_state(&mut self, bytes: &[u8], channel: Option<u32>) {
-        if bytes.is_empty() {
-            return;
-        }
-
-        if bytes
-            .last()
-            .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-        {
-            self.line_open = false;
-            self.line_channel = None;
-        } else {
-            self.line_open = true;
-            self.line_channel = channel;
-        }
-    }
-}
+use interactive::{
+    is_passthrough_escape_exit_suffix, is_passthrough_exit_key, is_passthrough_meta_exit_key,
+    passthrough_key_payload, INTERACTIVE_SERIAL_READ_TIMEOUT, PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
+};
+use std::env;
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn main() {
     if let Err(err) = run() {
@@ -206,8 +36,13 @@ fn run() -> Result<(), String> {
         CliCommand::Listen(args) => listen(args).map_err(|err| err.to_string()),
         CliCommand::Send(args) => send(args).map_err(|err| err.to_string()),
         CliCommand::Passthrough(args) => passthrough(args).map_err(|err| err.to_string()),
-        CliCommand::Tui(args) => tui::run(args).map_err(|err| err.to_string()),
+        CliCommand::Tui(args) => run_tui(args).map_err(|err| err.to_string()),
     }
+}
+
+fn run_tui(args: tui::TuiArgs) -> io::Result<()> {
+    let (diagnostics_path, diagnostics) = create_diagnostics_file(&args.port)?;
+    tui::run(args, diagnostics_path.display().to_string(), diagnostics)
 }
 
 fn listen(args: ListenArgs) -> io::Result<()> {
@@ -549,7 +384,7 @@ fn handle_passthrough_event<W: Write, D: Write>(
             err.detail,
             printable_payload(&err.payload)
         ),
-        HostEvent::CrcError(wiremux::host_session::HostCrcError {
+        HostEvent::CrcError(HostCrcError {
             version,
             flags,
             payload_len,
@@ -559,175 +394,6 @@ fn handle_passthrough_event<W: Write, D: Write>(
             diagnostics,
             "[wiremux] crc_error version={version} flags={flags} payload_len={payload_len} expected=0x{expected_crc:08x} actual=0x{actual_crc:08x}"
         ),
-    }
-}
-
-fn open_available_port(
-    requested: &Path,
-    baud: u32,
-) -> io::Result<(PathBuf, Box<dyn serialport::SerialPort>)> {
-    open_available_port_with_timeout(requested, baud, DEFAULT_SERIAL_READ_TIMEOUT)
-}
-
-fn open_available_port_with_timeout(
-    requested: &Path,
-    baud: u32,
-    read_timeout: Duration,
-) -> io::Result<(PathBuf, Box<dyn serialport::SerialPort>)> {
-    let mut last_err = None;
-
-    for candidate in port_candidates(requested) {
-        match open_serial_port(&candidate, baud, read_timeout) {
-            Ok(port) => return Ok((candidate, port)),
-            Err(err) => last_err = Some(err),
-        }
-    }
-
-    Err(last_err.unwrap_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("no candidate ports found for {}", requested.display()),
-        )
-    }))
-}
-
-fn open_serial_port(
-    path: &Path,
-    baud: u32,
-    read_timeout: Duration,
-) -> io::Result<Box<dyn serialport::SerialPort>> {
-    let path = path
-        .to_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "serial path is not UTF-8"))?;
-    serialport::new(path, baud)
-        .timeout(read_timeout)
-        .open()
-        .map_err(|err| io::Error::other(err.to_string()))
-}
-
-fn port_candidates(requested: &Path) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if requested_file_name_starts_with(requested, "tty.") {
-        if let Some(pair) = paired_tty_cu_path(requested) {
-            push_unique(&mut candidates, pair);
-        }
-        push_unique(&mut candidates, requested.to_path_buf());
-    } else {
-        push_unique(&mut candidates, requested.to_path_buf());
-        if let Some(pair) = paired_tty_cu_path(requested) {
-            push_unique(&mut candidates, pair);
-        }
-    }
-
-    if let Some(parent) = requested.parent() {
-        if let Some(fragment) = usbmodem_fragment(requested) {
-            for prefer_cu in [true, false] {
-                if let Ok(entries) = fs::read_dir(parent) {
-                    let mut matches = entries
-                        .flatten()
-                        .map(|entry| entry.path())
-                        .filter(|path| {
-                            path.file_name().is_some_and(|name| {
-                                let name = name.to_string_lossy();
-                                name.contains(fragment)
-                                    && if prefer_cu {
-                                        name.starts_with("cu.")
-                                    } else {
-                                        name.starts_with("tty.")
-                                    }
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    matches.sort();
-                    for path in matches {
-                        push_unique(&mut candidates, path);
-                    }
-                }
-            }
-        }
-    }
-
-    candidates
-}
-
-fn paired_tty_cu_path(path: &Path) -> Option<PathBuf> {
-    let file_name = path.file_name()?.to_string_lossy();
-    let paired_name = if let Some(rest) = file_name.strip_prefix("tty.") {
-        format!("cu.{rest}")
-    } else if let Some(rest) = file_name.strip_prefix("cu.") {
-        format!("tty.{rest}")
-    } else {
-        return None;
-    };
-
-    Some(path.with_file_name(paired_name))
-}
-
-fn usbmodem_fragment(path: &Path) -> Option<&'static str> {
-    let file_name = path.file_name()?.to_string_lossy();
-    if file_name.contains("usbmodem") {
-        Some("usbmodem")
-    } else if file_name.contains("usbserial") {
-        Some("usbserial")
-    } else {
-        None
-    }
-}
-
-fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
-    }
-}
-
-fn requested_file_name_starts_with(path: &Path, prefix: &str) -> bool {
-    path.file_name()
-        .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
-}
-
-fn create_diagnostics_file(requested_port: &Path) -> io::Result<(PathBuf, File)> {
-    let dir = env::temp_dir().join("wiremux");
-    fs::create_dir_all(&dir)?;
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let filename = format!(
-        "wiremux-{}-{:06}-{}.log",
-        now.as_secs(),
-        now.subsec_micros(),
-        sanitize_port_for_filename(requested_port)
-    );
-    let path = dir.join(filename);
-    let file = File::create(&path)?;
-    Ok((path, file))
-}
-
-fn sanitize_port_for_filename(port: &Path) -> String {
-    let value = port.to_string_lossy();
-    let mut sanitized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
-    while sanitized.starts_with('_') {
-        sanitized.remove(0);
-    }
-    while sanitized.ends_with('_') {
-        sanitized.pop();
-    }
-
-    if sanitized.is_empty() {
-        "port".to_string()
-    } else {
-        sanitized
     }
 }
 
@@ -776,7 +442,7 @@ fn write_event<W: Write, D: Write>(
             }
             Ok(())
         }
-        HostEvent::CrcError(wiremux::host_session::HostCrcError {
+        HostEvent::CrcError(HostCrcError {
             version,
             flags,
             payload_len,
@@ -798,7 +464,7 @@ fn write_event<W: Write, D: Write>(
 fn write_protocol_compatibility<W: Write, D: Write>(
     display: &mut DisplayOutput<W>,
     diagnostics: &mut D,
-    compatibility: wiremux::host_session::ProtocolCompatibility,
+    compatibility: ProtocolCompatibility,
 ) -> io::Result<()> {
     match compatibility.compatibility {
         ProtocolCompatibilityKind::Supported => {
@@ -840,369 +506,25 @@ fn write_protocol_compatibility<W: Write, D: Write>(
     Ok(())
 }
 
-fn decode_error_marker(stage: HostDecodeStage) -> &'static str {
-    match stage {
-        HostDecodeStage::Envelope => "envelope decode error; details in diagnostics",
-        HostDecodeStage::Manifest => "manifest decode error; details in diagnostics",
-        HostDecodeStage::Batch => "batch decode error; details in diagnostics",
-        HostDecodeStage::BatchRecords => "batch records decode error; details in diagnostics",
-        HostDecodeStage::Compression => "batch payload decode error; details in diagnostics",
-        HostDecodeStage::Unknown(_) => "protocol decode error; details in diagnostics",
-    }
-}
-
-fn write_envelope_diagnostics<W: Write>(out: &mut W, envelope: &MuxEnvelope) -> io::Result<()> {
-    writeln!(
-        out,
-        "[wiremux] ch={} dir={} seq={} ts={} kind={} type={} flags={} payload={}",
-        envelope.channel_id,
-        envelope.direction,
-        envelope.sequence,
-        envelope.timestamp_us,
-        envelope.kind,
-        printable_payload_type(&envelope.payload_type),
-        envelope.flags,
-        printable_payload(&envelope.payload)
-    )
-}
-
-fn build_input_frame(
-    channel: u8,
-    payload: &[u8],
-    max_payload_len: usize,
-) -> Result<Vec<u8>, BuildFrameError> {
-    host_session::build_input_frame(channel, payload, max_payload_len)
-}
-
-fn build_manifest_request_frame(max_payload_len: usize) -> Result<Vec<u8>, BuildFrameError> {
-    host_session::build_manifest_request_frame(max_payload_len)
-}
-
-fn build_frame_error_to_io(err: BuildFrameError) -> io::Error {
-    match err {
-        BuildFrameError::PayloadTooLarge { len, max } => io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("input frame payload is too large: {len} bytes > {max} bytes"),
-        ),
-    }
-}
-
-fn printable_payload(payload: &[u8]) -> String {
-    match std::str::from_utf8(payload) {
-        Ok(text) => text.escape_default().to_string(),
-        Err(_) => payload
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<Vec<_>>()
-            .join(" "),
-    }
-}
-
-fn printable_payload_type(payload_type: &str) -> &str {
-    if payload_type.is_empty() {
-        "-"
-    } else {
-        payload_type
-    }
-}
-
-fn channel_supports_passthrough(manifest: &DeviceManifest, channel_id: u32) -> bool {
-    manifest
-        .channels
-        .iter()
-        .find(|channel| channel.channel_id == channel_id)
-        .is_some_and(|channel| {
-            channel.default_interaction_mode == CHANNEL_INTERACTION_PASSTHROUGH
-                || channel
-                    .interaction_modes
-                    .contains(&CHANNEL_INTERACTION_PASSTHROUGH)
-        })
-}
-
-fn passthrough_policy_for_channel(
-    manifest: &DeviceManifest,
-    channel_id: u32,
-) -> Option<PassthroughPolicy> {
-    manifest
-        .channels
-        .iter()
-        .find(|channel| channel.channel_id == channel_id)
-        .map(|channel| channel.passthrough_policy)
-}
-
-fn passthrough_key_payload(key: KeyEvent, policy: PassthroughPolicy) -> Option<Vec<u8>> {
-    match key.code {
-        KeyCode::Char(ch) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            ascii_control_byte(ch).map(|byte| vec![byte])
-        }
-        KeyCode::Char(ch) => {
-            let mut out = [0; 4];
-            Some(ch.encode_utf8(&mut out).as_bytes().to_vec())
-        }
-        KeyCode::Enter => Some(newline_bytes(policy.input_newline_policy).to_vec()),
-        KeyCode::Backspace => Some(vec![0x7f]),
-        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
-        KeyCode::Tab => Some(vec![b'\t']),
-        KeyCode::Esc => Some(vec![0x1b]),
-        KeyCode::Left => Some(b"\x1b[D".to_vec()),
-        KeyCode::Right => Some(b"\x1b[C".to_vec()),
-        KeyCode::Up => Some(b"\x1b[A".to_vec()),
-        KeyCode::Down => Some(b"\x1b[B".to_vec()),
-        KeyCode::Home => Some(b"\x1b[H".to_vec()),
-        KeyCode::End => Some(b"\x1b[F".to_vec()),
-        _ => None,
-    }
-}
-
-fn is_passthrough_exit_key(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('\u{1d}'))
-        || (key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('}')))
-}
-
-fn is_passthrough_meta_exit_key(key: KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::ALT) && is_passthrough_escape_exit_suffix(key)
-}
-
-fn is_passthrough_escape_exit_suffix(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
-}
-
-fn newline_bytes(policy: u32) -> &'static [u8] {
-    match policy {
-        NEWLINE_POLICY_LF => b"\n",
-        NEWLINE_POLICY_CR => b"\r",
-        NEWLINE_POLICY_CRLF => b"\r\n",
-        _ => b"\r",
-    }
-}
-
-fn ascii_control_byte(ch: char) -> Option<u8> {
-    let lower = ch.to_ascii_lowercase();
-    if lower.is_ascii_lowercase() {
-        Some((lower as u8) & 0x1f)
-    } else if matches!(ch, '[' | '\\' | ']' | '^' | '_') {
-        Some((ch as u8) & 0x1f)
-    } else {
-        None
-    }
-}
-
-fn parse_args<I>(args: I) -> Result<Option<CliCommand>, String>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut args = args.into_iter().peekable();
-    let command = match args.peek().map(String::as_str) {
-        Some("listen") => {
-            args.next();
-            "listen"
-        }
-        Some("send") => {
-            args.next();
-            "send"
-        }
-        Some("passthrough" | "attach") => {
-            args.next();
-            "passthrough"
-        }
-        Some("tui") => {
-            args.next();
-            "tui"
-        }
-        Some("-h" | "--help") => return Ok(None),
-        _ => "listen",
-    };
-
-    let mut port = None;
-    let mut baud = 115_200;
-    let mut max_payload_len = DEFAULT_MAX_PAYLOAD_LEN;
-    let mut reconnect_delay_ms = 500;
-    let mut channel = None;
-    let mut send_channel = None;
-    let mut line = None;
-    let mut interactive_backend = interactive::InteractiveBackendMode::Auto;
-    let mut tui_fps = None;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--port" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--port requires a value".to_string())?;
-                port = Some(PathBuf::from(value));
-            }
-            "--baud" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--baud requires a value".to_string())?;
-                baud = value
-                    .parse()
-                    .map_err(|_| format!("invalid --baud value: {value}"))?;
-            }
-            "--max-payload" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--max-payload requires a value".to_string())?;
-                max_payload_len = value
-                    .parse()
-                    .map_err(|_| format!("invalid --max-payload value: {value}"))?;
-            }
-            "--reconnect-delay-ms" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--reconnect-delay-ms requires a value".to_string())?;
-                reconnect_delay_ms = value
-                    .parse()
-                    .map_err(|_| format!("invalid --reconnect-delay-ms value: {value}"))?;
-            }
-            "--interactive-backend" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--interactive-backend requires a value".to_string())?;
-                interactive_backend = interactive::InteractiveBackendMode::parse(&value)
-                    .ok_or_else(|| {
-                        format!("invalid --interactive-backend value: {value}; expected auto, compat, or mio")
-                    })?;
-            }
-            "--tui-fps" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--tui-fps requires a value".to_string())?;
-                let fps = value
-                    .parse()
-                    .map_err(|_| format!("invalid --tui-fps value: {value}"))?;
-                if !matches!(fps, 60 | 120) {
-                    return Err(format!(
-                        "invalid --tui-fps value: {value}; expected 60 or 120"
-                    ));
-                }
-                tui_fps = Some(fps);
-            }
-            "--channel" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--channel requires a value".to_string())?;
-                channel = Some(parse_channel(&value)?);
-            }
-            "--send-channel" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| "--send-channel requires a value".to_string())?;
-                send_channel = Some(parse_channel(&value)?);
-            }
-            "--line" => {
-                line = Some(
-                    args.next()
-                        .ok_or_else(|| "--line requires a value".to_string())?,
-                );
-            }
-            "-h" | "--help" => return Ok(None),
-            unknown => return Err(format!("unknown argument: {unknown}\n{}", usage())),
-        }
-    }
-
-    let port = port.ok_or_else(usage)?;
-    match command {
-        "listen" => {
-            if tui_fps.is_some() || interactive_backend != interactive::InteractiveBackendMode::Auto
-            {
-                return Err(format!(
-                    "listen does not accept --tui-fps or --interactive-backend\n{}",
-                    usage()
-                ));
-            }
-            Ok(Some(CliCommand::Listen(ListenArgs {
-                port,
-                baud,
-                max_payload_len,
-                reconnect_delay_ms,
-                channel: channel.map(u32::from),
-                send_channel: line.as_ref().map(|_| send_channel.or(channel).unwrap_or(1)),
-                line,
-            })))
-        }
-        "send" => {
-            if tui_fps.is_some()
-                || interactive_backend != interactive::InteractiveBackendMode::Auto
-                || reconnect_delay_ms != 500
-            {
-                return Err(format!(
-                    "send does not accept --tui-fps, --interactive-backend, or --reconnect-delay-ms\n{}",
-                    usage()
-                ));
-            }
-            Ok(Some(CliCommand::Send(SendArgs {
-                port,
-                baud,
-                max_payload_len,
-                channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
-                line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
-            })))
-        }
-        "passthrough" => {
-            if send_channel.is_some() || line.is_some() || tui_fps.is_some() {
-                return Err(format!(
-                    "passthrough does not accept --send-channel, --line, or --tui-fps\n{}",
-                    usage()
-                ));
-            }
-            Ok(Some(CliCommand::Passthrough(PassthroughArgs {
-                port,
-                baud,
-                max_payload_len,
-                channel: channel
-                    .ok_or_else(|| "passthrough requires --channel <id>".to_string())?,
-                interactive_backend,
-            })))
-        }
-        "tui" => {
-            if channel.is_some() || send_channel.is_some() || line.is_some() {
-                return Err(format!(
-                    "tui does not accept --channel, --send-channel, or --line\n{}",
-                    usage()
-                ));
-            }
-            Ok(Some(CliCommand::Tui(TuiArgs {
-                port,
-                baud,
-                max_payload_len,
-                reconnect_delay_ms,
-                interactive_backend,
-                tui_fps,
-            })))
-        }
-        _ => unreachable!("command is normalized before parsing"),
-    }
-}
-
-fn parse_channel(value: &str) -> Result<u8, String> {
-    let channel: u16 = value
-        .parse()
-        .map_err(|_| format!("invalid --channel value: {value}"))?;
-    u8::try_from(channel).map_err(|_| format!("invalid --channel value: {value}; must be 0..255"))
-}
-
-fn usage() -> String {
-    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux passthrough --port <path> --channel <id> [--baud 115200] [--max-payload bytes] [--interactive-backend auto|compat|mio]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--interactive-backend auto|compat|mio] [--tui-fps 60|120]".to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         build_input_frame, build_manifest_request_frame, is_passthrough_exit_key,
-        is_passthrough_meta_exit_key, paired_tty_cu_path, parse_args, passthrough_key_payload,
-        printable_payload, sanitize_port_for_filename, usbmodem_fragment, write_event, CliCommand,
-        DisplayOutput,
+        is_passthrough_meta_exit_key, parse_args, passthrough_key_payload, printable_payload,
+        write_event, CliCommand, DisplayOutput,
     };
-    use super::{port_candidates, requested_file_name_starts_with};
+    use cli::diagnostics::sanitize_port_for_filename;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use std::path::PathBuf;
-    use wiremux::host_session::{
+    use host_session::{
         BatchSummary, ChannelDescriptor, DeviceManifest, HostEvent, HostSession, MuxEnvelope,
         DEFAULT_MAX_PAYLOAD_LEN, DIRECTION_INPUT, DIRECTION_OUTPUT, MANIFEST_REQUEST_PAYLOAD_TYPE,
         PAYLOAD_KIND_CONTROL, PAYLOAD_KIND_TEXT,
     };
+    use interactive::{
+        paired_tty_cu_path, port_candidates, requested_file_name_starts_with, usbmodem_fragment,
+        InteractiveBackendMode,
+    };
+    use std::path::PathBuf;
 
     fn output_envelope(channel_id: u32, payload: &[u8]) -> MuxEnvelope {
         MuxEnvelope {
@@ -1387,10 +709,7 @@ mod tests {
         assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.baud, 921_600);
         assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
-        assert_eq!(
-            args.interactive_backend,
-            super::interactive::InteractiveBackendMode::Auto
-        );
+        assert_eq!(args.interactive_backend, InteractiveBackendMode::Auto);
         assert_eq!(args.tui_fps, None);
     }
 
@@ -1414,10 +733,7 @@ mod tests {
             panic!("expected tui command");
         };
 
-        assert_eq!(
-            args.interactive_backend,
-            super::interactive::InteractiveBackendMode::Compat
-        );
+        assert_eq!(args.interactive_backend, InteractiveBackendMode::Compat);
         assert_eq!(args.tui_fps, Some(120));
     }
 
@@ -1441,10 +757,7 @@ mod tests {
 
         assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.channel, 1);
-        assert_eq!(
-            args.interactive_backend,
-            super::interactive::InteractiveBackendMode::Auto
-        );
+        assert_eq!(args.interactive_backend, InteractiveBackendMode::Auto);
     }
 
     #[test]
@@ -1467,10 +780,7 @@ mod tests {
             panic!("expected passthrough command");
         };
 
-        assert_eq!(
-            args.interactive_backend,
-            super::interactive::InteractiveBackendMode::Mio
-        );
+        assert_eq!(args.interactive_backend, InteractiveBackendMode::Mio);
     }
 
     #[test]

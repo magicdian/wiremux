@@ -12,8 +12,9 @@ wire schema.
 
 Important existing type definitions, using current pre-migration paths:
 
-- `MuxEnvelope`, `DecodeError`, `FrameScanner`, and `StreamEvent` in
-  `sources/host/wiremux/crates/wiremux-cli/src/`. Target host crate path: `sources/host/wiremux/crates/wiremux-cli/src/`.
+- `MuxEnvelope`, host decode errors, and host events in
+  `sources/host/wiremux/crates/host-session/src/lib.rs`; CLI/TUI consumers live
+  under `sources/host/wiremux/crates/{cli,tui}/src/`.
 - `esp_wiremux_config_t`, `esp_wiremux_channel_config_t`, and payload enums
   in `sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux.h`. Target
   Espressif component path:
@@ -27,12 +28,10 @@ Important existing type definitions, using current pre-migration paths:
 
 Current organization:
 
-- Rust public protocol modules are currently exported from
-  `sources/host/wiremux/crates/wiremux-cli/src/lib.rs`; target path is
-  `sources/host/wiremux/crates/wiremux-cli/src/lib.rs`.
-- Rust CLI-only argument structs currently stay private in
-  `sources/host/wiremux/crates/wiremux-cli/src/main.rs`; target path is
-  `sources/host/wiremux/crates/wiremux-cli/src/main.rs`.
+- Rust public host-session types are exported from
+  `sources/host/wiremux/crates/host-session/src/lib.rs`.
+- Rust CLI-only argument structs live in
+  `sources/host/wiremux/crates/cli/src/args.rs`.
 - ESP public API types live in component headers under `include/`.
 - ESP private implementation structs stay in `src/*.c`.
 - Cross-language field numbers live in the proto file and must remain stable.

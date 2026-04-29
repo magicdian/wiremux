@@ -1,4 +1,14 @@
 [workspace]
-members = ["crates/wiremux-cli"]
-default-members = ["crates/wiremux-cli"]
+members = [
+    "crates/host-session",
+    "crates/interactive",
+    "crates/tui",
+    "crates/cli",
+]
+default-members = [
+    "crates/host-session",
+    "crates/interactive",
+    "crates/tui",
+    "crates/cli",
+]
 resolver = "2"

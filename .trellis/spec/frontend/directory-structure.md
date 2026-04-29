@@ -12,8 +12,8 @@ committed.
 
 The current user-facing surfaces are:
 
-- Rust host CLI: current `sources/host/wiremux/crates/wiremux-cli/src/main.rs`, target
-  `sources/host/wiremux/crates/wiremux-cli/src/main.rs`
+- Rust host CLI: current `sources/host/wiremux/crates/cli/src/main.rs`, with host framework
+  crates under `sources/host/wiremux/crates/{host-session,interactive,tui,cli}/`
 - ESP-IDF demo application: current
   `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`, target
   `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`
@@ -82,13 +82,13 @@ behavior:
 - `docs/zh/getting-started.md`
 - `docs/zh/host-tool.md`
 - `docs/zh/esp-idf-console-integration.md`
-- `sources/host/wiremux/crates/wiremux-cli/src/main.rs`
+- `sources/host/wiremux/crates/cli/src/main.rs`
 - `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`
 
 ## Forbidden Patterns
 
 - Do not add `src/components`, `app/`, or `pages/` at repository root.
-- Do not add frontend dependencies to `sources/host/wiremux/crates/wiremux-cli/Cargo.toml`.
+- Do not add frontend dependencies to `sources/host/wiremux/crates/cli/Cargo.toml`.
 - Do not describe a React/Vite/Next architecture as existing until those files
   are committed.
 - Do not build a UI that bypasses the `WMUX` frame and `MuxEnvelope` protocol

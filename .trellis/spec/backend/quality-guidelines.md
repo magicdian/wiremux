@@ -241,7 +241,7 @@ the demo, and host verification commands in the same task.
   reserve frame-by-frame animation for coarse scrollbar drag targets.
 - TUI text selection is application-managed because crossterm mouse capture
   prevents terminal-native selection from seeing ratatui's internal scrollback.
-  In `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`, selection state must track pane
+  In `sources/host/wiremux/crates/tui/src/lib.rs`, selection state must track pane
   (`Output`/`Status`), anchor row/column, cursor row/column, active drag state,
   pending clipboard text, and any edge auto-scroll direction. Rendering must
   highlight selected spans from the same wrapped visual rows used by scrollback
@@ -264,7 +264,7 @@ the demo, and host verification commands in the same task.
   `DeviceManifest.protocol_version` as the device proto API version. Backend and
   FPS status belong in the existing status area, not a separate debug panel.
 - TUI passthrough display is channel-local stream editing. In
-  `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`, `complete_stream_line()`,
+  `sources/host/wiremux/crates/tui/src/lib.rs`, `complete_stream_line()`,
   `backspace_stream_line()`, and `append_stream_segment()` must operate on the
   latest incomplete `OutputLine` for the same channel. Do not use only
   `lines.back_mut()` for passthrough stream editing, because interleaved log or
@@ -272,7 +272,7 @@ the demo, and host verification commands in the same task.
 - TUI passthrough prompt rendering must preserve terminal semantics. Empty
   `CR`, `LF`, or `CRLF` echoes are completed prompt history rows, not reusable
   input buffers. If the latest active-channel row is complete and the view is at
-  live tail, `sources/host/wiremux/crates/wiremux-cli/src/tui.rs` may append a virtual current prompt row
+  live tail, `sources/host/wiremux/crates/tui/src/lib.rs` may append a virtual current prompt row
   during rendering; this row must not mutate `App::lines` or scrollback history.
   In passthrough mode, place the terminal cursor in the output pane after the
   active channel prompt/echo. Cursor placement must account for visual wrapping
@@ -489,7 +489,7 @@ Version files and declarations:
 
 ```text
 VERSION
-sources/host/wiremux/crates/wiremux-cli/Cargo.toml
+sources/host/wiremux/crates/cli/Cargo.toml
 sources/host/wiremux/Cargo.lock
 sources/vendor/espressif/generic/components/esp-wiremux/idf_component.yml
 sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux.h

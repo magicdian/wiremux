@@ -3,6 +3,9 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use clipboard::base64_encode;
+use clipboard::write_osc52_copy;
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
     KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
@@ -12,6 +15,19 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use host_session::{
+    build_frame_error_to_io, build_input_frame, build_manifest_request_frame,
+    channel_supports_passthrough, decode_error_marker, display_channel_name,
+    passthrough_policy_for_channel, printable_payload, write_envelope_diagnostics, DeviceManifest,
+    HostCrcError, HostEvent, HostSession, MuxEnvelope, ProtocolCompatibilityKind, DIRECTION_INPUT,
+};
+#[cfg(test)]
+use interactive::InteractiveBackendMode;
+use interactive::{
+    self, is_passthrough_escape_exit_suffix, is_passthrough_exit_key, is_passthrough_meta_exit_key,
+    passthrough_key_payload, ConnectedInteractiveBackend, InteractiveEvent,
+    INTERACTIVE_SERIAL_READ_TIMEOUT, PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -20,19 +36,11 @@ use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Terminal;
-use wiremux::host_session::{
-    display_channel_name, DeviceManifest, HostDecodeStage, HostEvent, HostSession, MuxEnvelope,
-    ProtocolCompatibilityKind, DIRECTION_INPUT,
-};
 
-use super::interactive::{self, ConnectedInteractiveBackend, InteractiveEvent};
-use super::{
-    build_frame_error_to_io, build_input_frame, build_manifest_request_frame,
-    channel_supports_passthrough, create_diagnostics_file, is_passthrough_escape_exit_suffix,
-    is_passthrough_exit_key, is_passthrough_meta_exit_key, passthrough_key_payload,
-    passthrough_policy_for_channel, printable_payload, write_envelope_diagnostics, TuiArgs,
-    INTERACTIVE_SERIAL_READ_TIMEOUT, PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
-};
+mod args;
+mod clipboard;
+
+pub use args::TuiArgs;
 
 const MAX_LINES: usize = 1000;
 const WHEEL_SCROLL_LINES: usize = 1;
@@ -648,10 +656,7 @@ impl App {
     }
 }
 
-pub fn run(args: TuiArgs) -> io::Result<()> {
-    let (diagnostics_path, diagnostics) = create_diagnostics_file(&args.port)?;
-    let diagnostics_path_label = diagnostics_path.display().to_string();
-
+pub fn run(args: TuiArgs, diagnostics_path: String, diagnostics: File) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -663,7 +668,7 @@ pub fn run(args: TuiArgs) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(args, &mut terminal, diagnostics, diagnostics_path_label);
+    let result = run_loop(args, &mut terminal, diagnostics, diagnostics_path);
 
     disable_raw_mode()?;
     execute!(
@@ -1506,7 +1511,7 @@ fn handle_stream_event(app: &mut App, diagnostics: &mut File, event: HostEvent) 
             )?;
             app.push_marker(decode_error_marker(err.stage));
         }
-        HostEvent::CrcError(wiremux::host_session::HostCrcError {
+        HostEvent::CrcError(HostCrcError {
             version,
             flags,
             payload_len,
@@ -1540,17 +1545,6 @@ fn channel_supports_input(manifest: &DeviceManifest, channel_id: u32) -> bool {
         .iter()
         .find(|channel| channel.channel_id == channel_id)
         .is_some_and(|channel| channel.directions.contains(&DIRECTION_INPUT))
-}
-
-fn decode_error_marker(stage: HostDecodeStage) -> &'static str {
-    match stage {
-        HostDecodeStage::Envelope => "envelope decode error; details in diagnostics",
-        HostDecodeStage::Manifest => "manifest decode error; details in diagnostics",
-        HostDecodeStage::Batch => "batch decode error; details in diagnostics",
-        HostDecodeStage::BatchRecords => "batch records decode error; details in diagnostics",
-        HostDecodeStage::Compression => "batch payload decode error; details in diagnostics",
-        HostDecodeStage::Unknown(_) => "protocol decode error; details in diagnostics",
-    }
 }
 
 fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
@@ -2182,35 +2176,6 @@ fn is_copy_key(key: KeyEvent) -> bool {
     }
 }
 
-fn write_osc52_copy(writer: &mut dyn Write, text: &str) -> io::Result<()> {
-    write!(writer, "\x1b]52;c;{}\x07", base64_encode(text.as_bytes()))?;
-    writer.flush()
-}
-
-fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let b0 = chunk[0];
-        let b1 = *chunk.get(1).unwrap_or(&0);
-        let b2 = *chunk.get(2).unwrap_or(&0);
-
-        output.push(TABLE[(b0 >> 2) as usize] as char);
-        output.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
-        if chunk.len() > 1 {
-            output.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
-        } else {
-            output.push('=');
-        }
-        if chunk.len() > 2 {
-            output.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
-        } else {
-            output.push('=');
-        }
-    }
-    output
-}
-
 fn main_layout(area: Rect) -> std::rc::Rc<[Rect]> {
     Layout::default()
         .direction(Direction::Vertical)
@@ -2355,10 +2320,8 @@ fn empty_as_dash(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use host_session::{ChannelDescriptor, CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_OUTPUT};
     use ratatui::backend::TestBackend;
-    use wiremux::host_session::{
-        ChannelDescriptor, CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_OUTPUT,
-    };
 
     #[test]
     fn visible_window_follows_tail_when_offset_is_zero() {
@@ -3224,7 +3187,7 @@ mod tests {
                 baud: 115200,
                 max_payload_len: 512,
                 reconnect_delay_ms: 500,
-                interactive_backend: interactive::InteractiveBackendMode::Auto,
+                interactive_backend: InteractiveBackendMode::Auto,
                 tui_fps: None,
             },
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
@@ -3674,7 +3637,7 @@ mod tests {
             baud: 115200,
             max_payload_len: 512,
             reconnect_delay_ms: 500,
-            interactive_backend: interactive::InteractiveBackendMode::Auto,
+            interactive_backend: InteractiveBackendMode::Auto,
             tui_fps: None,
         }
     }

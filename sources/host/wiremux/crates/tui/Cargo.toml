@@ -1,0 +1,11 @@
+[package]
+name = "tui"
+version = "2604.29.5"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+crossterm = "0.29"
+host-session = { path = "../host-session" }
+interactive = { path = "../interactive" }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }

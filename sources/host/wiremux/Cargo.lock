@@ -36,6 +36,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cli"
+version = "2604.29.5"
+dependencies = [
+ "crossterm",
+ "host-session",
+ "interactive",
+ "serialport",
+ "tui",
+]
+
+[[package]]
 name = "compact_str"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -221,6 +232,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "host-session"
+version = "2604.29.5"
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -246,6 +261,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "interactive"
+version = "2604.29.5"
+dependencies = [
+ "crossterm",
+ "host-session",
+ "mio",
+ "serialport",
+ "signal-hook",
+ "signal-hook-mio",
 ]
 
 [[package]]
@@ -741,6 +768,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
+name = "tui"
+version = "2604.29.5"
+dependencies = [
+ "crossterm",
+ "host-session",
+ "interactive",
+ "ratatui",
+]
+
+[[package]]
 name = "unescaper"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -893,15 +930,3 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "wiremux"
-version = "2604.29.4"
-dependencies = [
- "crossterm",
- "mio",
- "ratatui",
- "serialport",
- "signal-hook",
- "signal-hook-mio",
-]

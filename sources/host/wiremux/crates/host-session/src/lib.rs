@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::io::{self, Write};
 use std::mem::MaybeUninit;
 use std::os::raw::{c_char, c_uint};
 use std::ptr;
@@ -306,6 +307,84 @@ pub fn build_manifest_request_frame(max_payload_len: usize) -> Result<Vec<u8>, B
         }
         capacity = capacity.saturating_mul(2);
     }
+}
+
+pub fn build_frame_error_to_io(err: BuildFrameError) -> io::Error {
+    match err {
+        BuildFrameError::PayloadTooLarge { len, max } => io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("input frame payload is too large: {len} bytes > {max} bytes"),
+        ),
+    }
+}
+
+pub fn printable_payload(payload: &[u8]) -> String {
+    match std::str::from_utf8(payload) {
+        Ok(text) => text.escape_default().to_string(),
+        Err(_) => payload
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+pub fn printable_payload_type(payload_type: &str) -> &str {
+    if payload_type.is_empty() {
+        "-"
+    } else {
+        payload_type
+    }
+}
+
+pub fn write_envelope_diagnostics<W: Write>(out: &mut W, envelope: &MuxEnvelope) -> io::Result<()> {
+    writeln!(
+        out,
+        "[wiremux] ch={} dir={} seq={} ts={} kind={} type={} flags={} payload={}",
+        envelope.channel_id,
+        envelope.direction,
+        envelope.sequence,
+        envelope.timestamp_us,
+        envelope.kind,
+        printable_payload_type(&envelope.payload_type),
+        envelope.flags,
+        printable_payload(&envelope.payload)
+    )
+}
+
+pub fn decode_error_marker(stage: HostDecodeStage) -> &'static str {
+    match stage {
+        HostDecodeStage::Envelope => "envelope decode error; details in diagnostics",
+        HostDecodeStage::Manifest => "manifest decode error; details in diagnostics",
+        HostDecodeStage::Batch => "batch decode error; details in diagnostics",
+        HostDecodeStage::BatchRecords => "batch records decode error; details in diagnostics",
+        HostDecodeStage::Compression => "batch payload decode error; details in diagnostics",
+        HostDecodeStage::Unknown(_) => "protocol decode error; details in diagnostics",
+    }
+}
+
+pub fn channel_supports_passthrough(manifest: &DeviceManifest, channel_id: u32) -> bool {
+    manifest
+        .channels
+        .iter()
+        .find(|channel| channel.channel_id == channel_id)
+        .is_some_and(|channel| {
+            channel.default_interaction_mode == CHANNEL_INTERACTION_PASSTHROUGH
+                || channel
+                    .interaction_modes
+                    .contains(&CHANNEL_INTERACTION_PASSTHROUGH)
+        })
+}
+
+pub fn passthrough_policy_for_channel(
+    manifest: &DeviceManifest,
+    channel_id: u32,
+) -> Option<PassthroughPolicy> {
+    manifest
+        .channels
+        .iter()
+        .find(|channel| channel.channel_id == channel_id)
+        .map(|channel| channel.passthrough_policy)
 }
 
 #[derive(Default)]
@@ -694,4 +773,58 @@ extern "C" {
         out_capacity: usize,
         written: *mut usize,
     ) -> c_uint;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_input_frame, build_manifest_request_frame, display_channel_name, HostEvent,
+        HostSession, DEFAULT_MAX_PAYLOAD_LEN, DIRECTION_INPUT, MANIFEST_REQUEST_PAYLOAD_TYPE,
+        PAYLOAD_KIND_CONTROL, PAYLOAD_KIND_TEXT,
+    };
+
+    #[test]
+    fn builds_input_frame_that_round_trips_through_host_session() {
+        let frame =
+            build_input_frame(1, b"help", DEFAULT_MAX_PAYLOAD_LEN).expect("valid input frame");
+        let mut session = HostSession::new(DEFAULT_MAX_PAYLOAD_LEN).expect("session");
+        let events = session.feed(&frame).expect("feed");
+        assert_eq!(events.len(), 1);
+
+        let HostEvent::Record(envelope) = &events[0] else {
+            panic!("expected record event");
+        };
+        assert_eq!(envelope.channel_id, 1);
+        assert_eq!(envelope.direction, DIRECTION_INPUT);
+        assert_eq!(envelope.kind, PAYLOAD_KIND_TEXT);
+        assert_eq!(envelope.payload, b"help");
+    }
+
+    #[test]
+    fn builds_manifest_request_frame_that_round_trips_through_host_session() {
+        let frame =
+            build_manifest_request_frame(DEFAULT_MAX_PAYLOAD_LEN).expect("valid request frame");
+        let mut session = HostSession::new(DEFAULT_MAX_PAYLOAD_LEN).expect("session");
+        let events = session.feed(&frame).expect("feed");
+        assert_eq!(events.len(), 1);
+
+        let HostEvent::Record(envelope) = &events[0] else {
+            panic!("expected record event");
+        };
+        assert_eq!(envelope.channel_id, 0);
+        assert_eq!(envelope.direction, DIRECTION_INPUT);
+        assert_eq!(envelope.kind, PAYLOAD_KIND_CONTROL);
+        assert_eq!(envelope.payload_type, MANIFEST_REQUEST_PAYLOAD_TYPE);
+        assert!(envelope.payload.is_empty());
+    }
+
+    #[test]
+    fn display_channel_name_clamps_utf8_and_drops_controls() {
+        assert_eq!(
+            display_channel_name("console\n"),
+            Some("console".to_string())
+        );
+        assert_eq!(display_channel_name("\n\r"), None);
+        assert_eq!(display_channel_name("🚗🎒😄🔥"), Some("🚗🎒😄".to_string()));
+    }
 }

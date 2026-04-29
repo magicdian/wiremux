@@ -1,0 +1,27 @@
+[package]
+name = "cli"
+version = "2604.29.5"
+edition = "2021"
+license = "Apache-2.0"
+
+[features]
+default = []
+generic = []
+esp32 = []
+all-vendors = ["generic", "esp32"]
+all-features = ["all-vendors"]
+
+[lib]
+name = "cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wiremux"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = "0.29"
+host-session = { path = "../host-session" }
+interactive = { path = "../interactive" }
+serialport = "4"
+tui = { path = "../tui" }

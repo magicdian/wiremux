@@ -70,12 +70,13 @@ sources/
 │           ├── 1/wiremux.proto
 │           └── 2/wiremux.proto
 ├── host/
-│   ├── Cargo.toml
-│   └── src/
-│       ├── crc32.rs
-│       ├── frame.rs
-│       ├── lib.rs
-│       └── main.rs
+│   └── wiremux/
+│       ├── Cargo.toml
+│       └── crates/
+│           ├── host-session/
+│           ├── interactive/
+│           ├── tui/
+│           └── cli/
 └── vendor/
     └── espressif/
         ├── README.md
@@ -93,23 +94,120 @@ sources/
 
 ### Host Rust
 
-Current path: `sources/host/wiremux`. Target path after PR4/PR5:
-`sources/host/wiremux` inside a host workspace.
+Path: `sources/host/wiremux`.
 
-Keep protocol parsing in the library crate and CLI behavior in `src/main.rs`.
+The host is a Cargo workspace with four crates:
 
-- `src/frame.rs`: binary frame constants, encoder helpers, mixed-stream scanner.
-- `src/crc32.rs`: CRC32 implementation used by the frame scanner.
-- `src/lib.rs`: public module exports for tests and later tools.
-- `sources/api/proto/versions/current/wiremux.proto`: stable envelope and
-  manifest schema used by new device SDK builds.
+- `crates/host-session`: Rust wrapper around the portable C
+  `wiremux_host_session_*` API, host event/data models, host-to-device frame
+  builders, C core static linking through `build.rs`, and focused unit tests.
+- `crates/interactive`: serial/terminal interactive backend shared by
+  `passthrough` and `tui`, including compat and Unix `mio` backends, serial
+  candidate path helpers, passthrough key mapping, and interrupted-operation
+  retry helpers.
+- `crates/tui`: ratatui application state, rendering, input handling,
+  selection/clipboard helpers, stream-event handling, and TUI unit tests.
+- `crates/cli`: public `wiremux` binary, CLI argument parsing, diagnostics file
+  creation, listen display formatting, passive serial opening, and
+  `listen`/`send`/`passthrough` command loops.
 
-Do not put parser state machines directly in `main.rs`; they must stay
-unit-testable without a serial device.
+Keep the user-facing binary name `wiremux` even though the binary package is
+named `cli`. Simple host-local crate names are intentional; do not add a
+`wiremux-` prefix to every crate inside this workspace.
 
-Host transmit support belongs in the same crate as the listener. Keep the
-existing `listen --line` single-handle path and `send` one-shot path in
-`src/main.rs`; do not create a second executable for channel input.
+Do not put protocol state machines directly in the CLI command loop. Host
+protocol parsing and frame construction must stay in `host-session`, backed by
+the portable C core, so they remain unit-testable without a serial device.
+
+Host transmit support belongs with the existing CLI command surface. Keep the
+`listen --line` single-handle path and `send` one-shot path under the `wiremux`
+binary; do not create a second executable for channel input.
+
+#### Host Workspace Contract
+
+Scope / trigger: any change that moves host code across crates, changes a
+workspace member, renames a host crate, or changes the `wiremux` binary package.
+
+Signatures:
+
+```toml
+[workspace]
+members = [
+    "crates/host-session",
+    "crates/interactive",
+    "crates/tui",
+    "crates/cli",
+]
+
+[[bin]]
+name = "wiremux"
+path = "src/main.rs"
+```
+
+Dependency direction:
+
+```text
+cli -> tui -> interactive -> host-session
+cli -> interactive
+cli -> host-session
+tui -> host-session
+```
+
+Contracts:
+
+- `host-session` must not depend on `cli`, `tui`, or `interactive`.
+- `interactive` may depend on `host-session` only for shared input policy types
+  such as `PassthroughPolicy`; it must not depend on `cli` or `tui`.
+- `tui` may depend on `interactive` and `host-session`; it must not depend on
+  `cli`.
+- `cli` composes the other crates and owns the `wiremux` executable.
+- `sources/host/wiremux/Cargo.lock` must include all host workspace packages.
+
+Validation matrix:
+
+| Case | Required behavior |
+|------|-------------------|
+| `cargo run -- listen ...` | still resolves the `wiremux` binary from `crates/cli` |
+| host-session frame builder change | `crates/host-session` tests cover round-trip through `HostSession` |
+| interactive backend change | `crates/interactive` tests cover retry, serial candidate, and passthrough key behavior |
+| TUI behavior change | `crates/tui` tests cover app/render/input behavior |
+| CLI parse or display change | `crates/cli` tests cover argument and listen display behavior |
+
+Good/Base/Bad cases:
+
+- Good: `cargo test` from `sources/host/wiremux` runs tests from all four
+  crates and the `wiremux` binary tests.
+- Base: `tools/wiremux-build check host` still drives the host workspace and
+  feature matrix.
+- Bad: `tui` imports `cli` helpers for diagnostics or argument parsing; move the
+  reusable behavior to `host-session`, `interactive`, or a TUI-local module
+  instead.
+
+Tests required:
+
+```bash
+cd sources/host/wiremux
+cargo fmt --check
+cargo check
+cargo test
+cargo check --features generic
+cargo check --features esp32
+cargo check --features all-vendors
+cargo check --features all-features
+```
+
+Also run:
+
+```bash
+tools/wiremux-build check host
+```
+
+Wrong vs correct:
+
+```text
+Wrong: put passthrough key mapping in cli and call it from tui.
+Correct: put passthrough key mapping in interactive so cli and tui share one implementation.
+```
 
 ### Portable Core
 
@@ -447,7 +545,7 @@ Required behavior:
   timeout with interactive loops unless the loop polls keyboard input before any
   blocking serial read.
 - TUI passthrough output uses stream semantics only for channels whose manifest
-  advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/wiremux/crates/wiremux-cli/src/tui.rs` must
+  advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/wiremux/crates/tui/src/lib.rs` must
   keep each passthrough channel's incomplete `OutputLine` independent: when a
   ch1 console echo line is incomplete, interleaved ch2/ch3/ch4 log or telemetry
   records must not force later ch1 echo bytes into a new ch1 line. Backspace
@@ -465,7 +563,7 @@ Required behavior:
 - TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
   channel filters 1 through 9.
 - TUI output scrollback is an in-memory viewport over the existing bounded
-  `MAX_LINES` buffer in `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`. `scroll_offset = 0` means the
+  `MAX_LINES` buffer in `sources/host/wiremux/crates/tui/src/lib.rs`. `scroll_offset = 0` means the
   output pane follows live tail output. Mouse wheel up increases
   `scroll_offset` and freezes the visible window; matching incoming lines must
   increase `scroll_offset` while frozen so the same historical rows stay visible.
