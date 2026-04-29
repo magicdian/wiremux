@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host workspace crate boundaries and dependency direction for shared config/TUI changes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "TUI and host CLI behavior, tests, and interactive backend contracts"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Interactive I/O and config parse/open errors must fail clearly without protocol regressions"}
+{"file": "docs/zh/host-tool.md", "reason": "Update host tool user docs for config and TUI settings"}
+{"file": "/Users/magicdian/Documents/personal_project/bridging-io/docs/matrix/MENUCONFIG_STYLE_MATRIX.md", "reason": "Reference for adapted wiremux menuconfig-style settings panel documentation"}

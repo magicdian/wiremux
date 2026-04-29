@@ -1,0 +1,6 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify crate dependency direction and host workspace contract"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify TUI/CLI behavior and test coverage"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify interactive errors and config failures are clear"}
+{"file": "docs/zh/host-tool.md", "reason": "Verify docs match implemented host config/settings behavior"}

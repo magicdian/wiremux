@@ -1,25 +1,25 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
+
+use interactive::SerialProfile;
 
 pub const DEFAULT_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub fn open_available_port(
-    requested: &Path,
-    baud: u32,
+    profile: &SerialProfile,
 ) -> io::Result<(PathBuf, Box<dyn serialport::SerialPort>)> {
-    open_available_port_with_timeout(requested, baud, DEFAULT_SERIAL_READ_TIMEOUT)
+    open_available_port_with_timeout(profile, DEFAULT_SERIAL_READ_TIMEOUT)
 }
 
 pub fn open_available_port_with_timeout(
-    requested: &Path,
-    baud: u32,
+    profile: &SerialProfile,
     read_timeout: Duration,
 ) -> io::Result<(PathBuf, Box<dyn serialport::SerialPort>)> {
     let mut last_err = None;
 
-    for candidate in interactive::port_candidates(requested) {
-        match open_serial_port(&candidate, baud, read_timeout) {
+    for candidate in interactive::port_candidates(&profile.port) {
+        match open_serial_port(&candidate, profile, read_timeout) {
             Ok(port) => return Ok((candidate, port)),
             Err(err) => last_err = Some(err),
         }
@@ -28,21 +28,21 @@ pub fn open_available_port_with_timeout(
     Err(last_err.unwrap_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            format!("no candidate ports found for {}", requested.display()),
+            format!("no candidate ports found for {}", profile.port.display()),
         )
     }))
 }
 
 fn open_serial_port(
-    path: &Path,
-    baud: u32,
+    path: &std::path::Path,
+    profile: &SerialProfile,
     read_timeout: Duration,
 ) -> io::Result<Box<dyn serialport::SerialPort>> {
     let path = path
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "serial path is not UTF-8"))?;
-    serialport::new(path, baud)
-        .timeout(read_timeout)
+    profile
+        .apply_to_builder(serialport::new(path, profile.baud).timeout(read_timeout))?
         .open()
         .map_err(|err| io::Error::other(err.to_string()))
 }

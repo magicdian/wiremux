@@ -41,27 +41,26 @@ fn run() -> Result<(), String> {
 }
 
 fn run_tui(args: tui::TuiArgs) -> io::Result<()> {
-    let (diagnostics_path, diagnostics) = create_diagnostics_file(&args.port)?;
+    let (diagnostics_path, diagnostics) = create_diagnostics_file(&args.serial.port)?;
     tui::run(args, diagnostics_path.display().to_string(), diagnostics)
 }
 
 fn listen(args: ListenArgs) -> io::Result<()> {
-    let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.port)?;
+    let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.serial.port)?;
     let mut display = DisplayOutput::new(io::stdout().lock(), args.channel);
     let reconnect_delay = Duration::from_millis(args.reconnect_delay_ms);
 
     writeln!(
         diagnostics,
-        "[wiremux] listening on {} at {} baud; reconnect_delay={}ms",
-        args.port.display(),
-        args.baud,
+        "[wiremux] listening on {}; reconnect_delay={}ms",
+        args.serial.summary(),
         args.reconnect_delay_ms
     )?;
     display.write_marker_line(&format!("diagnostics: {}", diagnostics_path.display()))?;
     display.flush()?;
 
     loop {
-        let (connected_port, mut input) = match open_available_port(&args.port, args.baud) {
+        let (connected_port, mut input) = match open_available_port(&args.serial) {
             Ok((path, file)) => {
                 writeln!(diagnostics, "[wiremux] connected: {}", path.display())?;
                 diagnostics.flush()?;
@@ -71,7 +70,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
                 writeln!(
                     diagnostics,
                     "[wiremux] waiting for {}: {}",
-                    args.port.display(),
+                    args.serial.port.display(),
                     err
                 )?;
                 diagnostics.flush()?;
@@ -148,7 +147,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
 }
 
 fn send(args: SendArgs) -> io::Result<()> {
-    let (connected_port, mut output) = open_available_port(&args.port, args.baud)?;
+    let (connected_port, mut output) = open_available_port(&args.serial)?;
     let frame = build_input_frame(args.channel, args.line.as_bytes(), args.max_payload_len)
         .map_err(build_frame_error_to_io)?;
     output.write_all(&frame)?;
@@ -165,10 +164,9 @@ fn send(args: SendArgs) -> io::Result<()> {
 }
 
 fn passthrough(args: PassthroughArgs) -> io::Result<()> {
-    let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.port)?;
+    let (diagnostics_path, mut diagnostics) = create_diagnostics_file(&args.serial.port)?;
     let (connected_port, mut backend) = interactive::open_interactive_backend(
-        &args.port,
-        args.baud,
+        &args.serial,
         args.interactive_backend,
         INTERACTIVE_SERIAL_READ_TIMEOUT,
     )?;
@@ -510,9 +508,10 @@ fn write_protocol_compatibility<W: Write, D: Write>(
 mod tests {
     use super::{
         build_input_frame, build_manifest_request_frame, is_passthrough_exit_key,
-        is_passthrough_meta_exit_key, parse_args, passthrough_key_payload, printable_payload,
-        write_event, CliCommand, DisplayOutput,
+        is_passthrough_meta_exit_key, passthrough_key_payload, printable_payload, write_event,
+        CliCommand, DisplayOutput,
     };
+    use cli::args::parse_args_with_config;
     use cli::diagnostics::sanitize_port_for_filename;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use host_session::{
@@ -522,7 +521,7 @@ mod tests {
     };
     use interactive::{
         paired_tty_cu_path, port_candidates, requested_file_name_starts_with, usbmodem_fragment,
-        InteractiveBackendMode,
+        HostConfig, InteractiveBackendMode,
     };
     use std::path::PathBuf;
 
@@ -567,17 +566,26 @@ mod tests {
         }
     }
 
+    fn parse_test_args<I>(args: I) -> Result<Option<CliCommand>, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        parse_args_with_config(args, HostConfig::default())
+    }
+
     #[test]
     fn parses_required_port_with_defaults() {
-        let command = parse_args(["--port", "/dev/tty.usbmodem2101"].map(String::from))
+        let command = parse_test_args(["--port", "/dev/tty.usbmodem2101"].map(String::from))
             .expect("args parse")
             .expect("valid args");
         let CliCommand::Listen(args) = command else {
             panic!("expected listen command");
         };
 
-        assert_eq!(args.port, PathBuf::from("/dev/tty.usbmodem2101"));
-        assert_eq!(args.baud, 115_200);
+        assert_eq!(args.serial.port, PathBuf::from("/dev/tty.usbmodem2101"));
+        assert_eq!(args.serial.baud, 115_200);
+        assert_eq!(args.serial.data_bits, 8);
+        assert_eq!(args.serial.stop_bits, 1);
         assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
         assert_eq!(args.reconnect_delay_ms, 500);
         assert_eq!(args.channel, None);
@@ -586,14 +594,39 @@ mod tests {
     }
 
     #[test]
+    fn resolves_serial_profile_from_config_when_port_is_omitted() {
+        let mut config = HostConfig::default();
+        config.serial.port = Some(PathBuf::from("/dev/cu.configured"));
+        config.serial.baud = 460_800;
+
+        let command = parse_args_with_config(["tui"].map(String::from), config)
+            .expect("args parse")
+            .expect("valid args");
+        let CliCommand::Tui(args) = command else {
+            panic!("expected tui command");
+        };
+
+        assert_eq!(args.serial.port, PathBuf::from("/dev/cu.configured"));
+        assert_eq!(args.serial.baud, 460_800);
+    }
+
+    #[test]
     fn parses_listen_subcommand_and_overrides() {
-        let command = parse_args(
+        let command = parse_test_args(
             [
                 "listen",
                 "--port",
                 "/tmp/capture.bin",
                 "--baud",
                 "921600",
+                "--data-bits",
+                "7",
+                "--stop-bits",
+                "2",
+                "--parity",
+                "even",
+                "--flow-control",
+                "hardware",
                 "--max-payload",
                 "4096",
                 "--reconnect-delay-ms",
@@ -611,8 +644,12 @@ mod tests {
             panic!("expected listen command");
         };
 
-        assert_eq!(args.port, PathBuf::from("/tmp/capture.bin"));
-        assert_eq!(args.baud, 921_600);
+        assert_eq!(args.serial.port, PathBuf::from("/tmp/capture.bin"));
+        assert_eq!(args.serial.baud, 921_600);
+        assert_eq!(args.serial.data_bits, 7);
+        assert_eq!(args.serial.stop_bits, 2);
+        assert_eq!(args.serial.parity.to_string(), "even");
+        assert_eq!(args.serial.flow_control.to_string(), "hardware");
         assert_eq!(args.max_payload_len, 4096);
         assert_eq!(args.reconnect_delay_ms, 100);
         assert_eq!(args.channel, Some(3));
@@ -622,7 +659,7 @@ mod tests {
 
     #[test]
     fn parses_listen_line_without_filter_as_console_input() {
-        let command = parse_args(
+        let command = parse_test_args(
             [
                 "listen",
                 "--port",
@@ -645,7 +682,7 @@ mod tests {
 
     #[test]
     fn parses_listen_line_with_explicit_send_channel() {
-        let command = parse_args(
+        let command = parse_test_args(
             [
                 "listen",
                 "--port",
@@ -672,7 +709,7 @@ mod tests {
 
     #[test]
     fn parses_send_subcommand() {
-        let command = parse_args(
+        let command = parse_test_args(
             [
                 "send",
                 "--port",
@@ -690,14 +727,14 @@ mod tests {
             panic!("expected send command");
         };
 
-        assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(args.serial.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.channel, 1);
         assert_eq!(args.line, "help");
     }
 
     #[test]
     fn parses_tui_subcommand() {
-        let command = parse_args(
+        let command = parse_test_args(
             ["tui", "--port", "/dev/cu.usbmodem2101", "--baud", "921600"].map(String::from),
         )
         .expect("args parse")
@@ -706,8 +743,8 @@ mod tests {
             panic!("expected tui command");
         };
 
-        assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
-        assert_eq!(args.baud, 921_600);
+        assert_eq!(args.serial.port, PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(args.serial.baud, 921_600);
         assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
         assert_eq!(args.interactive_backend, InteractiveBackendMode::Auto);
         assert_eq!(args.tui_fps, None);
@@ -715,7 +752,7 @@ mod tests {
 
     #[test]
     fn parses_tui_interactive_backend_and_fps() {
-        let command = parse_args(
+        let command = parse_test_args(
             [
                 "tui",
                 "--port",
@@ -739,7 +776,7 @@ mod tests {
 
     #[test]
     fn parses_passthrough_subcommand() {
-        let command = parse_args(
+        let command = parse_test_args(
             [
                 "passthrough",
                 "--port",
@@ -755,14 +792,14 @@ mod tests {
             panic!("expected passthrough command");
         };
 
-        assert_eq!(args.port, PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(args.serial.port, PathBuf::from("/dev/cu.usbmodem2101"));
         assert_eq!(args.channel, 1);
         assert_eq!(args.interactive_backend, InteractiveBackendMode::Auto);
     }
 
     #[test]
     fn parses_passthrough_interactive_backend() {
-        let command = parse_args(
+        let command = parse_test_args(
             [
                 "passthrough",
                 "--port",
@@ -785,7 +822,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_tui_fps() {
-        let err = parse_args(
+        let err = parse_test_args(
             ["tui", "--port", "/dev/cu.usbmodem2101", "--tui-fps", "144"].map(String::from),
         )
         .expect_err("invalid fps");
@@ -795,7 +832,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_interactive_backend() {
-        let err = parse_args(
+        let err = parse_test_args(
             [
                 "tui",
                 "--port",
@@ -812,7 +849,7 @@ mod tests {
 
     #[test]
     fn rejects_tui_channel_filter_args() {
-        let err = parse_args(
+        let err = parse_test_args(
             ["tui", "--port", "/dev/cu.usbmodem2101", "--channel", "1"].map(String::from),
         )
         .expect_err("invalid tui args");
@@ -822,14 +859,15 @@ mod tests {
 
     #[test]
     fn requires_port() {
-        let err = parse_args(["--baud", "115200"].map(String::from)).expect_err("missing port");
+        let err =
+            parse_test_args(["--baud", "115200"].map(String::from)).expect_err("missing port");
 
-        assert!(err.contains("usage:"));
+        assert!(err.contains("serial port is required"));
     }
 
     #[test]
     fn rejects_invalid_baud() {
-        let err = parse_args(["--port", "/tmp/fake", "--baud", "fast"].map(String::from))
+        let err = parse_test_args(["--port", "/tmp/fake", "--baud", "fast"].map(String::from))
             .expect_err("invalid baud");
 
         assert!(err.contains("invalid --baud value"));
@@ -837,7 +875,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_channel() {
-        let err = parse_args(
+        let err = parse_test_args(
             [
                 "send",
                 "--port",
@@ -856,15 +894,16 @@ mod tests {
 
     #[test]
     fn rejects_missing_send_line() {
-        let err = parse_args(["send", "--port", "/tmp/fake", "--channel", "1"].map(String::from))
-            .expect_err("missing line");
+        let err =
+            parse_test_args(["send", "--port", "/tmp/fake", "--channel", "1"].map(String::from))
+                .expect_err("missing line");
 
         assert!(err.contains("send requires --line"));
     }
 
     #[test]
     fn help_is_not_an_error() {
-        assert!(parse_args(["--help"].map(String::from))
+        assert!(parse_test_args(["--help"].map(String::from))
             .expect("help parses")
             .is_none());
     }

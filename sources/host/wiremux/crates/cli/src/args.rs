@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use host_session::DEFAULT_MAX_PAYLOAD_LEN;
-use interactive::InteractiveBackendMode;
+use interactive::{
+    default_config_path, HostConfig, InteractiveBackendMode, SerialFlowControl, SerialParity,
+    SerialProfile, SerialProfileOverrides,
+};
 
 #[derive(Debug)]
 pub enum CliCommand {
@@ -13,8 +16,7 @@ pub enum CliCommand {
 
 #[derive(Debug)]
 pub struct ListenArgs {
-    pub port: PathBuf,
-    pub baud: u32,
+    pub serial: SerialProfile,
     pub max_payload_len: usize,
     pub reconnect_delay_ms: u64,
     pub channel: Option<u32>,
@@ -24,8 +26,7 @@ pub struct ListenArgs {
 
 #[derive(Debug)]
 pub struct SendArgs {
-    pub port: PathBuf,
-    pub baud: u32,
+    pub serial: SerialProfile,
     pub max_payload_len: usize,
     pub channel: u8,
     pub line: String,
@@ -33,14 +34,29 @@ pub struct SendArgs {
 
 #[derive(Debug)]
 pub struct PassthroughArgs {
-    pub port: PathBuf,
-    pub baud: u32,
+    pub serial: SerialProfile,
     pub max_payload_len: usize,
     pub channel: u8,
     pub interactive_backend: InteractiveBackendMode,
 }
 
 pub fn parse_args<I>(args: I) -> Result<Option<CliCommand>, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let args = args.into_iter().collect::<Vec<_>>();
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+    {
+        return parse_args_with_config(args, HostConfig::default());
+    }
+    let config = HostConfig::load_default()
+        .map_err(|err| format!("failed to load {}: {err}", default_config_path().display()))?;
+    parse_args_with_config(args, config)
+}
+
+pub fn parse_args_with_config<I>(args: I, config: HostConfig) -> Result<Option<CliCommand>, String>
 where
     I: IntoIterator<Item = String>,
 {
@@ -66,8 +82,7 @@ where
         _ => "listen",
     };
 
-    let mut port = None;
-    let mut baud = 115_200;
+    let mut serial_overrides = SerialProfileOverrides::default();
     let mut max_payload_len = DEFAULT_MAX_PAYLOAD_LEN;
     let mut reconnect_delay_ms = 500;
     let mut channel = None;
@@ -82,15 +97,56 @@ where
                 let value = args
                     .next()
                     .ok_or_else(|| "--port requires a value".to_string())?;
-                port = Some(PathBuf::from(value));
+                serial_overrides.port = Some(PathBuf::from(value));
             }
             "--baud" => {
                 let value = args
                     .next()
                     .ok_or_else(|| "--baud requires a value".to_string())?;
-                baud = value
-                    .parse()
-                    .map_err(|_| format!("invalid --baud value: {value}"))?;
+                serial_overrides.baud = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid --baud value: {value}"))?,
+                );
+            }
+            "--data-bits" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--data-bits requires a value".to_string())?;
+                serial_overrides.data_bits = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid --data-bits value: {value}"))?,
+                );
+            }
+            "--stop-bits" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--stop-bits requires a value".to_string())?;
+                serial_overrides.stop_bits = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid --stop-bits value: {value}"))?,
+                );
+            }
+            "--parity" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--parity requires a value".to_string())?;
+                serial_overrides.parity = Some(SerialParity::parse(&value).ok_or_else(|| {
+                    format!("invalid --parity value: {value}; expected none, odd, or even")
+                })?);
+            }
+            "--flow-control" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--flow-control requires a value".to_string())?;
+                serial_overrides.flow_control =
+                    Some(SerialFlowControl::parse(&value).ok_or_else(|| {
+                        format!(
+                            "invalid --flow-control value: {value}; expected none, software, or hardware"
+                        )
+                    })?);
             }
             "--max-payload" => {
                 let value = args
@@ -155,7 +211,7 @@ where
         }
     }
 
-    let port = port.ok_or_else(usage)?;
+    let serial = config.serial.resolve_profile(serial_overrides)?;
     match command {
         "listen" => {
             if tui_fps.is_some() || interactive_backend != InteractiveBackendMode::Auto {
@@ -165,8 +221,7 @@ where
                 ));
             }
             Ok(Some(CliCommand::Listen(ListenArgs {
-                port,
-                baud,
+                serial,
                 max_payload_len,
                 reconnect_delay_ms,
                 channel: channel.map(u32::from),
@@ -185,8 +240,7 @@ where
                 ));
             }
             Ok(Some(CliCommand::Send(SendArgs {
-                port,
-                baud,
+                serial,
                 max_payload_len,
                 channel: channel.ok_or_else(|| "send requires --channel <id>".to_string())?,
                 line: line.ok_or_else(|| "send requires --line <text>".to_string())?,
@@ -200,8 +254,7 @@ where
                 ));
             }
             Ok(Some(CliCommand::Passthrough(PassthroughArgs {
-                port,
-                baud,
+                serial,
                 max_payload_len,
                 channel: channel
                     .ok_or_else(|| "passthrough requires --channel <id>".to_string())?,
@@ -216,8 +269,8 @@ where
                 ));
             }
             Ok(Some(CliCommand::Tui(tui::TuiArgs {
-                port,
-                baud,
+                serial,
+                config_path: default_config_path(),
                 max_payload_len,
                 reconnect_delay_ms,
                 interactive_backend,
@@ -236,5 +289,5 @@ fn parse_channel(value: &str) -> Result<u8, String> {
 }
 
 pub fn usage() -> String {
-    "usage:\n  wiremux listen --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send --port <path> --channel <id> --line <text> [--baud 115200] [--max-payload bytes]\n  wiremux passthrough --port <path> --channel <id> [--baud 115200] [--max-payload bytes] [--interactive-backend auto|compat|mio]\n  wiremux tui --port <path> [--baud 115200] [--max-payload bytes] [--reconnect-delay-ms 500] [--interactive-backend auto|compat|mio] [--tui-fps 60|120]".to_string()
+    "usage:\n  wiremux listen [--port <path>] [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--max-payload bytes] [--reconnect-delay-ms 500] [--channel id] [--line text] [--send-channel id]\n  wiremux send [--port <path>] --channel <id> --line <text> [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--max-payload bytes]\n  wiremux passthrough [--port <path>] --channel <id> [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--max-payload bytes] [--interactive-backend auto|compat|mio]\n  wiremux tui [--port <path>] [--baud 115200] [--data-bits 8] [--stop-bits 1] [--parity none|odd|even] [--flow-control none|software|hardware] [--max-payload bytes] [--reconnect-delay-ms 500] [--interactive-backend auto|compat|mio] [--tui-fps 60|120]".to_string()
 }

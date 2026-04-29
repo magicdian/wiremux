@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -25,15 +26,16 @@ use host_session::{
 use interactive::InteractiveBackendMode;
 use interactive::{
     self, is_passthrough_escape_exit_suffix, is_passthrough_exit_key, is_passthrough_meta_exit_key,
-    passthrough_key_payload, ConnectedInteractiveBackend, InteractiveEvent,
-    INTERACTIVE_SERIAL_READ_TIMEOUT, PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
+    passthrough_key_payload, ConnectedInteractiveBackend, HostConfig, InteractiveEvent,
+    SerialFlowControl, SerialParity, SerialProfile, INTERACTIVE_SERIAL_READ_TIMEOUT,
+    PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Terminal;
 
@@ -78,6 +80,18 @@ struct StyledSegment {
 
 struct StatusRow {
     segments: Vec<StyledSegment>,
+}
+
+#[cfg(test)]
+fn test_serial_profile() -> SerialProfile {
+    SerialProfile {
+        port: PathBuf::from("/dev/tty.usbmodem2101"),
+        baud: 115_200,
+        data_bits: 8,
+        stop_bits: 1,
+        parity: SerialParity::None,
+        flow_control: SerialFlowControl::None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,6 +151,87 @@ impl InputState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsField {
+    Port,
+    Baud,
+    DataBits,
+    StopBits,
+    Parity,
+    FlowControl,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsAction {
+    Apply,
+    SaveDefaults,
+    Discard,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsRow {
+    Field(SettingsField),
+    Action(SettingsAction),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SettingsPopup {
+    TextInput {
+        field: SettingsField,
+        value: String,
+        cursor: usize,
+    },
+    ChoiceList {
+        field: SettingsField,
+        selected: usize,
+    },
+    ConfirmExit {
+        selected: usize,
+    },
+    Message(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SettingsState {
+    draft: SerialProfile,
+    baseline: SerialProfile,
+    selected: usize,
+    popup: Option<SettingsPopup>,
+}
+
+impl SettingsState {
+    fn new(profile: SerialProfile) -> Self {
+        Self {
+            draft: profile.clone(),
+            baseline: profile,
+            selected: 0,
+            popup: None,
+        }
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.draft != self.baseline
+    }
+
+    fn rows(&self) -> [SettingsRow; 9] {
+        [
+            SettingsRow::Field(SettingsField::Port),
+            SettingsRow::Field(SettingsField::Baud),
+            SettingsRow::Field(SettingsField::DataBits),
+            SettingsRow::Field(SettingsField::StopBits),
+            SettingsRow::Field(SettingsField::Parity),
+            SettingsRow::Field(SettingsField::FlowControl),
+            SettingsRow::Action(SettingsAction::Apply),
+            SettingsRow::Action(SettingsAction::SaveDefaults),
+            SettingsRow::Action(SettingsAction::Discard),
+        ]
+    }
+
+    fn selected_row(&self) -> SettingsRow {
+        self.rows()[self.selected.min(self.rows().len().saturating_sub(1))]
+    }
+}
+
 struct App {
     lines: VecDeque<OutputLine>,
     input: String,
@@ -158,10 +253,14 @@ struct App {
     pending_clipboard: Option<String>,
     stream_cr_pending_channel: Option<u32>,
     exit_escape_started_at: Option<Instant>,
+    serial: SerialProfile,
+    config_path: PathBuf,
+    settings: Option<SettingsState>,
+    reconnect_requested: bool,
 }
 
 impl App {
-    fn new(diagnostics_path: String) -> Self {
+    fn with_serial(diagnostics_path: String, serial: SerialProfile, config_path: PathBuf) -> Self {
         Self {
             lines: VecDeque::new(),
             input: String::new(),
@@ -183,7 +282,20 @@ impl App {
             pending_clipboard: None,
             stream_cr_pending_channel: None,
             exit_escape_started_at: None,
+            serial,
+            config_path,
+            settings: None,
+            reconnect_requested: false,
         }
+    }
+
+    #[cfg(test)]
+    fn new(diagnostics_path: String) -> Self {
+        Self::with_serial(
+            diagnostics_path,
+            test_serial_profile(),
+            PathBuf::from("/tmp/wiremux-config.toml"),
+        )
     }
 
     fn push_marker(&mut self, message: impl Into<String>) {
@@ -691,10 +803,14 @@ fn run_loop(
     let reconnect_delay = Duration::from_millis(args.reconnect_delay_ms);
     let target_fps = resolve_tui_fps(args.tui_fps);
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(target_fps));
-    let mut app = App::new(diagnostics_path);
+    let mut app = App::with_serial(
+        diagnostics_path,
+        args.serial.clone(),
+        args.config_path.clone(),
+    );
     app.target_fps = target_fps;
     app.push_marker(format!(
-        "diagnostics: {}; Ctrl-B 0..9 filters; Enter sends; Ctrl-C/Ctrl-]/Esc x quits",
+        "diagnostics: {}; Ctrl-B 0..9 filters; Ctrl-B s settings; Enter sends; Ctrl-C/Ctrl-]/Esc x quits",
         app.diagnostics_path
     ));
 
@@ -713,8 +829,7 @@ fn run_loop(
         if backend.is_none() && last_connect_attempt.elapsed() >= reconnect_delay {
             last_connect_attempt = Instant::now();
             match interactive::open_interactive_backend(
-                &args.port,
-                args.baud,
+                &app.serial,
                 args.interactive_backend,
                 INTERACTIVE_SERIAL_READ_TIMEOUT,
             ) {
@@ -743,12 +858,12 @@ fn run_loop(
                     dirty = true;
                 }
                 Err(err) => {
-                    app.status = format!("waiting for {}: {err}", args.port.display());
+                    app.status = format!("waiting for {}: {err}", app.serial.port.display());
                     app.backend_label = "disconnected".to_string();
                     writeln!(
                         diagnostics,
                         "[wiremux] waiting for {}: {err}",
-                        args.port.display()
+                        app.serial.port.display()
                     )?;
                     dirty = true;
                 }
@@ -859,6 +974,22 @@ fn run_loop(
                 if let Some(text) = app.pending_clipboard.take() {
                     write_osc52_copy(terminal.backend_mut(), &text)?;
                 }
+                if app.reconnect_requested {
+                    app.reconnect_requested = false;
+                    app.connected_port = None;
+                    app.backend_label = "disconnected".to_string();
+                    app.manifest = None;
+                    app.input.clear();
+                    backend = None;
+                    host_session = HostSession::new(args.max_payload_len).map_err(|status| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("host session init failed: {status}"),
+                        )
+                    })?;
+                    last_connect_attempt = Instant::now() - reconnect_delay;
+                    app.push_marker(format!("target changed: {}", app.serial.summary()));
+                }
                 dirty = true;
             }
             InteractiveEvent::Timeout => {
@@ -953,6 +1084,19 @@ fn handle_key_with_areas(
     key: KeyEvent,
 ) -> io::Result<()> {
     let mut serial = serial;
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::SHIFT)
+        && key.code == KeyCode::Char('c')
+    {
+        app.should_quit = true;
+        return Ok(());
+    }
+
+    if app.settings.is_some() {
+        handle_settings_key(app, key)?;
+        return Ok(());
+    }
+
     if app.has_selection() && is_copy_key(key) {
         app.request_copy_selection(output_area, status_area);
         return Ok(());
@@ -961,14 +1105,6 @@ fn handle_key_with_areas(
     if key.code == KeyCode::Esc && app.selection.is_some() {
         app.clear_selection();
         app.status = "selection cleared".to_string();
-        return Ok(());
-    }
-
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && !key.modifiers.contains(KeyModifiers::SHIFT)
-        && key.code == KeyCode::Char('c')
-    {
-        app.should_quit = true;
         return Ok(());
     }
 
@@ -1012,6 +1148,10 @@ fn handle_key_with_areas(
             }
             KeyCode::Esc => {
                 app.status = "prefix cancelled".to_string();
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                app.settings = Some(SettingsState::new(app.serial.clone()));
+                app.status = "settings".to_string();
             }
             _ => {
                 app.status = "unknown prefix command".to_string();
@@ -1140,6 +1280,285 @@ fn send_tui_passthrough_key(
             app.status = "not connected; passthrough input not sent".to_string();
         }
     }
+    Ok(())
+}
+
+fn handle_settings_key(app: &mut App, key: KeyEvent) -> io::Result<()> {
+    let Some(mut settings) = app.settings.take() else {
+        return Ok(());
+    };
+
+    if let Some(popup) = settings.popup.take() {
+        if handle_settings_popup_key(app, &mut settings, popup, key)? {
+            app.settings = Some(settings);
+        }
+        return Ok(());
+    }
+
+    match key.code {
+        KeyCode::Up => {
+            settings.selected = settings
+                .selected
+                .checked_sub(1)
+                .unwrap_or_else(|| settings.rows().len().saturating_sub(1));
+            app.settings = Some(settings);
+        }
+        KeyCode::Down => {
+            settings.selected = (settings.selected + 1) % settings.rows().len();
+            app.settings = Some(settings);
+        }
+        KeyCode::Enter => match settings.selected_row() {
+            SettingsRow::Field(field) => {
+                settings.popup = Some(open_settings_field_popup(field, &settings.draft));
+                app.settings = Some(settings);
+            }
+            SettingsRow::Action(SettingsAction::Apply) => {
+                apply_settings_profile(app, settings.draft);
+            }
+            SettingsRow::Action(SettingsAction::SaveDefaults) => {
+                save_settings_profile(app, &mut settings)?;
+                app.settings = Some(settings);
+            }
+            SettingsRow::Action(SettingsAction::Discard) => {
+                app.status = "settings discarded".to_string();
+                app.settings = None;
+            }
+        },
+        KeyCode::Esc => {
+            if settings.is_dirty() {
+                settings.popup = Some(SettingsPopup::ConfirmExit { selected: 2 });
+                app.settings = Some(settings);
+            } else {
+                app.status = "settings closed".to_string();
+                app.settings = None;
+            }
+        }
+        _ => {
+            app.settings = Some(settings);
+        }
+    }
+    Ok(())
+}
+
+fn handle_settings_popup_key(
+    app: &mut App,
+    settings: &mut SettingsState,
+    popup: SettingsPopup,
+    key: KeyEvent,
+) -> io::Result<bool> {
+    match popup {
+        SettingsPopup::TextInput {
+            field,
+            mut value,
+            mut cursor,
+        } => match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Enter => match commit_settings_text(field, &value, &mut settings.draft) {
+                Ok(()) => app.status = format!("updated {}", settings_field_label(field)),
+                Err(err) => settings.popup = Some(SettingsPopup::Message(err)),
+            },
+            KeyCode::Left => {
+                cursor = cursor.saturating_sub(1);
+                settings.popup = Some(SettingsPopup::TextInput {
+                    field,
+                    value,
+                    cursor,
+                });
+            }
+            KeyCode::Right => {
+                cursor = (cursor + 1).min(value.len());
+                settings.popup = Some(SettingsPopup::TextInput {
+                    field,
+                    value,
+                    cursor,
+                });
+            }
+            KeyCode::Backspace => {
+                if cursor > 0 {
+                    let remove_at = cursor - 1;
+                    value.remove(remove_at);
+                    cursor = remove_at;
+                }
+                settings.popup = Some(SettingsPopup::TextInput {
+                    field,
+                    value,
+                    cursor,
+                });
+            }
+            KeyCode::Char(ch) => {
+                value.insert(cursor, ch);
+                cursor += ch.len_utf8();
+                settings.popup = Some(SettingsPopup::TextInput {
+                    field,
+                    value,
+                    cursor,
+                });
+            }
+            _ => {
+                settings.popup = Some(SettingsPopup::TextInput {
+                    field,
+                    value,
+                    cursor,
+                });
+            }
+        },
+        SettingsPopup::ChoiceList {
+            field,
+            mut selected,
+        } => match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Up => {
+                let len = settings_choice_len(field);
+                selected = selected.checked_sub(1).unwrap_or(len.saturating_sub(1));
+                settings.popup = Some(SettingsPopup::ChoiceList { field, selected });
+            }
+            KeyCode::Down => {
+                selected = (selected + 1) % settings_choice_len(field);
+                settings.popup = Some(SettingsPopup::ChoiceList { field, selected });
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                apply_settings_choice(field, selected, &mut settings.draft);
+                app.status = format!("updated {}", settings_field_label(field));
+            }
+            _ => settings.popup = Some(SettingsPopup::ChoiceList { field, selected }),
+        },
+        SettingsPopup::ConfirmExit { mut selected } => match key.code {
+            KeyCode::Esc => {}
+            KeyCode::Left => {
+                selected = selected.saturating_sub(1);
+                settings.popup = Some(SettingsPopup::ConfirmExit { selected });
+            }
+            KeyCode::Right => {
+                selected = (selected + 1).min(2);
+                settings.popup = Some(SettingsPopup::ConfirmExit { selected });
+            }
+            KeyCode::Enter => match selected {
+                0 => {
+                    save_settings_profile(app, settings)?;
+                    apply_settings_profile(app, settings.draft.clone());
+                    return Ok(false);
+                }
+                1 => {
+                    app.status = "settings discarded".to_string();
+                    return Ok(false);
+                }
+                _ => settings.popup = None,
+            },
+            _ => settings.popup = Some(SettingsPopup::ConfirmExit { selected }),
+        },
+        SettingsPopup::Message(_) => {
+            if !matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+                settings.popup = Some(popup);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn open_settings_field_popup(field: SettingsField, profile: &SerialProfile) -> SettingsPopup {
+    match field {
+        SettingsField::Port | SettingsField::Baud => {
+            let value = settings_field_value(field, profile);
+            SettingsPopup::TextInput {
+                field,
+                cursor: value.len(),
+                value,
+            }
+        }
+        SettingsField::DataBits
+        | SettingsField::StopBits
+        | SettingsField::Parity
+        | SettingsField::FlowControl => SettingsPopup::ChoiceList {
+            field,
+            selected: current_choice_index(field, profile),
+        },
+    }
+}
+
+fn commit_settings_text(
+    field: SettingsField,
+    value: &str,
+    profile: &mut SerialProfile,
+) -> Result<(), String> {
+    match field {
+        SettingsField::Port => {
+            if value.trim().is_empty() {
+                return Err("port cannot be empty".to_string());
+            }
+            profile.port = PathBuf::from(value.trim());
+            Ok(())
+        }
+        SettingsField::Baud => {
+            let baud = value
+                .trim()
+                .parse()
+                .map_err(|_| format!("invalid baud value: {value}"))?;
+            if baud == 0 {
+                return Err("baud must be greater than 0".to_string());
+            }
+            profile.baud = baud;
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn settings_choice_len(field: SettingsField) -> usize {
+    match field {
+        SettingsField::DataBits => 4,
+        SettingsField::StopBits => 2,
+        SettingsField::Parity => SerialParity::VALUES.len(),
+        SettingsField::FlowControl => SerialFlowControl::VALUES.len(),
+        _ => 0,
+    }
+}
+
+fn current_choice_index(field: SettingsField, profile: &SerialProfile) -> usize {
+    match field {
+        SettingsField::DataBits => [5, 6, 7, 8]
+            .iter()
+            .position(|value| *value == profile.data_bits)
+            .unwrap_or(3),
+        SettingsField::StopBits => [1, 2]
+            .iter()
+            .position(|value| *value == profile.stop_bits)
+            .unwrap_or(0),
+        SettingsField::Parity => SerialParity::VALUES
+            .iter()
+            .position(|value| *value == profile.parity)
+            .unwrap_or(0),
+        SettingsField::FlowControl => SerialFlowControl::VALUES
+            .iter()
+            .position(|value| *value == profile.flow_control)
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn apply_settings_choice(field: SettingsField, selected: usize, profile: &mut SerialProfile) {
+    match field {
+        SettingsField::DataBits => profile.data_bits = [5, 6, 7, 8][selected.min(3)],
+        SettingsField::StopBits => profile.stop_bits = [1, 2][selected.min(1)],
+        SettingsField::Parity => profile.parity = SerialParity::VALUES[selected.min(2)],
+        SettingsField::FlowControl => {
+            profile.flow_control = SerialFlowControl::VALUES[selected.min(2)];
+        }
+        _ => {}
+    }
+}
+
+fn apply_settings_profile(app: &mut App, profile: SerialProfile) {
+    app.serial = profile;
+    app.reconnect_requested = true;
+    app.status = "settings applied; reconnecting".to_string();
+    app.settings = None;
+}
+
+fn save_settings_profile(app: &mut App, settings: &mut SettingsState) -> io::Result<()> {
+    HostConfig::from_serial_profile(&settings.draft).save(&app.config_path)?;
+    settings.baseline = settings.draft.clone();
+    app.status = format!("settings saved to {}", app.config_path.display());
+    settings.popup = Some(SettingsPopup::Message("settings saved".to_string()));
     Ok(())
 }
 
@@ -1623,7 +2042,214 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             .borders(Borders::ALL),
     );
     frame.render_widget(input, chunks[2]);
-    set_cursor_position(frame, app, output_area, &visible, chunks[2]);
+    if app.settings.is_some() {
+        render_settings(frame, app);
+    } else {
+        set_cursor_position(frame, app, output_area, &visible, chunks[2]);
+    }
+}
+
+fn render_settings(frame: &mut ratatui::Frame<'_>, app: &App) {
+    let area = frame.area();
+    if area.width < 80 || area.height < 24 {
+        let modal = centered_rect(area, 46, 5);
+        frame.render_widget(Clear, modal);
+        frame.render_widget(
+            Paragraph::new("Resize terminal to at least 80x24")
+                .block(Block::default().title("settings").borders(Borders::ALL)),
+            modal,
+        );
+        return;
+    }
+
+    let Some(settings) = app.settings.as_ref() else {
+        return;
+    };
+    let panel = centered_rect(area, 76, 18);
+    frame.render_widget(Clear, panel);
+    let title = if settings.is_dirty() {
+        "wiremux settings *"
+    } else {
+        "wiremux settings"
+    };
+    let rows = settings
+        .rows()
+        .iter()
+        .enumerate()
+        .map(|(index, row)| render_settings_row(*row, index == settings.selected, &settings.draft))
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(rows).block(Block::default().title(title).borders(Borders::ALL)),
+        panel,
+    );
+
+    if let Some(popup) = settings.popup.as_ref() {
+        render_settings_popup(frame, panel, popup);
+    }
+}
+
+fn render_settings_row(row: SettingsRow, selected: bool, profile: &SerialProfile) -> Line<'static> {
+    let marker = if selected { "> " } else { "  " };
+    let text = match row {
+        SettingsRow::Field(field) => {
+            format!(
+                "{marker}  {:<18} ({}) --->",
+                settings_field_label(field),
+                settings_field_value(field, profile)
+            )
+        }
+        SettingsRow::Action(action) => format!("{marker}  {} --->", settings_action_label(action)),
+    };
+    if selected {
+        Line::from(Span::styled(
+            text,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        Line::from(text)
+    }
+}
+
+fn render_settings_popup(frame: &mut ratatui::Frame<'_>, parent: Rect, popup: &SettingsPopup) {
+    match popup {
+        SettingsPopup::TextInput { field, value, .. } => {
+            let area = centered_rect(parent, 52, 5);
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(format!("> {value}")).block(
+                    Block::default()
+                        .title(settings_field_label(*field))
+                        .borders(Borders::ALL),
+                ),
+                area,
+            );
+        }
+        SettingsPopup::ChoiceList { field, selected } => {
+            let area = centered_rect(parent, 42, 8);
+            frame.render_widget(Clear, area);
+            let rows = settings_choice_labels(*field)
+                .iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    let text = if index == *selected {
+                        format!("> <*>{label}")
+                    } else {
+                        format!("  < >{label}")
+                    };
+                    if index == *selected {
+                        Line::from(Span::styled(
+                            text,
+                            Style::default().fg(Color::Black).bg(Color::White),
+                        ))
+                    } else {
+                        Line::from(text)
+                    }
+                })
+                .collect::<Vec<_>>();
+            frame.render_widget(
+                Paragraph::new(rows).block(
+                    Block::default()
+                        .title(settings_field_label(*field))
+                        .borders(Borders::ALL),
+                ),
+                area,
+            );
+        }
+        SettingsPopup::ConfirmExit { selected } => {
+            let area = centered_rect(parent, 56, 6);
+            frame.render_widget(Clear, area);
+            let labels = ["Save + Apply", "Discard", "Cancel"];
+            let buttons = labels
+                .iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    if index == *selected {
+                        format!("[ {label} ]")
+                    } else {
+                        format!("  {label}  ")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("  ");
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from("Unsaved serial settings"),
+                    Line::from(buttons),
+                ])
+                .block(Block::default().title("confirm").borders(Borders::ALL)),
+                area,
+            );
+        }
+        SettingsPopup::Message(message) => {
+            let area = centered_rect(parent, 42, 5);
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(message.as_str())
+                    .block(Block::default().title("message").borders(Borders::ALL)),
+                area,
+            );
+        }
+    }
+}
+
+fn centered_rect(parent: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(parent.width);
+    let height = height.min(parent.height);
+    Rect::new(
+        parent.x + parent.width.saturating_sub(width) / 2,
+        parent.y + parent.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn settings_field_label(field: SettingsField) -> &'static str {
+    match field {
+        SettingsField::Port => "Serial Device",
+        SettingsField::Baud => "Baud Rate",
+        SettingsField::DataBits => "Data Bits",
+        SettingsField::StopBits => "Stop Bits",
+        SettingsField::Parity => "Parity",
+        SettingsField::FlowControl => "Flow Control",
+    }
+}
+
+fn settings_action_label(action: SettingsAction) -> &'static str {
+    match action {
+        SettingsAction::Apply => "Apply And Reconnect",
+        SettingsAction::SaveDefaults => "Save As Defaults",
+        SettingsAction::Discard => "Discard And Close",
+    }
+}
+
+fn settings_field_value(field: SettingsField, profile: &SerialProfile) -> String {
+    match field {
+        SettingsField::Port => profile.port.display().to_string(),
+        SettingsField::Baud => profile.baud.to_string(),
+        SettingsField::DataBits => profile.data_bits.to_string(),
+        SettingsField::StopBits => profile.stop_bits.to_string(),
+        SettingsField::Parity => profile.parity.to_string(),
+        SettingsField::FlowControl => profile.flow_control.to_string(),
+    }
+}
+
+fn settings_choice_labels(field: SettingsField) -> Vec<String> {
+    match field {
+        SettingsField::DataBits => [5, 6, 7, 8].iter().map(|value| value.to_string()).collect(),
+        SettingsField::StopBits => [1, 2].iter().map(|value| value.to_string()).collect(),
+        SettingsField::Parity => SerialParity::VALUES
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        SettingsField::FlowControl => SerialFlowControl::VALUES
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn render_output_row(
@@ -1821,12 +2447,6 @@ fn status_rows(app: &App) -> Vec<StatusRow> {
                 segment("input ", label),
                 segment(app.input_label(), Style::default()),
                 segment("  ", Style::default()),
-                segment("device ", label),
-                segment(app.manifest_label(), Style::default()),
-            ],
-        },
-        StatusRow {
-            segments: vec![
                 segment("backend ", label),
                 segment(app.backend_label.as_str(), Style::default()),
                 segment("  ", Style::default()),
@@ -1835,6 +2455,24 @@ fn status_rows(app: &App) -> Vec<StatusRow> {
                 segment("  ", Style::default()),
                 segment("status ", label),
                 segment(status_label(app), Style::default()),
+            ],
+        },
+        StatusRow {
+            segments: vec![
+                segment("conn ", label),
+                segment(
+                    app.connected_port
+                        .as_deref()
+                        .unwrap_or("disconnected")
+                        .to_string(),
+                    Style::default(),
+                ),
+                segment("  ", Style::default()),
+                segment("target ", label),
+                segment(app.serial.port.display().to_string(), Style::default()),
+                segment("  ", Style::default()),
+                segment("device ", label),
+                segment(app.manifest_label(), Style::default()),
             ],
         },
     ]
@@ -3183,8 +3821,8 @@ mod tests {
             &mut app,
             None,
             &TuiArgs {
-                port: "/tmp/fake".into(),
-                baud: 115200,
+                serial: test_serial_profile(),
+                config_path: PathBuf::from("/tmp/wiremux-config.toml"),
                 max_payload_len: 512,
                 reconnect_delay_ms: 500,
                 interactive_backend: InteractiveBackendMode::Auto,
@@ -3339,11 +3977,94 @@ mod tests {
 
         terminal.draw(|frame| render(frame, &app)).expect("draw");
 
-        let device_row = buffer_row(terminal.backend().buffer(), status_area.y + 1, area.width);
-        let backend_row = buffer_row(terminal.backend().buffer(), status_area.y + 2, area.width);
-        assert!(device_row.contains("device - - api=2"));
-        assert!(backend_row.contains("backend mio"));
-        assert!(backend_row.contains("fps 120"));
+        let runtime_row = buffer_row(terminal.backend().buffer(), status_area.y + 1, area.width);
+        let target_row = buffer_row(terminal.backend().buffer(), status_area.y + 2, area.width);
+        assert!(runtime_row.contains("backend mio"));
+        assert!(runtime_row.contains("fps 120"));
+        assert!(target_row.contains("target /dev/tty.usbmodem2101"));
+        assert!(target_row.contains("conn disconnected"));
+    }
+
+    #[test]
+    fn ctrl_b_s_opens_settings_panel() {
+        let mut app = App::new("diag.log".to_string());
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        )
+        .expect("prefix");
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()),
+        )
+        .expect("settings");
+
+        assert!(app.settings.is_some());
+        assert_eq!(app.status, "settings");
+    }
+
+    #[test]
+    fn settings_choice_apply_updates_serial_profile_and_reconnects() {
+        let mut app = App::new("diag.log".to_string());
+        app.settings = Some(SettingsState::new(app.serial.clone()));
+
+        for _ in 0..2 {
+            handle_settings_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+            )
+            .expect("move to data bits");
+        }
+        handle_settings_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        )
+        .expect("open data bits");
+        handle_settings_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::empty()))
+            .expect("select 7 data bits");
+        handle_settings_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        )
+        .expect("commit data bits");
+        for _ in 0..4 {
+            handle_settings_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+            )
+            .expect("move to apply");
+        }
+        handle_settings_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        )
+        .expect("apply");
+
+        assert_eq!(app.serial.data_bits, 7);
+        assert!(app.reconnect_requested);
+        assert!(app.settings.is_none());
+    }
+
+    #[test]
+    fn settings_render_uses_resize_overlay_below_minimum() {
+        let mut app = App::new("diag.log".to_string());
+        app.settings = Some(SettingsState::new(app.serial.clone()));
+        let area = Rect::new(0, 0, 60, 20);
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let text = (0..area.height)
+            .map(|row| buffer_row(terminal.backend().buffer(), row, area.width))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Resize terminal to at least 80x24"));
     }
 
     #[test]
@@ -3633,8 +4354,8 @@ mod tests {
 
     fn tui_args() -> TuiArgs {
         TuiArgs {
-            port: "/tmp/fake".into(),
-            baud: 115200,
+            serial: test_serial_profile(),
+            config_path: PathBuf::from("/tmp/wiremux-config.toml"),
             max_payload_len: 512,
             reconnect_delay_ms: 500,
             interactive_backend: InteractiveBackendMode::Auto,
