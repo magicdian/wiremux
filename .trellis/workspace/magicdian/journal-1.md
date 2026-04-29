@@ -1123,3 +1123,36 @@ Follow-up note:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: Proto API schema version path cleanup
+
+**Date**: 2026-04-29
+**Task**: Proto API schema version path cleanup
+**Branch**: `dev`
+
+### Summary
+
+Removed the duplicate top-level proto schema, moved API snapshots to versions/current and numbered snapshot paths, updated specs/docs/tests, and bumped release metadata to 2604.29.1.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `faa436e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
