@@ -1156,3 +1156,36 @@ Removed the duplicate top-level proto schema, moved API snapshots to versions/cu
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: Release workflow split and 2604.29.2 bump
+
+**Date**: 2026-04-29
+**Task**: Release workflow split and 2604.29.2 bump
+**Branch**: `dev`
+
+### Summary
+
+Split esp-registry release workflow into validate/publish jobs, gated publish on validate with artifact handoff and matrix upload, bumped version to 2604.29.2, and ignored local esp example .clangd.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f7f6d16` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-04-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1158 | Active |
+| `journal-1.md` | ~1191 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-04-29 | Release workflow split and 2604.29.2 bump | `f7f6d16` | `dev` |
 | 28 | 2026-04-29 | Proto API schema version path cleanup | `faa436e` | `dev` |
 | 27 | 2026-04-29 | Productize source layout and build orchestration | `505ea91` | `dev` |
 | 26 | 2026-04-28 | Host TUI selectable output | `af9f2e0` | `dev` |
