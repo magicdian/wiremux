@@ -6,7 +6,7 @@ This project uses one release version for host and SDK artifacts.
 
 Version format: `YYMM.DD.BuildNumber`.
 
-Current release: `2604.29.2`.
+Current release: `2604.29.3`.
 
 When publishing another release on the same date, increment `BuildNumber`. When
 publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
@@ -19,6 +19,7 @@ Examples:
 - `2604.28.1`: first release on 2026-04-28.
 - `2604.29.1`: proto API path cleanup release on 2026-04-29.
 - `2604.29.2`: release workflow split into validate/publish on 2026-04-29.
+- `2604.29.3`: release diagnostics update on 2026-04-29.
 
 Before a release, update:
 
@@ -173,10 +174,10 @@ before uploading.
 
 `validate` runs:
 
-- `tools/wiremux-build doctor`
 - `tools/wiremux-build check core`
 - `tools/wiremux-build check host`
 - install ESP-IDF `v5.4.1`
+- `tools/wiremux-build doctor`
 - `tools/wiremux-build check vendor-espressif`
 - `tools/wiremux-build package esp-registry`
 
@@ -198,7 +199,7 @@ Registry setup required before the first CI upload:
 5. Ensure the workflow namespace matches the registry namespace.
 
 GitHub Release events run from tag refs, for example
-`refs/tags/v2604.29.2`. Do not set Trusted Uploader Branch to `main` for this
+`refs/tags/v2604.29.3`. Do not set Trusted Uploader Branch to `main` for this
 workflow, or the registry OIDC authorization will not match. The workflow itself
 still fetches `origin/main` and fails before upload if the tagged release commit
 is not contained in `main`.

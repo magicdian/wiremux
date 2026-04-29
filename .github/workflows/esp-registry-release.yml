@@ -41,7 +41,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tools/wiremux-build doctor
+          echo "PATH=${PATH}"
+          command -v cc
+          command -v as
+          cc --version
+          as --version
           tools/wiremux-build check core
           tools/wiremux-build check host
 
@@ -56,6 +60,7 @@ jobs:
           WIREMUX_ESP_REGISTRY_NAMESPACE: ${{ env.ESP_REGISTRY_NAMESPACE }}
         run: |
           set -euo pipefail
+          tools/wiremux-build doctor
           tools/wiremux-build check vendor-espressif
           tools/wiremux-build package esp-registry
 
