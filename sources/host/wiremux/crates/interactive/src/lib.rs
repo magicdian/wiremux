@@ -8,7 +8,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use host_session::{PassthroughPolicy, NEWLINE_POLICY_CR, NEWLINE_POLICY_CRLF, NEWLINE_POLICY_LF};
+use host_session::{
+    ChannelDescriptor, DeviceManifest, MuxEnvelope, PassthroughPolicy,
+    CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_INPUT, NEWLINE_POLICY_CR, NEWLINE_POLICY_CRLF,
+    NEWLINE_POLICY_LF, PAYLOAD_KIND_TEXT,
+};
 use serde::{Deserialize, Serialize};
 use serialport::{DataBits, FlowControl, Parity, SerialPortBuilder, StopBits};
 
@@ -17,11 +21,16 @@ pub const INTERACTIVE_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(5);
 pub const DEFAULT_BAUD: u32 = 115_200;
 pub const DEFAULT_DATA_BITS: u8 = 8;
 pub const DEFAULT_STOP_BITS: u8 = 1;
+const VIRTUAL_SERIAL_OUTPUT_QUEUE_LIMIT: usize = 1024 * 1024;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct HostConfig {
     #[serde(default)]
     pub serial: SerialConfig,
+    #[serde(default)]
+    pub virtual_serial: VirtualSerialConfig,
+    #[serde(skip)]
+    pub virtual_serial_configured: bool,
 }
 
 impl HostConfig {
@@ -52,8 +61,77 @@ impl HostConfig {
     pub fn from_serial_profile(profile: &SerialProfile) -> Self {
         Self {
             serial: SerialConfig::from_profile(profile),
+            virtual_serial: VirtualSerialConfig::default(),
+            virtual_serial_configured: false,
         }
     }
+
+    pub fn from_serial_profile_and_virtual(
+        profile: &SerialProfile,
+        virtual_serial: VirtualSerialConfig,
+    ) -> Self {
+        Self {
+            serial: SerialConfig::from_profile(profile),
+            virtual_serial,
+            virtual_serial_configured: true,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for HostConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct HostConfigWire {
+            #[serde(default)]
+            serial: SerialConfig,
+            virtual_serial: Option<VirtualSerialConfig>,
+        }
+
+        let wire = HostConfigWire::deserialize(deserializer)?;
+        Ok(Self {
+            serial: wire.serial,
+            virtual_serial_configured: wire.virtual_serial.is_some(),
+            virtual_serial: wire.virtual_serial.unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VirtualSerialConfig {
+    #[serde(default = "default_virtual_serial_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub export: VirtualSerialExport,
+    #[serde(default = "default_virtual_serial_name_template")]
+    pub name_template: String,
+}
+
+impl Default for VirtualSerialConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            export: VirtualSerialExport::AllManifestChannels,
+            name_template: default_virtual_serial_name_template(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VirtualSerialExport {
+    #[default]
+    AllManifestChannels,
+}
+
+fn default_virtual_serial_enabled() -> bool {
+    true
+}
+
+fn default_virtual_serial_name_template() -> String {
+    "wiremux-{device}-{channel}".to_string()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -547,6 +625,398 @@ pub fn is_passthrough_escape_exit_suffix(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VirtualSerialInputOwner {
+    Host,
+    VirtualSerial,
+}
+
+impl fmt::Display for VirtualSerialInputOwner {
+    fn fmt(&self, frame: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host => frame.write_str("host"),
+            Self::VirtualSerial => frame.write_str("virtual-serial"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VirtualSerialEndpointInfo {
+    pub channel_id: u32,
+    pub name: String,
+    pub path: Option<PathBuf>,
+    pub input_capable: bool,
+    pub input_owner: VirtualSerialInputOwner,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VirtualSerialInputEvent {
+    Forward {
+        channel_id: u8,
+        payload: Vec<u8>,
+    },
+    Discarded {
+        channel_id: u32,
+        reason: String,
+        bytes: usize,
+    },
+}
+
+pub struct VirtualSerialBroker {
+    config: VirtualSerialConfig,
+    enabled: bool,
+    endpoints: Vec<VirtualSerialEndpoint>,
+}
+
+struct VirtualSerialEndpoint {
+    channel_id: u32,
+    name: String,
+    input_capable: bool,
+    input_owner: VirtualSerialInputOwner,
+    output_record_delimited: bool,
+    output_previous_was_cr: bool,
+    output_pending: Vec<u8>,
+    output_dropped_bytes: usize,
+    backend: VirtualSerialEndpointBackend,
+}
+
+enum VirtualSerialEndpointBackend {
+    Active(Box<dyn VirtualSerialEndpointIo>),
+    Unsupported(String),
+    Failed(String),
+}
+
+trait VirtualSerialEndpointIo {
+    fn path(&self) -> &Path;
+    fn write_output(&mut self, bytes: &[u8]) -> io::Result<usize>;
+    fn read_input(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>>;
+}
+
+impl VirtualSerialBroker {
+    pub fn new(config: VirtualSerialConfig) -> Self {
+        let enabled = config.enabled;
+        Self {
+            config,
+            enabled,
+            endpoints: Vec::new(),
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn config(&self) -> &VirtualSerialConfig {
+        &self.config
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool, manifest: Option<&DeviceManifest>) {
+        self.enabled = enabled;
+        if enabled {
+            if let Some(manifest) = manifest {
+                self.sync_manifest(manifest);
+            }
+        } else {
+            self.endpoints.clear();
+        }
+    }
+
+    pub fn sync_manifest(&mut self, manifest: &DeviceManifest) {
+        if !self.enabled {
+            self.endpoints.clear();
+            return;
+        }
+
+        self.endpoints = manifest
+            .channels
+            .iter()
+            .map(|channel| self.create_endpoint(manifest, channel))
+            .collect();
+    }
+
+    pub fn endpoint_infos(&self) -> Vec<VirtualSerialEndpointInfo> {
+        self.endpoints
+            .iter()
+            .map(VirtualSerialEndpoint::info)
+            .collect()
+    }
+
+    pub fn summary(&self) -> String {
+        if !self.enabled {
+            return "virtual serial disabled".to_string();
+        }
+        if self.endpoints.is_empty() {
+            return "virtual serial waiting for manifest".to_string();
+        }
+        let active = self
+            .endpoints
+            .iter()
+            .filter(|endpoint| matches!(endpoint.backend, VirtualSerialEndpointBackend::Active(_)))
+            .count();
+        format!("virtual serial {active}/{} endpoints", self.endpoints.len())
+    }
+
+    pub fn endpoint_path_for_channel(&self, channel_id: u32) -> Option<PathBuf> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| endpoint.channel_id == channel_id)
+            .and_then(|endpoint| match &endpoint.backend {
+                VirtualSerialEndpointBackend::Active(backend) => Some(backend.path().to_path_buf()),
+                _ => None,
+            })
+    }
+
+    pub fn input_owner(&self, channel_id: u32) -> Option<VirtualSerialInputOwner> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| endpoint.channel_id == channel_id)
+            .map(|endpoint| endpoint.input_owner)
+    }
+
+    pub fn toggle_input_owner(&mut self, channel_id: u32) -> Option<VirtualSerialInputOwner> {
+        let endpoint = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.channel_id == channel_id && endpoint.input_capable)?;
+        endpoint.input_owner = match endpoint.input_owner {
+            VirtualSerialInputOwner::Host => VirtualSerialInputOwner::VirtualSerial,
+            VirtualSerialInputOwner::VirtualSerial => VirtualSerialInputOwner::Host,
+        };
+        Some(endpoint.input_owner)
+    }
+
+    pub fn write_output(&mut self, envelope: &MuxEnvelope) -> io::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.channel_id == envelope.channel_id)
+        {
+            if matches!(endpoint.backend, VirtualSerialEndpointBackend::Active(_)) {
+                if envelope.kind == PAYLOAD_KIND_TEXT {
+                    let output = terminal_text_output_bytes(
+                        &envelope.payload,
+                        &mut endpoint.output_previous_was_cr,
+                        endpoint.output_record_delimited,
+                    );
+                    endpoint.enqueue_output(&output);
+                } else {
+                    endpoint.output_previous_was_cr = false;
+                    endpoint.enqueue_output(&envelope.payload);
+                }
+                endpoint.flush_output()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn poll_input(&mut self) -> io::Result<Vec<VirtualSerialInputEvent>> {
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+
+        let mut events = Vec::new();
+        let mut buf = [0u8; 4096];
+        for endpoint in &mut self.endpoints {
+            endpoint.flush_output()?;
+            let VirtualSerialEndpointBackend::Active(backend) = &mut endpoint.backend else {
+                continue;
+            };
+            loop {
+                let Some(read_len) = backend.read_input(&mut buf)? else {
+                    break;
+                };
+                if read_len == 0 {
+                    break;
+                }
+                if !endpoint.input_capable {
+                    events.push(VirtualSerialInputEvent::Discarded {
+                        channel_id: endpoint.channel_id,
+                        reason: "channel is output-only".to_string(),
+                        bytes: read_len,
+                    });
+                    continue;
+                }
+                if endpoint.input_owner != VirtualSerialInputOwner::VirtualSerial {
+                    events.push(VirtualSerialInputEvent::Discarded {
+                        channel_id: endpoint.channel_id,
+                        reason: "host owns input".to_string(),
+                        bytes: read_len,
+                    });
+                    continue;
+                }
+                let channel_id = match u8::try_from(endpoint.channel_id) {
+                    Ok(channel_id) => channel_id,
+                    Err(_) => {
+                        events.push(VirtualSerialInputEvent::Discarded {
+                            channel_id: endpoint.channel_id,
+                            reason: "channel id exceeds host input frame range".to_string(),
+                            bytes: read_len,
+                        });
+                        continue;
+                    }
+                };
+                events.push(VirtualSerialInputEvent::Forward {
+                    channel_id,
+                    payload: buf[..read_len].to_vec(),
+                });
+            }
+        }
+        Ok(events)
+    }
+
+    fn create_endpoint(
+        &self,
+        manifest: &DeviceManifest,
+        channel: &ChannelDescriptor,
+    ) -> VirtualSerialEndpoint {
+        let name = virtual_serial_name(&self.config.name_template, manifest, channel);
+        let input_capable = channel.directions.contains(&DIRECTION_INPUT);
+        let backend = match open_virtual_serial_endpoint(&name) {
+            Ok(backend) => VirtualSerialEndpointBackend::Active(backend),
+            Err(err) if err.kind() == io::ErrorKind::Unsupported => {
+                VirtualSerialEndpointBackend::Unsupported(err.to_string())
+            }
+            Err(err) => VirtualSerialEndpointBackend::Failed(err.to_string()),
+        };
+        VirtualSerialEndpoint {
+            channel_id: channel.channel_id,
+            name,
+            input_capable,
+            input_owner: VirtualSerialInputOwner::Host,
+            output_record_delimited: virtual_serial_record_delimited_output(channel),
+            output_previous_was_cr: false,
+            output_pending: Vec::new(),
+            output_dropped_bytes: 0,
+            backend,
+        }
+    }
+}
+
+fn terminal_text_output_bytes(
+    payload: &[u8],
+    previous_was_cr: &mut bool,
+    record_delimited: bool,
+) -> Vec<u8> {
+    let needs_record_break =
+        record_delimited && !payload.is_empty() && !matches!(payload.last(), Some(b'\r' | b'\n'));
+    let mut output = Vec::with_capacity(payload.len() + usize::from(needs_record_break) * 2);
+    for &byte in payload {
+        if byte == b'\n' && !*previous_was_cr {
+            output.push(b'\r');
+        }
+        output.push(byte);
+        *previous_was_cr = byte == b'\r';
+    }
+    if needs_record_break {
+        output.extend_from_slice(b"\r\n");
+        *previous_was_cr = false;
+    }
+    output
+}
+
+fn virtual_serial_record_delimited_output(channel: &ChannelDescriptor) -> bool {
+    channel.default_interaction_mode != CHANNEL_INTERACTION_PASSTHROUGH
+        && !channel
+            .interaction_modes
+            .contains(&CHANNEL_INTERACTION_PASSTHROUGH)
+}
+
+impl VirtualSerialEndpoint {
+    fn enqueue_output(&mut self, bytes: &[u8]) {
+        let available = VIRTUAL_SERIAL_OUTPUT_QUEUE_LIMIT.saturating_sub(self.output_pending.len());
+        let queued_len = bytes.len().min(available);
+        self.output_pending.extend_from_slice(&bytes[..queued_len]);
+        self.output_dropped_bytes += bytes.len() - queued_len;
+    }
+
+    fn flush_output(&mut self) -> io::Result<()> {
+        let VirtualSerialEndpointBackend::Active(backend) = &mut self.backend else {
+            return Ok(());
+        };
+        while !self.output_pending.is_empty() {
+            let written = backend.write_output(&self.output_pending)?;
+            if written == 0 {
+                break;
+            }
+            self.output_pending.drain(..written);
+        }
+        Ok(())
+    }
+
+    fn info(&self) -> VirtualSerialEndpointInfo {
+        let (path, status) = match &self.backend {
+            VirtualSerialEndpointBackend::Active(backend) => {
+                (Some(backend.path().to_path_buf()), "active".to_string())
+            }
+            VirtualSerialEndpointBackend::Unsupported(reason) => {
+                (None, format!("unsupported: {reason}"))
+            }
+            VirtualSerialEndpointBackend::Failed(reason) => (None, format!("failed: {reason}")),
+        };
+        VirtualSerialEndpointInfo {
+            channel_id: self.channel_id,
+            name: self.name.clone(),
+            path,
+            input_capable: self.input_capable,
+            input_owner: self.input_owner,
+            status,
+        }
+    }
+}
+
+fn virtual_serial_name(
+    template: &str,
+    manifest: &DeviceManifest,
+    channel: &ChannelDescriptor,
+) -> String {
+    let device = sanitize_virtual_serial_name_part(&manifest.device_name);
+    let channel_name = if channel.name.is_empty() {
+        format!("ch{}", channel.channel_id)
+    } else {
+        sanitize_virtual_serial_name_part(&channel.name)
+    };
+    template
+        .replace(
+            "{device}",
+            if device.is_empty() { "device" } else { &device },
+        )
+        .replace("{channel}", &channel_name)
+        .replace("{channel_id}", &channel.channel_id.to_string())
+}
+
+fn sanitize_virtual_serial_name_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+#[cfg(unix)]
+fn open_virtual_serial_endpoint(_name: &str) -> io::Result<Box<dyn VirtualSerialEndpointIo>> {
+    unix_virtual_serial::UnixVirtualSerialEndpoint::open()
+        .map(|endpoint| Box::new(endpoint) as Box<dyn VirtualSerialEndpointIo>)
+}
+
+#[cfg(not(unix))]
+fn open_virtual_serial_endpoint(_name: &str) -> io::Result<Box<dyn VirtualSerialEndpointIo>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "virtual serial backend is not implemented on this platform",
+    ))
+}
+
 fn newline_bytes(policy: u32) -> &'static [u8] {
     match policy {
         NEWLINE_POLICY_LF => b"\n",
@@ -800,6 +1270,78 @@ fn open_mio_backend(
 }
 
 #[cfg(unix)]
+mod unix_virtual_serial {
+    use std::io::{self, Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::path::{Path, PathBuf};
+
+    use nix::fcntl::{fcntl, FcntlArg, OFlag};
+    use nix::pty::{grantpt, posix_openpt, ptsname, unlockpt, PtyMaster};
+
+    use super::VirtualSerialEndpointIo;
+
+    pub(super) struct UnixVirtualSerialEndpoint {
+        master: PtyMaster,
+        path: PathBuf,
+    }
+
+    impl UnixVirtualSerialEndpoint {
+        pub(super) fn open() -> io::Result<Self> {
+            let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).map_err(nix_error_to_io)?;
+            grantpt(&master).map_err(nix_error_to_io)?;
+            unlockpt(&master).map_err(nix_error_to_io)?;
+            let path = unsafe { ptsname(&master) }
+                .map(PathBuf::from)
+                .map_err(nix_error_to_io)?;
+            set_nonblocking(&master)?;
+            Ok(Self { master, path })
+        }
+    }
+
+    impl VirtualSerialEndpointIo for UnixVirtualSerialEndpoint {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn write_output(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            match self.master.write(bytes) {
+                Ok(written) => Ok(written),
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(0),
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    Ok(0)
+                }
+                Err(err) => Err(err),
+            }
+        }
+
+        fn read_input(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
+            match self.master.read(buf) {
+                Ok(read_len) => Ok(Some(read_len)),
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(None),
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(None),
+                Err(err) => Err(err),
+            }
+        }
+    }
+
+    fn set_nonblocking(master: &PtyMaster) -> io::Result<()> {
+        let flags = fcntl(master.as_raw_fd(), FcntlArg::F_GETFL).map_err(nix_error_to_io)?;
+        let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
+        fcntl(master.as_raw_fd(), FcntlArg::F_SETFL(flags)).map_err(nix_error_to_io)?;
+        Ok(())
+    }
+
+    fn nix_error_to_io(err: nix::Error) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, err.to_string())
+    }
+}
+
+#[cfg(unix)]
 mod unix_mio {
     use std::fs::File;
     use std::io::{self, IsTerminal, Read, Write};
@@ -946,13 +1488,19 @@ mod tests {
     use super::{
         is_passthrough_exit_key, is_passthrough_meta_exit_key, paired_tty_cu_path,
         passthrough_key_payload, port_candidates, requested_file_name_starts_with,
-        retry_interrupted, usbmodem_fragment, HostConfig, SerialConfig, SerialFlowControl,
-        SerialParity, SerialProfileOverrides,
+        retry_interrupted, terminal_text_output_bytes, usbmodem_fragment,
+        virtual_serial_record_delimited_output, HostConfig, SerialConfig, SerialFlowControl,
+        SerialParity, SerialProfileOverrides, VirtualSerialConfig, VirtualSerialEndpoint,
+        VirtualSerialEndpointBackend, VirtualSerialEndpointIo, VirtualSerialExport,
+        VirtualSerialInputOwner,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use host_session::{ChannelDescriptor, CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_OUTPUT};
     use std::cell::Cell;
+    use std::collections::VecDeque;
     use std::io;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
 
     #[test]
     fn serial_config_resolves_profile_with_defaults_and_overrides() {
@@ -965,6 +1513,7 @@ mod tests {
                 parity: SerialParity::None,
                 flow_control: SerialFlowControl::None,
             },
+            ..Default::default()
         };
 
         let profile = config
@@ -1014,6 +1563,12 @@ parity = "even"
 flow_control = "hardware"
 "#;
         let config: HostConfig = toml::from_str(input).expect("toml parses");
+        assert!(!config.virtual_serial_configured);
+        assert!(config.virtual_serial.enabled);
+        assert_eq!(
+            config.virtual_serial.export,
+            VirtualSerialExport::AllManifestChannels
+        );
         let profile = config
             .serial
             .resolve_profile(SerialProfileOverrides::default())
@@ -1031,6 +1586,172 @@ flow_control = "hardware"
         assert!(serialized.contains("baud = 921600"));
         assert!(serialized.contains("data_bits = 7"));
         assert!(serialized.contains("parity = \"even\""));
+    }
+
+    #[test]
+    fn host_config_parses_virtual_serial_section() {
+        let input = r#"
+[serial]
+port = "/dev/tty.usbserial-a"
+
+[virtual_serial]
+enabled = false
+export = "all-manifest-channels"
+name_template = "wiremux-{device}-{channel_id}"
+"#;
+        let config: HostConfig = toml::from_str(input).expect("toml parses");
+        assert!(config.virtual_serial_configured);
+        assert_eq!(
+            config.virtual_serial,
+            VirtualSerialConfig {
+                enabled: false,
+                export: VirtualSerialExport::AllManifestChannels,
+                name_template: "wiremux-{device}-{channel_id}".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn virtual_serial_text_output_maps_lf_to_crlf() {
+        let mut previous_was_cr = false;
+
+        assert_eq!(
+            terminal_text_output_bytes(b"one\ntwo\r\nthree\r", &mut previous_was_cr, false),
+            b"one\r\ntwo\r\nthree\r"
+        );
+        assert!(previous_was_cr);
+
+        assert_eq!(
+            terminal_text_output_bytes(b"\nfour\n", &mut previous_was_cr, false),
+            b"\nfour\r\n"
+        );
+        assert!(!previous_was_cr);
+    }
+
+    #[test]
+    fn virtual_serial_text_output_appends_record_break_for_line_channels() {
+        let mut previous_was_cr = false;
+
+        assert_eq!(
+            terminal_text_output_bytes(b"stress record", &mut previous_was_cr, true),
+            b"stress record\r\n"
+        );
+        assert!(!previous_was_cr);
+
+        assert_eq!(
+            terminal_text_output_bytes(b"already ended\n", &mut previous_was_cr, true),
+            b"already ended\r\n"
+        );
+        assert!(!previous_was_cr);
+
+        assert_eq!(
+            terminal_text_output_bytes(b"carriage\r", &mut previous_was_cr, true),
+            b"carriage\r"
+        );
+        assert!(previous_was_cr);
+    }
+
+    #[test]
+    fn virtual_serial_text_output_preserves_passthrough_stream_boundaries() {
+        let mut previous_was_cr = false;
+
+        assert_eq!(
+            terminal_text_output_bytes(b"partial", &mut previous_was_cr, false),
+            b"partial"
+        );
+        assert!(!previous_was_cr);
+    }
+
+    fn test_channel_descriptor(
+        channel_id: u32,
+        interaction_modes: Vec<u32>,
+        default_interaction_mode: u32,
+    ) -> ChannelDescriptor {
+        ChannelDescriptor {
+            channel_id,
+            name: "test".to_string(),
+            description: String::new(),
+            directions: vec![DIRECTION_OUTPUT],
+            payload_kinds: Vec::new(),
+            payload_types: Vec::new(),
+            flags: 0,
+            default_payload_kind: 0,
+            interaction_modes,
+            default_interaction_mode,
+            passthrough_policy: Default::default(),
+        }
+    }
+
+    #[test]
+    fn virtual_serial_uses_record_delimiters_only_for_non_passthrough_channels() {
+        let line_channel = test_channel_descriptor(1, Vec::new(), 0);
+        assert!(virtual_serial_record_delimited_output(&line_channel));
+
+        let passthrough_channel =
+            test_channel_descriptor(1, vec![CHANNEL_INTERACTION_PASSTHROUGH], 0);
+        assert!(!virtual_serial_record_delimited_output(
+            &passthrough_channel
+        ));
+
+        let default_passthrough_channel =
+            test_channel_descriptor(1, Vec::new(), CHANNEL_INTERACTION_PASSTHROUGH);
+        assert!(!virtual_serial_record_delimited_output(
+            &default_passthrough_channel
+        ));
+    }
+
+    #[test]
+    fn virtual_serial_output_backpressure_is_queued() {
+        struct ScriptedEndpoint {
+            writes: Rc<std::cell::RefCell<VecDeque<usize>>>,
+            output: Rc<std::cell::RefCell<Vec<u8>>>,
+        }
+
+        impl VirtualSerialEndpointIo for ScriptedEndpoint {
+            fn path(&self) -> &Path {
+                Path::new("/dev/null")
+            }
+
+            fn write_output(&mut self, buf: &[u8]) -> io::Result<usize> {
+                let written = self.writes.borrow_mut().pop_front().unwrap_or(0);
+                self.output.borrow_mut().extend_from_slice(&buf[..written]);
+                Ok(written)
+            }
+
+            fn read_input(&mut self, _buf: &mut [u8]) -> io::Result<Option<usize>> {
+                Ok(None)
+            }
+        }
+
+        let writes = Rc::new(std::cell::RefCell::new(VecDeque::from([3, 0, 3])));
+        let output = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut endpoint = VirtualSerialEndpoint {
+            channel_id: 1,
+            name: "console".to_string(),
+            input_capable: false,
+            input_owner: VirtualSerialInputOwner::Host,
+            output_record_delimited: true,
+            output_previous_was_cr: false,
+            output_pending: Vec::new(),
+            output_dropped_bytes: 0,
+            backend: VirtualSerialEndpointBackend::Active(Box::new(ScriptedEndpoint {
+                writes,
+                output: output.clone(),
+            })),
+        };
+
+        endpoint.enqueue_output(b"abcdef");
+        endpoint
+            .flush_output()
+            .expect("backpressure should keep pending output queued");
+        assert_eq!(&*output.borrow(), b"abc");
+        assert_eq!(endpoint.output_pending, b"def");
+
+        endpoint
+            .flush_output()
+            .expect("later writable poll should drain pending output");
+        assert_eq!(&*output.borrow(), b"abcdef");
+        assert!(endpoint.output_pending.is_empty());
     }
 
     #[test]

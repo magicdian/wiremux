@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[![Version](https://img.shields.io/badge/version-2604.29.4-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2604.29.7-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以在一个 UART、USB CDC、USB Serial/JTAG、TCP bridge 或其他有序字节 transport 上同时承载多个逻辑 channel，让日志、console 命令、telemetry 和诊断数据不再挤在同一个原始字节流里。
@@ -137,9 +137,23 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200 --tui-fps 120
 - `listen --line TEXT`：连接后发送一次 host-to-device input frame，然后继续用同一个串口 handle 监听。
 - `send`：发送一次 input frame 后退出。
 - `passthrough --channel N`：attach 到一个 mux channel 并立即转发按键；`Ctrl-]` 或先按 `Esc` 再按 `x` 退出。可选 `--interactive-backend auto|compat|mio`，`auto` 在 Unix 上优先使用 `mio`，其他平台使用 `compat`。
-- `tui`：打开 ratatui 交互界面，支持 channel 过滤、滚动历史、可选中复制的输出/status 文本、manifest 展示、status 中的 backend/FPS 信息、原生输入光标以及 manifest 驱动的 line/passthrough 输入；`Ctrl-C`、`Ctrl-]` 或先按 `Esc` 再按 `x` 退出。可用 `--interactive-backend auto|compat|mio` 选择事件 backend，用 `--tui-fps 60|120` 覆盖默认 60 fps / Ghostty 自动 120 fps。
+- `tui`：打开 ratatui 交互界面，支持 channel 过滤、滚动历史、可选中复制的输出/status 文本、manifest 展示、status 中的 backend/FPS 信息、原生输入光标、manifest 驱动的 line/passthrough 输入，以及 generic enhanced 虚拟串口；`Ctrl-C`、`Ctrl-]` 或先按 `Esc` 再按 `x` 退出。`Ctrl-B v` 切换当前 session 的虚拟串口，`Ctrl-B o` 切换当前 channel 的输入 owner。可用 `--interactive-backend auto|compat|mio` 选择事件 backend，用 `--tui-fps 60|120` 覆盖默认 60 fps / Ghostty 自动 120 fps。
 
 macOS 上可以传入 `/dev/tty.usbmodem*`，host 工具会优先尝试配对的 `/dev/cu.usbmodem*`。
+
+host 全局配置可以控制 generic enhanced 虚拟串口。generic host 不包含这个 overlay，
+会忽略 `[virtual_serial]`。省略 `[virtual_serial]` 时，generic enhanced、vendor
+enhanced 和 all-feature 构建默认启用，并导出 manifest 中的所有 channel。output-only
+channel 是只读 PTY；input-capable channel 只有在输入 owner 切换到虚拟串口后才会转发写入。
+
+```toml
+[virtual_serial]
+enabled = true
+export = "all-manifest-channels"
+name_template = "wiremux-{device}-{channel}"
+```
+
+Windows 暂时只保留虚拟串口接口占位，后续再接入 native virtual COM backend。
 
 ## ESP-IDF 示例
 

@@ -9,9 +9,12 @@ The product model is:
 
 - `wiremux-core` provides framing, multiplexing, channel metadata, manifest
   exchange, and future generic control or reliable transfer primitives.
-- `wiremux-host enhanced` provides batteries-included Rust tooling such as TUI,
-  CLI, broker services, virtual TTY/port bridges, transfer orchestration, and
-  device-aware adapters.
+- `wiremux-host generic enhanced` provides vendor-neutral Rust tooling such as
+  TUI integration, broker services, virtual TTY/port bridges, transfer
+  orchestration, diagnostics, capture/replay, and other overlays that can apply
+  to any device family.
+- `wiremux-host vendor enhanced` composes generic enhanced behavior with
+  device-aware adapters such as ESP32 OTA/esptool or Raspberry Pi UF2/control.
 - Device SDK adapters implement platform-specific profiles on top of the core.
 - Profiles are the HAL-like boundary between host enhanced tooling and device
   implementations.
@@ -34,14 +37,21 @@ pre-migration paths.
 └────────────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────────────┐
-│                    WIREMUX HOST ENHANCED                           │
+│                    WIREMUX HOST GENERIC ENHANCED                   │
 │                                                                    │
 │   connection manager     manifest resolver     profile registry     │
 │   transfer manager       virtual port manager  diagnostics          │
+│   virtual serial broker  capture/replay       tcp bridge            │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│                    WIREMUX HOST VENDOR ENHANCED                    │
+│                                                                    │
+│   Loaded according to selected build features and active manifest.  │
 │                                                                    │
 │   ┌────────────────┐   ┌────────────────┐   ┌────────────────┐     │
-│   │ ESP32 Adapter  │   │ RPi Adapter    │   │ Generic Adapter │     │
-│   │ OTA / esptool  │   │ UF2 / control  │   │ transfer / pty  │     │
+│   │ ESP32 Adapter  │   │ RPi Adapter    │   │ Vendor Adapter  │     │
+│   │ OTA / esptool  │   │ UF2 / control  │   │ device control  │     │
 │   └────────────────┘   └────────────────┘   └────────────────┘     │
 └────────────────────────────────────────────────────────────────────┘
 
@@ -125,22 +135,59 @@ The core should not define:
 
 ## Host Enhanced Responsibilities
 
-`wiremux-host enhanced` is the official Rust tool layer for higher-level product
+Host enhanced is the official Rust tool layer for higher-level product
 features. It may be larger and more opinionated than the core because it can
-bundle common adapters and user workflows.
+bundle common adapters and user workflows, but it is split into generic and
+vendor overlays.
 
-Host enhanced responsibilities include:
+Generic enhanced responsibilities include:
 
 - serial, TCP, BLE, and future connection management
 - manifest resolution and profile discovery
 - profile registry and adapter dispatch
 - transfer progress, retry, cancel, and diagnostics UX
 - virtual TTY, TCP bridge, broker, and capture/replay features
+- generic virtual serial endpoints for every manifest channel
+- input ownership and policy hooks for host vs virtual endpoint writes
+
+Vendor enhanced responsibilities include:
+
 - device-aware adapters such as ESP32 OTA or Raspberry Pi control workflows
 - compatibility bridges such as an ESP-IDF/esptool-facing virtual port
+- vendor policy for claiming a generic enhanced service, such as an ESP32
+  flashing PTY taking input ownership while a flashing tool is attached
 
 Users who only need the protocol can depend on `wiremux-core` and build their
 own host or device integration without carrying the enhanced host feature set.
+
+## Host Overlay Loading
+
+Build modes control which host overlays are compiled:
+
+- `generic`: core host protocol behavior only.
+- `generic-enhanced`: generic host overlays such as virtual serial and broker
+  services.
+- `vendor-enhanced`: generic enhanced plus the selected vendor adapter feature.
+- `all-features`: generic enhanced plus all compiled vendor adapter features.
+
+Compiled code does not imply every service is active at runtime. A running host
+instantiates generic enhanced services first, then activates only the vendor
+adapter that matches the connected device manifest/profile. This keeps memory
+bounded by active services and the connected device family instead of loading
+every compiled vendor adapter.
+
+The generic virtual serial broker is part of the generic enhanced overlay. A
+generic host build cannot enable it, even if `[virtual_serial]` appears in the
+host config. Generic enhanced, vendor enhanced, and all-feature builds enable it
+by default when config omits the section, and then the config may explicitly
+disable or enable it. When enabled, it exports all manifest channels by default.
+Output-only channels are read-only virtual endpoints. Input-capable channels
+accept writes only when the input-ownership gate grants ownership to the virtual
+endpoint. For non-passthrough text channels, the broker maps mux record
+boundaries to terminal line endings so tools such as `minicom` and `screen`
+render each record as a separate line; passthrough channels preserve byte-stream
+semantics. Vendor enhanced adapters may later request ownership for special
+endpoints, for example an ESP32 aggregate flashing PTY.
 
 ## Profile Discovery
 

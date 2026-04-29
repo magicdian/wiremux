@@ -508,6 +508,150 @@ Unix mio and compat both emit `InteractiveEvent` values. TUI and passthrough own
 the protocol/session/status behavior above that shared backend boundary.
 ```
 
+## Scenario: Generic Enhanced Virtual Serial Overlay
+
+### 1. Scope / Trigger
+
+Trigger: changing generic enhanced host mode, virtual serial endpoints, TUI
+input ownership, host config handling, or virtual serial output formatting.
+
+This is a host overlay boundary spanning build selection, CLI config resolution,
+`interactive` PTY I/O, and TUI controls.
+
+### 2. Signatures
+
+Commands and feature modes:
+
+```bash
+cd sources/host/wiremux
+cargo run --features generic-enhanced -- tui
+cargo run --features all-features -- tui
+cargo test --features generic
+cargo test --features generic-enhanced
+cargo test --features all-features
+```
+
+Configuration:
+
+```toml
+[virtual_serial]
+enabled = true
+export = "all-manifest-channels"
+name_template = "wiremux-{device}-{channel}"
+```
+
+TUI shortcuts:
+
+```text
+Ctrl-B v  toggle virtual serial when the host build supports generic enhanced
+Ctrl-B o  toggle active filtered channel input owner between host and virtual serial
+```
+
+Core implementation points:
+
+```text
+sources/host/wiremux/crates/interactive/src/lib.rs
+  VirtualSerialBroker
+  VirtualSerialEndpointIo::write_output(&mut self, bytes: &[u8]) -> io::Result<usize>
+  terminal_text_output_bytes(payload, previous_was_cr, record_delimited)
+sources/host/wiremux/crates/tui/src/lib.rs
+  handle_virtual_serial_input
+  handle_stream_event
+```
+
+### 3. Contracts
+
+- `generic` host builds are core-only. They must not activate virtual serial
+  from default config, explicit `[virtual_serial]`, or `Ctrl-B v`.
+- `generic-enhanced`, vendor enhanced, and `all-features` builds support the
+  generic virtual serial overlay. If config omits `[virtual_serial]`, virtual
+  serial defaults to enabled in these builds.
+- The default export policy is `all-manifest-channels`. Each manifest channel
+  gets one endpoint when virtual serial is enabled and the backend supports it.
+- Output-only endpoints are read-only. Input-capable endpoints start with
+  `VirtualSerialInputOwner::Host`; TUI `Ctrl-B o` can hand ownership to the
+  virtual endpoint for the active filtered channel.
+- Unix/macOS use PTY endpoints opened through `VirtualSerialEndpointIo`.
+  Windows may compile the interface but returns unsupported until a virtual COM
+  backend is implemented.
+- Text payloads mirrored to terminal clients normalize LF to CRLF. Non-empty
+  non-passthrough text mux records that do not already end in CR or LF receive a
+  synthetic CRLF record break. Channels advertising
+  `CHANNEL_INTERACTION_PASSTHROUGH` preserve byte-stream semantics and must not
+  receive synthetic record breaks.
+- PTY output backpressure is bounded per endpoint. `WouldBlock`, `TimedOut`, and
+  `Interrupted` write results keep pending bytes queued for later flush; queue
+  overflow drops only overflow bytes and should not spam TUI status.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| `generic` build with `[virtual_serial] enabled = true` | TUI reports virtual serial unsupported and creates no endpoints |
+| `generic-enhanced` build with config omitting `[virtual_serial]` | virtual serial starts enabled after manifest sync |
+| User presses `Ctrl-B v` before manifest | broker toggles state and waits for manifest |
+| Manifest has output-only channel | virtual endpoint mirrors output and discards writes without host input frames |
+| Input-capable channel, owner is host | virtual serial writes are discarded with reason `host owns input` |
+| Input-capable channel, owner is virtual serial | virtual serial writes become mux input frames |
+| Non-passthrough text payload `mock stress 1` | endpoint receives `mock stress 1\r\n` |
+| Non-passthrough text payload ending `\n` | endpoint receives exactly one terminal CRLF ending |
+| Passthrough text payload `partial` | endpoint receives `partial` with no synthetic record break |
+| PTY write returns `WouldBlock` | unwritten bytes remain queued and later flush without diagnostics noise |
+| Platform has no backend | endpoint status is unsupported; TUI continues running |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `cargo run --features generic-enhanced -- tui` exports manifest channels
+  and `minicom` shows bursty non-passthrough text records as separate lines.
+- Good: passthrough console echo split across mux records remains a byte stream
+  in the virtual endpoint, preserving future flashing/tool passthrough behavior.
+- Base: `cargo run -- tui` in a generic build keeps virtual serial unavailable
+  even if the user saved `[virtual_serial] enabled = true`.
+- Bad: appending CRLF to every text payload, including passthrough channels,
+  corrupts byte-oriented tools such as future esptool passthrough.
+- Bad: treating PTY `EAGAIN` as a user-visible output error makes minicom/screen
+  look unreliable during normal terminal backpressure.
+
+### 6. Tests Required
+
+- `interactive` tests must cover LF-to-CRLF normalization, synthetic record
+  breaks for non-passthrough text records, passthrough stream preservation, and
+  output queue retry after backpressure.
+- `tui` tests must cover unsupported generic builds, toggling virtual serial,
+  and toggling active channel input ownership.
+- `cli` tests must cover default virtual serial config behavior in supported
+  and unsupported host modes.
+- `tools/wiremux-build check host` must pass because it exercises generic,
+  generic-enhanced, vendor, and all-feature host modes.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Virtual serial mirrors text payload bytes exactly for every channel, so multiple
+non-passthrough mux records without trailing newline collapse into one minicom row.
+```
+
+#### Correct
+
+```text
+Virtual serial uses terminal line semantics only for non-passthrough text records
+and preserves passthrough channels as byte streams.
+```
+
+#### Wrong
+
+```text
+Generic host mode reads `[virtual_serial] enabled = true` and creates PTYs.
+```
+
+#### Correct
+
+```text
+Only generic-enhanced or higher host builds can activate the virtual serial overlay.
+```
+
 ## Scenario: Release Versioning and ESP Registry Packaging
 
 ### 1. Scope / Trigger
@@ -702,7 +846,7 @@ Command signatures:
 
 ```bash
 tools/wiremux-build lunch
-tools/wiremux-build lunch --vendor <skip|all|model-id> --host <generic|vendor-enhanced|all-features>
+tools/wiremux-build lunch --vendor <skip|all|model-id> --host <generic|generic-enhanced|vendor-enhanced|all-features>
 tools/wiremux-build env --shell bash|zsh
 tools/wiremux-build check [core|host|vendor|all]
 tools/wiremux-build build [core|host|vendor]
@@ -749,12 +893,15 @@ WIREMUX_VENDOR_EXAMPLE
 - `build/wiremux-vendors.toml` owns vendor scopes/models. Built-in scope ids are
   `skip` and `all`; concrete models use `kind = "model"`.
 - `build/wiremux-hosts.toml` owns host modes. Valid mode ids are `generic`,
-  `vendor-enhanced`, and `all-features`.
+  `generic-enhanced`, `vendor-enhanced`, and `all-features`.
 - `tools/wiremux-build lunch` is the primary interactive flow. Non-interactive
   selection uses `lunch --vendor <id> --host <id>`.
 - Positional `lunch <device> <host-preset>` arguments are not supported.
-- `vendor-enhanced` requires a single concrete vendor model. Vendor scopes
-  `skip` and `all` allow only `generic` or `all-features`.
+- `generic-enhanced` contains vendor-neutral host overlays such as virtual
+  serial endpoints. `vendor-enhanced` requires a single concrete vendor model
+  and composes generic enhanced behavior with the selected vendor adapter.
+  Vendor scopes `skip` and `all` allow `generic`, `generic-enhanced`, or
+  `all-features`.
 - Initial vendor build/check dispatch supports ESP32-S3. Other listed models may
   remain placeholders but must fail clearly if execution is requested.
 - ESP32-S3 vendor dispatch runs in
@@ -793,6 +940,7 @@ WIREMUX_VENDOR_EXAMPLE
 | `tools/wiremux-build build` has no selector | build core, selected host, and selected vendor scope |
 | `vendor-espressif` is used as a selector | fail with a deterministic target error |
 | selected vendor is `esp32-s3` and host is `vendor-enhanced` | host build uses Cargo feature `esp32` |
+| selected host is `generic-enhanced` | host build uses Cargo feature `generic-enhanced` |
 | selected vendor is `all` | build vendor dispatches implemented model entries with `include_in_all = true` |
 | selected vendor is `skip` | build vendor prints a warning and does not invoke `idf.py` |
 | selected vendor is `esp32-s3` and `idf.py` is available | build vendor runs `idf.py set-target esp32s3` before `idf.py build` |

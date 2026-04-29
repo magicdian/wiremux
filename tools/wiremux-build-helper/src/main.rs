@@ -14,6 +14,7 @@ const VENDOR_KIND_ALL: &str = "all";
 const VENDOR_KIND_MODEL: &str = "model";
 
 const HOST_GENERIC: &str = "generic";
+const HOST_GENERIC_ENHANCED: &str = "generic-enhanced";
 const HOST_VENDOR_ENHANCED: &str = "vendor-enhanced";
 const HOST_ALL_FEATURES: &str = "all-features";
 
@@ -216,7 +217,7 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: wiremux-build <command>\n  lunch [--vendor <skip|all|model> --host <generic|vendor-enhanced|all-features>]\n  env --shell bash|zsh\n  doctor\n  check [core|host|vendor|all]\n  build [core|host|vendor]\n  package esp-registry".to_string()
+    "usage: wiremux-build <command>\n  lunch [--vendor <skip|all|model> --host <generic|generic-enhanced|vendor-enhanced|all-features>]\n  env --shell bash|zsh\n  doctor\n  check [core|host|vendor|all]\n  build [core|host|vendor]\n  package esp-registry".to_string()
 }
 
 fn repo_root() -> Result<PathBuf, String> {
@@ -838,6 +839,7 @@ fn run_host_gate_check(repo_root: &Path, vendor_config: &VendorConfig) -> Result
 fn host_gate_features(vendor_config: &VendorConfig) -> Vec<String> {
     let mut features = Vec::new();
     push_unique(&mut features, HOST_GENERIC.to_string());
+    push_unique(&mut features, HOST_GENERIC_ENHANCED.to_string());
     push_unique(&mut features, HOST_ALL_FEATURES.to_string());
     for vendor in &vendor_config.vendors {
         if vendor.kind == VENDOR_KIND_MODEL && vendor.implemented {
@@ -877,6 +879,7 @@ fn cargo_args_with_host_features(
 ) -> Result<Vec<String>, String> {
     let feature = match selected.host.as_str() {
         HOST_GENERIC => "generic".to_string(),
+        HOST_GENERIC_ENHANCED => HOST_GENERIC_ENHANCED.to_string(),
         HOST_ALL_FEATURES => HOST_ALL_FEATURES.to_string(),
         HOST_VENDOR_ENHANCED => {
             if selected.vendor_kind != VENDOR_KIND_MODEL {
@@ -1258,6 +1261,16 @@ mod tests {
                     ],
                 },
                 HostDef {
+                    id: HOST_GENERIC_ENHANCED.to_string(),
+                    label: "Generic enhanced".to_string(),
+                    profile: "generic-enhanced".to_string(),
+                    allowed_vendor_kinds: vec![
+                        VENDOR_KIND_SKIP.to_string(),
+                        VENDOR_KIND_ALL.to_string(),
+                        VENDOR_KIND_MODEL.to_string(),
+                    ],
+                },
+                HostDef {
                     id: HOST_VENDOR_ENHANCED.to_string(),
                     label: "Vendor enhanced".to_string(),
                     profile: "vendor-enhanced".to_string(),
@@ -1336,6 +1349,16 @@ mod tests {
     }
 
     #[test]
+    fn generic_enhanced_allows_any_vendor_scope() {
+        let vendors = sample_vendors();
+        let hosts = sample_hosts();
+
+        validate_selection(&vendors, &hosts, "skip", HOST_GENERIC_ENHANCED).unwrap();
+        validate_selection(&vendors, &hosts, "all", HOST_GENERIC_ENHANCED).unwrap();
+        validate_selection(&vendors, &hosts, "esp32-s3", HOST_GENERIC_ENHANCED).unwrap();
+    }
+
+    #[test]
     fn vendor_all_dispatches_only_implemented_included_models() {
         let vendors = sample_vendors();
         let selected =
@@ -1361,6 +1384,7 @@ mod tests {
             features,
             vec![
                 HOST_GENERIC.to_string(),
+                HOST_GENERIC_ENHANCED.to_string(),
                 HOST_ALL_FEATURES.to_string(),
                 "esp32".to_string()
             ]

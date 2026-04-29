@@ -98,6 +98,22 @@ Required behavior:
 | serial read returns `Interrupted` in an interactive backend | continue reading; do not report EOF or disconnect |
 | serial read returns any other unexpected error | report it through the normal serial error path |
 
+Virtual serial output mirroring is best-effort but must tolerate normal PTY
+backpressure. Unix PTY masters are opened in non-blocking mode so TUI input
+polling can share the same handle. If mirroring device output to a virtual serial
+endpoint returns `WouldBlock`/`EAGAIN` or `TimedOut`, retain the unwritten mirror
+bytes in that endpoint's bounded output queue and retry on later virtual-serial
+polls. If the queue limit is reached, drop only the overflow bytes and keep the
+TUI status clean. These backpressure events are not device or host-session
+errors. Unexpected I/O errors should still be surfaced through diagnostics.
+
+For text payloads, LF must be normalized to CRLF for terminal clients. On
+non-passthrough channels, each non-empty text mux record that does not already
+end in CR or LF must receive a CRLF record break before being mirrored to the
+virtual serial endpoint. Channels that advertise `CHANNEL_INTERACTION_PASSTHROUGH`
+must preserve byte-stream boundaries and must not receive synthetic record
+breaks.
+
 ### ESP Producer APIs
 
 `esp_wiremux_write()` must validate before enqueueing:

@@ -1,14 +1,15 @@
 [package]
 name = "cli"
-version = "2604.29.6"
+version = "2604.29.7"
 edition = "2021"
 license = "Apache-2.0"
 
 [features]
 default = []
 generic = []
-esp32 = []
-all-vendors = ["generic", "esp32"]
+generic-enhanced = ["generic"]
+esp32 = ["generic-enhanced"]
+all-vendors = ["generic-enhanced", "esp32"]
 all-features = ["all-vendors"]
 
 [lib]

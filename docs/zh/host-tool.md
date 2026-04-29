@@ -102,6 +102,8 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 - `Ctrl-B` 后按 `1..9`：切到对应 channel 的过滤视图。
 - `Ctrl-B` 后按 `s`：打开 settings 面板，按 menuconfig 风格编辑物理串口
   profile，并可显式保存为默认配置。
+- `Ctrl-B` 后按 `v`：在当前 TUI session 内启用或关闭虚拟串口。
+- `Ctrl-B` 后按 `o`：在当前过滤 channel 上切换输入 owner：host 或虚拟串口。
 - 鼠标滚轮向上：查看更早的输出，并暂停自动跟随最新日志。
 - 鼠标滚轮向下到底部：恢复自动跟随最新日志。
 - 拖动输出窗口右侧滚动条：按当前位置查看历史输出或回到底部。
@@ -179,9 +181,19 @@ wiremux tui --port /dev/cu.usbmodem2101 --baud 921600 --data-bits 8 --stop-bits 
 如果没有传 `--port`，`wiremux tui`、`listen`、`send` 和 `passthrough` 会尝试使用
 配置文件里的 `serial.port`。如果 CLI 和配置文件都没有提供 port，命令会报错。
 
-TUI settings 面板只编辑真实物理串口 profile。虚拟通道 baud、virtual TTY、broker
-和 channel QoS 不属于本轮配置模型；未来即使虚拟 TTY 暴露 termios 兼容属性，也不应
-和真实物理串口 profile 混用。
+TUI settings 面板只编辑真实物理串口 profile。虚拟串口使用独立的全局配置段，不应
+和真实物理串口 profile 混用。generic host 不包含 generic enhanced overlay，因此会
+忽略 `[virtual_serial]`，无法启用虚拟串口。省略 `[virtual_serial]` 时，generic
+enhanced、vendor enhanced 和 all-feature host 默认启用虚拟串口，并导出 manifest
+中的所有 channel；output-only channel 是只读 PTY，input-capable channel 只有在
+输入 owner 切换到虚拟串口后才会把写入转发到设备。
+
+```toml
+[virtual_serial]
+enabled = true
+export = "all-manifest-channels"
+name_template = "wiremux-{device}-{channel}"
+```
 
 settings 面板的视觉和交互约束记录在：
 

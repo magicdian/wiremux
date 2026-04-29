@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use interactive::{InteractiveBackendMode, SerialProfile};
+use interactive::{InteractiveBackendMode, SerialProfile, VirtualSerialConfig};
 
 #[derive(Debug, Clone)]
 pub struct TuiArgs {
@@ -10,4 +10,6 @@ pub struct TuiArgs {
     pub reconnect_delay_ms: u64,
     pub interactive_backend: InteractiveBackendMode,
     pub tui_fps: Option<u16>,
+    pub virtual_serial: VirtualSerialConfig,
+    pub virtual_serial_supported: bool,
 }
