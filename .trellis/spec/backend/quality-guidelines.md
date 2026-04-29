@@ -255,7 +255,12 @@ the demo, and host verification commands in the same task.
   highlight selected spans from the same wrapped visual rows used by scrollback
   and scrollbar math. Copy actions must operate on the selected application text
   and write through OSC 52 initially; do not assume terminal-native
-  `Command-C` or `Ctrl-Shift-C` can copy an app-drawn highlight.
+  `Command-C` or `Ctrl-Shift-C` can copy an app-drawn highlight. Output copy
+  must distinguish soft wraps from real output line breaks: when multiple
+  selected visual rows belong to the same logical `OutputLine`, concatenate
+  them without inserting `\n`; insert `\n` only between different logical output
+  lines. Resizing the terminal must not change the copied text for an unchanged
+  logical line.
 - TUI output selection edge scrolling must be frame-driven after the pointer
   reaches the output pane's top or bottom content row. A single
   `MouseEventKind::Drag` may start `selection_auto_scroll`, but continued
@@ -353,6 +358,8 @@ the demo, and host verification commands in the same task.
 | user releases the mouse after selecting output/status text | TUI keeps the highlight and does not auto-copy by default |
 | user presses `Esc` while a selection exists | TUI clears the selection before treating `Esc` as the exit/input-clear prefix |
 | user presses `Ctrl-Shift-C`, `y`, `Enter`, or forwarded `Command-C` while a selection exists | TUI copies the selected application text through OSC 52 and keeps the highlight |
+| user selects a long output line that wraps visually in a narrow window | copied text contains the original logical line without newline characters introduced by wrapping |
+| user selects across two real output lines | copied text includes one newline between those logical lines |
 | user presses terminal-native copy but the terminal intercepts the key before crossterm sees it | no app event is generated; document/use app-level copy keys instead of relying on native terminal selection |
 
 ### 5. Good/Base/Bad Cases
@@ -387,6 +394,8 @@ the demo, and host verification commands in the same task.
   mouse stays still.
 - Good: selecting status text copies exactly the visible status row text through
   the same app-level copy path as output selection.
+- Good: selecting a narrow-window wrapped `wiremux> vtty ... /tmp/...-con`
+  plus continuation row `sole` copies `...-console` as one logical line.
 - Base: telemetry and log channels continue emitting while console input is used.
 - Base: `wiremux passthrough --interactive-backend compat` works on every
   platform supported by `serialport`.
@@ -413,6 +422,9 @@ the demo, and host verification commands in the same task.
 - Bad: relying on terminal-native selection/copy to read ratatui output while
   `EnableMouseCapture` is active; the terminal selection engine cannot see
   application-managed scrollback rows or highlights.
+- Bad: joining every selected visual row with `\n`, because terminal width then
+  leaks into the clipboard and splits one logical output line into multiple
+  copied lines.
 - Bad: treating empty `CRLF` as a reusable incomplete prompt suppresses terminal
   Enter semantics and makes prompt history diverge from shell-like behavior.
 - Bad: corrupt host input frame does not call the console handler and does not crash the mux task.
@@ -451,8 +463,10 @@ the demo, and host verification commands in the same task.
   highlights and copies visible text, status selection copies status text,
   `Esc` clears selection before exit-prefix handling, `Ctrl-Shift-C` without a
   selection does not quit, explicit copy keeps the selection, OSC 52 output is
-  correctly encoded, edge drag scrolls up/down, and edge auto-scroll continues
-  on render/frame advancement without requiring another mouse event.
+  correctly encoded, soft-wrapped output copy omits presentation-only newlines,
+  real logical output line breaks remain in copied text, edge drag scrolls
+  up/down, and edge auto-scroll continues on render/frame advancement without
+  requiring another mouse event.
 - Host unit tests cover TUI passthrough stream behavior: append until newline,
   split backspace echo, active passthrough output restoring live tail, and
   continuation of an incomplete passthrough channel line across interleaved

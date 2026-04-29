@@ -1,6 +1,6 @@
 [package]
 name = "tui"
-version = "2604.29.8"
+version = "2604.30.1"
 edition = "2021"
 license = "Apache-2.0"
 
