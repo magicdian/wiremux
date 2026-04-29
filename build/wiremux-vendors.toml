@@ -1,0 +1,38 @@
+# Vendor-side build scopes for `tools/wiremux-build lunch`.
+#
+# `skip` means build only Wiremux core/host layers and skip vendor firmware.
+# `all` dispatches every implemented model with include_in_all = true.
+# `model` entries may be listed before build dispatch is implemented; selecting
+# such a placeholder is allowed, but build/check fails clearly when executed.
+
+[[vendors]]
+id = "skip"
+label = "Skip vendor builds"
+kind = "skip"
+
+[[vendors]]
+id = "all"
+label = "All implemented vendor targets"
+kind = "all"
+
+[[vendors]]
+id = "esp32-s3"
+label = "Espressif ESP32-S3"
+kind = "model"
+family = "espressif"
+idf_target = "esp32s3"
+example_path = "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+host_feature = "esp32"
+implemented = true
+include_in_all = true
+
+[[vendors]]
+id = "esp32-p4"
+label = "Espressif ESP32-P4"
+kind = "model"
+family = "espressif"
+idf_target = "esp32p4"
+example_path = "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+host_feature = "esp32"
+implemented = false
+include_in_all = false

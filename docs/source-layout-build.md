@@ -29,6 +29,9 @@ sources/
         `-- p4/
             `-- README.md
 build/
++-- wiremux-build.toml
++-- wiremux-vendors.toml
+`-- wiremux-hosts.toml
 tools/
 +-- wiremux-build
 `-- wiremux-build-helper/
@@ -89,8 +92,8 @@ The planned implementation shape is:
 - `tools/wiremux-build`: Python bootstrap and command entrypoint.
 - `tools/wiremux-build-helper`: Rust helper for product-specific validation,
   metadata, and operations that benefit from compiled code.
-- TOML configuration files for product defaults, presets, selected state, and
-  tool policy.
+- TOML configuration files for product defaults, vendor scopes, host modes,
+  selected state, and tool policy.
 
 The orchestrator may select products, validate tool availability, derive
 environment exports, call underlying tools, and collect metadata. It must leave
@@ -122,14 +125,37 @@ Environment variables do not normally override the selected configuration. They
 may be used for tool discovery or explicit debugging only when a command
 documents that behavior.
 
-Valid host presets are:
+Interactive lunch uses two dimensions:
 
+- Vendor scope/model, maintained in `build/wiremux-vendors.toml`.
+- Host mode, maintained in `build/wiremux-hosts.toml`.
+
+The primary user flow is:
+
+```bash
+tools/wiremux-build lunch
+```
+
+Non-interactive scripts must use explicit flags:
+
+```bash
+tools/wiremux-build lunch --vendor esp32-s3 --host vendor-enhanced
+tools/wiremux-build lunch --vendor all --host generic
+tools/wiremux-build lunch --vendor skip --host all-features
+```
+
+The old positional `lunch <device> <host-preset>` form is not supported.
+
+Valid host modes are:
+
+- `generic`
+- `vendor-enhanced`
 - `all-features`
-- `generic-only`
-- `device-only`
 
-The combination `core-only + device-only` is invalid because `device-only`
-requires a concrete device/vendor target, and `core-only` has none.
+`vendor-enhanced` requires a single concrete vendor model. Vendor scopes `skip`
+and `all` allow only `generic` or `all-features`. The initial vendor dispatch
+implementation supports ESP32-S3; other listed models may be placeholders and
+must fail clearly when build/check execution would require them.
 
 ## Reproducibility Policy
 

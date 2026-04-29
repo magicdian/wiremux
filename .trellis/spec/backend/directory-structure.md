@@ -24,6 +24,8 @@ The current paths are transitional. The target product layout is documented in
   ESP-IDF integration, with `sources/vendor/espressif/{s3,p4}` reserved for
   platform-specific README placeholders until real code exists.
 - `build` for checked-in build product definitions, not generated output.
+  Current checked-in build definitions include `wiremux-build.toml`,
+  `wiremux-vendors.toml`, and `wiremux-hosts.toml`.
 - `tools/wiremux-build` and `tools/wiremux-build-helper` for the future product
   build orchestrator.
 - `.wiremux/build/selected.toml` for local selected build state.

@@ -1,0 +1,22 @@
+# Host-side feature modes for `tools/wiremux-build lunch`.
+#
+# Host modes are filtered by the selected vendor kind. `vendor-enhanced` is only
+# valid when a single concrete vendor model is selected.
+
+[[hosts]]
+id = "generic"
+label = "Generic host"
+profile = "generic"
+allowed_vendor_kinds = ["skip", "all", "model"]
+
+[[hosts]]
+id = "vendor-enhanced"
+label = "Vendor enhanced host"
+profile = "vendor-enhanced"
+allowed_vendor_kinds = ["model"]
+
+[[hosts]]
+id = "all-features"
+label = "All host features"
+profile = "all-features"
+allowed_vendor_kinds = ["skip", "all", "model"]
