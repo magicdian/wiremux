@@ -1189,3 +1189,49 @@ Split esp-registry release workflow into validate/publish jobs, gated publish on
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: Interactive wiremux-build lunch
+
+**Date**: 2026-04-29
+**Task**: Interactive wiremux-build lunch
+**Branch**: `dev`
+
+### Summary
+
+Implemented the new `wiremux-build lunch` UX with interactive vendor/host
+selection, TOML-maintained vendor and host dimensions, selected-state exports,
+and build/check dispatch integration for ESP32-S3.
+
+### Main Changes
+
+- Added `build/wiremux-vendors.toml` and `build/wiremux-hosts.toml`.
+- Replaced positional `lunch <device> <host-preset>` with interactive lunch and
+  explicit `--vendor/--host` flags.
+- Updated `.wiremux/build/selected.toml` payload shape and `env` exports.
+- Routed host check/build through selected Cargo features and vendor check/build
+  through selected vendor scope.
+- Documented the executable build selector contract in backend code-specs.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4753201` | (see git log) |
+
+### Testing
+
+- [OK] `cargo fmt --check --manifest-path tools/wiremux-build-helper/Cargo.toml`
+- [OK] `cargo check --manifest-path tools/wiremux-build-helper/Cargo.toml`
+- [OK] `cargo test --manifest-path tools/wiremux-build-helper/Cargo.toml`
+- [OK] `./tools/wiremux-build check host`
+- [OK] CLI smoke tests for valid lunch, positional rejection, invalid host/vendor
+  validation, env stdout exports, and local vendor-check skip without `idf.py`.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

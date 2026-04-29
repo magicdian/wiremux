@@ -1,0 +1,8 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "wiremux-build paths, TOML build config, selected state boundary"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "deterministic CLI validation errors"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "wiremux-build orchestration contract and validation matrix"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "selected.toml local generated config, no database layer"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "selected state flows across lunch/env/build/check"}
+{"file": "docs/source-layout-build.md", "reason": "source-of-truth docs for wiremux-build model"}
