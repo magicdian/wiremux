@@ -1,6 +1,6 @@
 [package]
 name = "interactive"
-version = "2604.29.6"
+version = "2604.29.7"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -13,5 +13,6 @@ toml = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 mio = { version = "1", features = ["os-ext", "os-poll"] }
+nix = { version = "0.26", default-features = false, features = ["fs", "term"] }
 signal-hook = "0.3"
 signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }

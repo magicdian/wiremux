@@ -511,7 +511,10 @@ mod tests {
         is_passthrough_meta_exit_key, passthrough_key_payload, printable_payload, write_event,
         CliCommand, DisplayOutput,
     };
-    use cli::args::parse_args_with_config;
+    use cli::args::{
+        default_virtual_serial_enabled_for_host, host_supports_virtual_serial,
+        parse_args_with_config,
+    };
     use cli::diagnostics::sanitize_port_for_filename;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use host_session::{
@@ -748,6 +751,87 @@ mod tests {
         assert_eq!(args.max_payload_len, DEFAULT_MAX_PAYLOAD_LEN);
         assert_eq!(args.interactive_backend, InteractiveBackendMode::Auto);
         assert_eq!(args.tui_fps, None);
+        assert_eq!(
+            args.virtual_serial.enabled,
+            default_virtual_serial_enabled_for_host()
+        );
+        assert_eq!(
+            args.virtual_serial_supported,
+            host_supports_virtual_serial()
+        );
+    }
+
+    #[test]
+    fn tui_uses_host_mode_virtual_serial_default_when_config_omits_section() {
+        let input = r#"
+[serial]
+port = "/dev/tty.usbmodem2101"
+baud = 57600
+data_bits = 8
+stop_bits = 1
+parity = "none"
+flow_control = "none"
+"#;
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "wiremux-cli-virtual-serial-default-{}-{suffix}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, input).expect("config file writes");
+        let config = HostConfig::load(&path).expect("config loads");
+        let _ = std::fs::remove_file(&path);
+        let command = parse_args_with_config(["tui"].map(String::from), config)
+            .expect("args parse")
+            .expect("valid args");
+        let CliCommand::Tui(args) = command else {
+            panic!("expected tui command");
+        };
+
+        assert_eq!(
+            args.virtual_serial.enabled,
+            default_virtual_serial_enabled_for_host()
+        );
+        assert_eq!(
+            args.virtual_serial_supported,
+            host_supports_virtual_serial()
+        );
+    }
+
+    #[test]
+    fn tui_respects_explicit_virtual_serial_config_only_when_host_supports_it() {
+        let input = r#"
+[serial]
+port = "/dev/tty.usbmodem2101"
+
+[virtual_serial]
+enabled = true
+"#;
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "wiremux-cli-virtual-serial-explicit-{}-{suffix}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, input).expect("config file writes");
+        let config = HostConfig::load(&path).expect("config loads");
+        let _ = std::fs::remove_file(&path);
+        let command = parse_args_with_config(["tui"].map(String::from), config)
+            .expect("args parse")
+            .expect("valid args");
+        let CliCommand::Tui(args) = command else {
+            panic!("expected tui command");
+        };
+
+        assert_eq!(args.virtual_serial.enabled, host_supports_virtual_serial());
+        assert_eq!(
+            args.virtual_serial_supported,
+            host_supports_virtual_serial()
+        );
     }
 
     #[test]

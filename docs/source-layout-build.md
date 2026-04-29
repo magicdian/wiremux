@@ -140,6 +140,7 @@ Non-interactive scripts must use explicit flags:
 
 ```bash
 tools/wiremux-build lunch --vendor esp32-s3 --host vendor-enhanced
+tools/wiremux-build lunch --vendor all --host generic-enhanced
 tools/wiremux-build lunch --vendor all --host generic
 tools/wiremux-build lunch --vendor skip --host all-features
 ```
@@ -149,13 +150,18 @@ The old positional `lunch <device> <host-preset>` form is not supported.
 Valid host modes are:
 
 - `generic`
+- `generic-enhanced`
 - `vendor-enhanced`
 - `all-features`
 
-`vendor-enhanced` requires a single concrete vendor model. Vendor scopes `skip`
-and `all` allow only `generic` or `all-features`. The initial vendor dispatch
-implementation supports ESP32-S3; other listed models may be placeholders and
-must fail clearly when build/check execution would require them.
+`generic-enhanced` includes vendor-neutral host overlays such as virtual serial
+endpoints. Plain `generic` host builds do not include those overlays and must
+ignore related runtime config. `vendor-enhanced` composes generic enhanced behavior with one concrete
+vendor adapter and therefore requires a single concrete vendor model. Vendor
+scopes `skip` and `all` allow `generic`, `generic-enhanced`, or `all-features`.
+The initial vendor dispatch implementation supports ESP32-S3; other listed
+models may be placeholders and must fail clearly when build/check execution
+would require them.
 
 ## Check and Build Commands
 

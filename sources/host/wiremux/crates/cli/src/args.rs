@@ -60,6 +60,7 @@ pub fn parse_args_with_config<I>(args: I, config: HostConfig) -> Result<Option<C
 where
     I: IntoIterator<Item = String>,
 {
+    let config = config_for_host_mode(config);
     let mut args = args.into_iter().peekable();
     let command = match args.peek().map(String::as_str) {
         Some("listen") => {
@@ -275,10 +276,29 @@ where
                 reconnect_delay_ms,
                 interactive_backend,
                 tui_fps,
+                virtual_serial: config.virtual_serial,
+                virtual_serial_supported: host_supports_virtual_serial(),
             })))
         }
         _ => unreachable!("command is normalized before parsing"),
     }
+}
+
+fn config_for_host_mode(mut config: HostConfig) -> HostConfig {
+    if !host_supports_virtual_serial() {
+        config.virtual_serial.enabled = false;
+    } else if !config.virtual_serial_configured {
+        config.virtual_serial.enabled = default_virtual_serial_enabled_for_host();
+    }
+    config
+}
+
+pub fn default_virtual_serial_enabled_for_host() -> bool {
+    host_supports_virtual_serial()
+}
+
+pub fn host_supports_virtual_serial() -> bool {
+    cfg!(feature = "generic-enhanced")
 }
 
 fn parse_channel(value: &str) -> Result<u8, String> {

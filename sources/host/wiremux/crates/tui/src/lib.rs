@@ -24,11 +24,13 @@ use host_session::{
 };
 #[cfg(test)]
 use interactive::InteractiveBackendMode;
+#[cfg(test)]
+use interactive::VirtualSerialInputOwner;
 use interactive::{
     self, is_passthrough_escape_exit_suffix, is_passthrough_exit_key, is_passthrough_meta_exit_key,
     passthrough_key_payload, ConnectedInteractiveBackend, HostConfig, InteractiveEvent,
-    SerialFlowControl, SerialParity, SerialProfile, INTERACTIVE_SERIAL_READ_TIMEOUT,
-    PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
+    SerialFlowControl, SerialParity, SerialProfile, VirtualSerialBroker, VirtualSerialConfig,
+    VirtualSerialInputEvent, INTERACTIVE_SERIAL_READ_TIMEOUT, PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
@@ -257,10 +259,23 @@ struct App {
     config_path: PathBuf,
     settings: Option<SettingsState>,
     reconnect_requested: bool,
+    virtual_serial: VirtualSerialBroker,
+    virtual_serial_config: VirtualSerialConfig,
+    virtual_serial_supported: bool,
 }
 
 impl App {
-    fn with_serial(diagnostics_path: String, serial: SerialProfile, config_path: PathBuf) -> Self {
+    fn with_serial(
+        diagnostics_path: String,
+        serial: SerialProfile,
+        config_path: PathBuf,
+        virtual_serial_config: VirtualSerialConfig,
+        virtual_serial_supported: bool,
+    ) -> Self {
+        let mut virtual_serial_config = virtual_serial_config;
+        if !virtual_serial_supported {
+            virtual_serial_config.enabled = false;
+        }
         Self {
             lines: VecDeque::new(),
             input: String::new(),
@@ -286,6 +301,9 @@ impl App {
             config_path,
             settings: None,
             reconnect_requested: false,
+            virtual_serial: VirtualSerialBroker::new(virtual_serial_config.clone()),
+            virtual_serial_config,
+            virtual_serial_supported,
         }
     }
 
@@ -295,6 +313,8 @@ impl App {
             diagnostics_path,
             test_serial_profile(),
             PathBuf::from("/tmp/wiremux-config.toml"),
+            VirtualSerialConfig::default(),
+            true,
         )
     }
 
@@ -807,10 +827,12 @@ fn run_loop(
         diagnostics_path,
         args.serial.clone(),
         args.config_path.clone(),
+        args.virtual_serial.clone(),
+        args.virtual_serial_supported,
     );
     app.target_fps = target_fps;
     app.push_marker(format!(
-        "diagnostics: {}; Ctrl-B 0..9 filters; Ctrl-B s settings; Enter sends; Ctrl-C/Ctrl-]/Esc x quits",
+        "diagnostics: {}; Ctrl-B 0..9 filters; Ctrl-B s settings; Ctrl-B v virtual serial; Enter sends; Ctrl-C/Ctrl-]/Esc x quits",
         app.diagnostics_path
     ));
 
@@ -878,6 +900,12 @@ fn run_loop(
             dirty = true;
         }
 
+        if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
+            if handle_virtual_serial_input(&mut app, serial, &mut diagnostics, &args)? {
+                dirty = true;
+            }
+        }
+
         let now = Instant::now();
         if (dirty || app.selection_auto_scroll.is_some()) && now >= next_render_at {
             let keep_auto_scrolling = if app.selection_auto_scroll.is_some() {
@@ -907,6 +935,8 @@ fn run_loop(
                 started_at + Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
             }),
             (dirty || app.selection_auto_scroll.is_some()).then_some(next_render_at),
+            (backend.is_some() && app.virtual_serial.is_enabled())
+                .then_some(Instant::now() + Duration::from_millis(25)),
         );
 
         let event = if let Some(backend) = backend.as_mut() {
@@ -1034,11 +1064,13 @@ fn next_deadline(
     reconnect_at: Instant,
     escape_at: Option<Instant>,
     render_at: Option<Instant>,
+    virtual_serial_poll_at: Option<Instant>,
 ) -> Option<Instant> {
     [
         reconnect_pending.then_some(reconnect_at),
         escape_at,
         render_at,
+        virtual_serial_poll_at,
     ]
     .into_iter()
     .flatten()
@@ -1152,6 +1184,34 @@ fn handle_key_with_areas(
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 app.settings = Some(SettingsState::new(app.serial.clone()));
                 app.status = "settings".to_string();
+            }
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                if !app.virtual_serial_supported {
+                    app.status = "virtual serial unsupported in this host build".to_string();
+                    app.push_marker(app.status.clone());
+                    return Ok(());
+                }
+                let enabled = !app.virtual_serial.is_enabled();
+                app.virtual_serial
+                    .set_enabled(enabled, app.manifest.as_ref());
+                app.status = app.virtual_serial.summary();
+                app.push_marker(app.virtual_serial.summary());
+            }
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                if let Some(channel) = app.active_input_channel() {
+                    match app.virtual_serial.toggle_input_owner(u32::from(channel)) {
+                        Some(owner) => {
+                            app.status = format!("ch{channel} input owner: {owner}");
+                        }
+                        None => {
+                            app.status =
+                                format!("ch{channel} virtual serial input owner unavailable");
+                        }
+                    }
+                } else {
+                    app.status =
+                        "select an input-capable channel before toggling owner".to_string();
+                }
             }
             _ => {
                 app.status = "unknown prefix command".to_string();
@@ -1555,7 +1615,8 @@ fn apply_settings_profile(app: &mut App, profile: SerialProfile) {
 }
 
 fn save_settings_profile(app: &mut App, settings: &mut SettingsState) -> io::Result<()> {
-    HostConfig::from_serial_profile(&settings.draft).save(&app.config_path)?;
+    HostConfig::from_serial_profile_and_virtual(&settings.draft, app.virtual_serial_config.clone())
+        .save(&app.config_path)?;
     settings.baseline = settings.draft.clone();
     app.status = format!("settings saved to {}", app.config_path.display());
     settings.popup = Some(SettingsPopup::Message("settings saved".to_string()));
@@ -1876,6 +1937,19 @@ fn handle_stream_event(app: &mut App, diagnostics: &mut File, event: HostEvent) 
                 "manifest received: {} channels",
                 manifest.channels.len()
             ));
+            app.virtual_serial.sync_manifest(&manifest);
+            app.push_marker(app.virtual_serial.summary());
+            for endpoint in app.virtual_serial.endpoint_infos() {
+                let path = endpoint
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| endpoint.status.clone());
+                app.push_marker(format!(
+                    "vtty ch{} {} owner={} {}",
+                    endpoint.channel_id, endpoint.name, endpoint.input_owner, path
+                ));
+            }
             app.manifest = Some(manifest);
             app.clear_input_if_read_only();
         }
@@ -1955,7 +2029,62 @@ fn handle_envelope(
 ) -> io::Result<()> {
     write_envelope_diagnostics(diagnostics, envelope)?;
     app.push_record(envelope);
+    if let Err(err) = app.virtual_serial.write_output(envelope) {
+        writeln!(
+            diagnostics,
+            "[wiremux] virtual_serial output channel={} error={err}",
+            envelope.channel_id
+        )?;
+        app.status = format!("virtual serial output error: {err}");
+    }
     Ok(())
+}
+
+fn handle_virtual_serial_input(
+    app: &mut App,
+    serial: &mut dyn Write,
+    diagnostics: &mut File,
+    args: &TuiArgs,
+) -> io::Result<bool> {
+    let mut dirty = false;
+    for event in app.virtual_serial.poll_input()? {
+        match event {
+            VirtualSerialInputEvent::Forward {
+                channel_id,
+                payload,
+            } => {
+                let frame = build_input_frame(channel_id, &payload, args.max_payload_len)
+                    .map_err(build_frame_error_to_io)?;
+                serial.write_all(&frame)?;
+                serial.flush()?;
+                app.status = format!(
+                    "virtual serial sent {} bytes to ch{channel_id}",
+                    payload.len()
+                );
+                writeln!(
+                    diagnostics,
+                    "[wiremux] virtual_serial input forwarded channel={} bytes={}",
+                    channel_id,
+                    payload.len()
+                )?;
+                dirty = true;
+            }
+            VirtualSerialInputEvent::Discarded {
+                channel_id,
+                reason,
+                bytes,
+            } => {
+                app.status = format!("virtual serial input discarded ch{channel_id}: {reason}");
+                writeln!(
+                    diagnostics,
+                    "[wiremux] virtual_serial input discarded channel={} bytes={} reason={}",
+                    channel_id, bytes, reason
+                )?;
+                dirty = true;
+            }
+        }
+    }
+    Ok(dirty)
 }
 
 fn channel_supports_input(manifest: &DeviceManifest, channel_id: u32) -> bool {
@@ -2473,6 +2602,9 @@ fn status_rows(app: &App) -> Vec<StatusRow> {
                 segment("  ", Style::default()),
                 segment("device ", label),
                 segment(app.manifest_label(), Style::default()),
+                segment("  ", Style::default()),
+                segment("vtty ", label),
+                segment(app.virtual_serial.summary(), Style::default()),
             ],
         },
     ]
@@ -3827,6 +3959,8 @@ mod tests {
                 reconnect_delay_ms: 500,
                 interactive_backend: InteractiveBackendMode::Auto,
                 tui_fps: None,
+                virtual_serial: VirtualSerialConfig::default(),
+                virtual_serial_supported: true,
             },
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
         )
@@ -4006,6 +4140,96 @@ mod tests {
 
         assert!(app.settings.is_some());
         assert_eq!(app.status, "settings");
+    }
+
+    #[test]
+    fn ctrl_b_v_toggles_virtual_serial_for_session() {
+        let mut app = App::new("diag.log".to_string());
+        assert!(app.virtual_serial.is_enabled());
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        )
+        .expect("prefix");
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::empty()),
+        )
+        .expect("toggle virtual serial");
+
+        assert!(!app.virtual_serial.is_enabled());
+        assert_eq!(app.status, "virtual serial disabled");
+    }
+
+    #[test]
+    fn ctrl_b_v_cannot_enable_unsupported_virtual_serial() {
+        let mut app = App::with_serial(
+            "diag.log".to_string(),
+            test_serial_profile(),
+            PathBuf::from("/tmp/wiremux-config.toml"),
+            VirtualSerialConfig::default(),
+            false,
+        );
+        assert!(!app.virtual_serial.is_enabled());
+
+        handle_key(
+            &mut app,
+            None,
+            &TuiArgs {
+                virtual_serial_supported: false,
+                ..tui_args()
+            },
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        )
+        .expect("prefix");
+        handle_key(
+            &mut app,
+            None,
+            &TuiArgs {
+                virtual_serial_supported: false,
+                ..tui_args()
+            },
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::empty()),
+        )
+        .expect("toggle virtual serial");
+
+        assert!(!app.virtual_serial.is_enabled());
+        assert_eq!(app.status, "virtual serial unsupported in this host build");
+    }
+
+    #[test]
+    fn ctrl_b_o_toggles_active_virtual_serial_owner() {
+        let mut app = App::new("diag.log".to_string());
+        app.filter = Some(1);
+        let manifest = line_manifest(1);
+        app.virtual_serial.sync_manifest(&manifest);
+        app.manifest = Some(manifest);
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        )
+        .expect("prefix");
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::empty()),
+        )
+        .expect("toggle owner");
+
+        assert_eq!(
+            app.virtual_serial.input_owner(1),
+            Some(VirtualSerialInputOwner::VirtualSerial)
+        );
+        assert_eq!(app.status, "ch1 input owner: virtual-serial");
     }
 
     #[test]
@@ -4360,6 +4584,8 @@ mod tests {
             reconnect_delay_ms: 500,
             interactive_backend: InteractiveBackendMode::Auto,
             tui_fps: None,
+            virtual_serial: VirtualSerialConfig::default(),
+            virtual_serial_supported: true,
         }
     }
 
