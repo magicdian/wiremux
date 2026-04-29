@@ -1235,3 +1235,36 @@ and build/check dispatch integration for ESP32-S3.
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: Optimize wiremux-build targets
+
+**Date**: 2026-04-29
+**Task**: Optimize wiremux-build targets
+**Branch**: `dev`
+
+### Summary
+
+Refined wiremux-build check/build command targets, removed bootstrap cargo trace, updated CI/docs/specs, and validated helper plus product gate behavior.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c9e674c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

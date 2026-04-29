@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 30
+- **Total Sessions**: 31
 - **Last Active**: 2026-04-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1237 | Active |
+| `journal-1.md` | ~1270 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 31 | 2026-04-29 | Optimize wiremux-build targets | `c9e674c` | `dev` |
 | 30 | 2026-04-29 | Interactive wiremux-build lunch | `4753201` | `dev` |
 | 29 | 2026-04-29 | Release workflow split and 2604.29.2 bump | `f7f6d16` | `dev` |
 | 28 | 2026-04-29 | Proto API schema version path cleanup | `faa436e` | `dev` |
