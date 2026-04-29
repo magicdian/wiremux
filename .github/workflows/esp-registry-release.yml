@@ -68,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           tools/wiremux-build doctor
-          tools/wiremux-build check vendor-espressif
+          tools/wiremux-build check vendor
           tools/wiremux-build package esp-registry
 
       - name: Upload ESP Registry package artifact

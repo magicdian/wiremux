@@ -6,7 +6,7 @@ This project uses one release version for host and SDK artifacts.
 
 Version format: `YYMM.DD.BuildNumber`.
 
-Current release: `2604.29.4`.
+Current release: `2604.29.5`.
 
 When publishing another release on the same date, increment `BuildNumber`. When
 publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
@@ -21,11 +21,12 @@ Examples:
 - `2604.29.2`: release workflow split into validate/publish on 2026-04-29.
 - `2604.29.3`: release diagnostics update on 2026-04-29.
 - `2604.29.4`: Linux CI host dependency fix on 2026-04-29.
+- `2604.29.5`: host Rust workspace crate split on 2026-04-29.
 
 Before a release, update:
 
 - `VERSION`
-- `sources/host/wiremux/crates/wiremux-cli/Cargo.toml`
+- `sources/host/wiremux/crates/cli/Cargo.toml`
 - `sources/host/wiremux/Cargo.lock`
 - `sources/vendor/espressif/generic/components/esp-wiremux/idf_component.yml`
 - `sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux.h`
@@ -180,11 +181,11 @@ before uploading.
 - `tools/wiremux-build check host`
 - install ESP-IDF `v5.4.1`
 - `tools/wiremux-build doctor`
-- `tools/wiremux-build check vendor-espressif`
+- `tools/wiremux-build check vendor`
 - `tools/wiremux-build package esp-registry`
 
 `publish` runs only after `validate` succeeds, and uploads generated packages
-from artifact output. In CI, vendor-espressif validation is strict: missing or
+from artifact output. In CI, vendor validation is strict: missing or
 mismatched `idf.py` fails validation.
 
 Registry setup required before the first CI upload:
@@ -201,7 +202,7 @@ Registry setup required before the first CI upload:
 5. Ensure the workflow namespace matches the registry namespace.
 
 GitHub Release events run from tag refs, for example
-`refs/tags/v2604.29.4`. Do not set Trusted Uploader Branch to `main` for this
+`refs/tags/v2604.29.5`. Do not set Trusted Uploader Branch to `main` for this
 workflow, or the registry OIDC authorization will not match. The workflow itself
 still fetches `origin/main` and fails before upload if the tagged release commit
 is not contained in `main`.

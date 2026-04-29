@@ -10,8 +10,9 @@ There are no React hooks or frontend data-fetching hooks in this repository.
 
 The current stateful loops are not frontend hooks:
 
-- `FrameScanner::push()` and `FrameScanner::finish()` in `sources/host/wiremux/crates/wiremux-cli/src/frame.rs`.
-- The host `listen()` loop in `sources/host/wiremux/crates/wiremux-cli/src/main.rs`.
+- `HostSession::feed()` and `HostSession::finish()` in
+  `sources/host/wiremux/crates/host-session/src/lib.rs`.
+- The host `listen()` loop in `sources/host/wiremux/crates/cli/src/main.rs`.
 - FreeRTOS tasks `mux_task()` and `mux_input_task()` in
   `sources/vendor/espressif/generic/components/esp-wiremux/src/esp_wiremux.c`.
 

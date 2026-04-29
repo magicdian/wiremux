@@ -241,7 +241,7 @@ the demo, and host verification commands in the same task.
   reserve frame-by-frame animation for coarse scrollbar drag targets.
 - TUI text selection is application-managed because crossterm mouse capture
   prevents terminal-native selection from seeing ratatui's internal scrollback.
-  In `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`, selection state must track pane
+  In `sources/host/wiremux/crates/tui/src/lib.rs`, selection state must track pane
   (`Output`/`Status`), anchor row/column, cursor row/column, active drag state,
   pending clipboard text, and any edge auto-scroll direction. Rendering must
   highlight selected spans from the same wrapped visual rows used by scrollback
@@ -264,7 +264,7 @@ the demo, and host verification commands in the same task.
   `DeviceManifest.protocol_version` as the device proto API version. Backend and
   FPS status belong in the existing status area, not a separate debug panel.
 - TUI passthrough display is channel-local stream editing. In
-  `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`, `complete_stream_line()`,
+  `sources/host/wiremux/crates/tui/src/lib.rs`, `complete_stream_line()`,
   `backspace_stream_line()`, and `append_stream_segment()` must operate on the
   latest incomplete `OutputLine` for the same channel. Do not use only
   `lines.back_mut()` for passthrough stream editing, because interleaved log or
@@ -272,7 +272,7 @@ the demo, and host verification commands in the same task.
 - TUI passthrough prompt rendering must preserve terminal semantics. Empty
   `CR`, `LF`, or `CRLF` echoes are completed prompt history rows, not reusable
   input buffers. If the latest active-channel row is complete and the view is at
-  live tail, `sources/host/wiremux/crates/wiremux-cli/src/tui.rs` may append a virtual current prompt row
+  live tail, `sources/host/wiremux/crates/tui/src/lib.rs` may append a virtual current prompt row
   during rendering; this row must not mutate `App::lines` or scrollback history.
   In passthrough mode, place the terminal cursor in the output pane after the
   active channel prompt/echo. Cursor placement must account for visual wrapping
@@ -489,7 +489,7 @@ Version files and declarations:
 
 ```text
 VERSION
-sources/host/wiremux/crates/wiremux-cli/Cargo.toml
+sources/host/wiremux/crates/cli/Cargo.toml
 sources/host/wiremux/Cargo.lock
 sources/vendor/espressif/generic/components/esp-wiremux/idf_component.yml
 sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux.h
@@ -653,12 +653,51 @@ sources/vendor/espressif/generic/examples
 sources/vendor/espressif/s3/README.md
 sources/vendor/espressif/p4/README.md
 build
+build/wiremux-build.toml
+build/wiremux-vendors.toml
+build/wiremux-hosts.toml
 tools/wiremux-build
 tools/wiremux-build-helper
 .wiremux/build/selected.toml
 ```
 
 Build configuration files use TOML.
+
+Command signatures:
+
+```bash
+tools/wiremux-build lunch
+tools/wiremux-build lunch --vendor <skip|all|model-id> --host <generic|vendor-enhanced|all-features>
+tools/wiremux-build env --shell bash|zsh
+tools/wiremux-build check [core|host|vendor|all]
+tools/wiremux-build build [core|host|vendor]
+```
+
+Selected state payload:
+
+```toml
+vendor = "esp32-s3"
+host = "vendor-enhanced"
+vendor_kind = "model"
+vendor_label = "Espressif ESP32-S3"
+host_profile = "vendor-enhanced"
+vendor_family = "espressif"
+vendor_idf_target = "esp32s3"
+vendor_example_path = "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+selected_at_unix = 1777448133
+```
+
+Environment export keys:
+
+```text
+WIREMUX_VENDOR
+WIREMUX_VENDOR_KIND
+WIREMUX_HOST
+WIREMUX_HOST_PROFILE
+WIREMUX_VENDOR_FAMILY
+WIREMUX_IDF_TARGET
+WIREMUX_VENDOR_EXAMPLE
+```
 
 ### 3. Contracts
 
@@ -672,8 +711,31 @@ Build configuration files use TOML.
 - Optional environment exports from `env --shell bash|zsh` are derived state.
 - Configuration priority is `CLI args > selected.toml > product defaults`.
 - Environment variables do not normally override selected config.
-- Valid host presets: `all-features`, `generic-only`, and `device-only`.
-- `core-only + device-only` is invalid.
+- `build/wiremux-vendors.toml` owns vendor scopes/models. Built-in scope ids are
+  `skip` and `all`; concrete models use `kind = "model"`.
+- `build/wiremux-hosts.toml` owns host modes. Valid mode ids are `generic`,
+  `vendor-enhanced`, and `all-features`.
+- `tools/wiremux-build lunch` is the primary interactive flow. Non-interactive
+  selection uses `lunch --vendor <id> --host <id>`.
+- Positional `lunch <device> <host-preset>` arguments are not supported.
+- `vendor-enhanced` requires a single concrete vendor model. Vendor scopes
+  `skip` and `all` allow only `generic` or `all-features`.
+- Initial vendor build/check dispatch supports ESP32-S3. Other listed models may
+  remain placeholders but must fail clearly if execution is requested.
+- ESP32-S3 vendor dispatch runs in
+  `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` and must
+  call `idf.py set-target esp32s3` before `idf.py build`.
+- The Python bootstrap must not print the internal `cargo run` helper command
+  during normal operation.
+- `check` defaults to `all` and is a developer gate. It must not narrow coverage
+  based on the selected lunch profile.
+- `check host` validates the configured host feature matrix.
+- `check vendor` validates every implemented vendor model.
+- `build` defaults to the selected project: core, selected host mode, and
+  selected vendor target when vendor builds are enabled.
+- `build host` and `build vendor` use `.wiremux/build/selected.toml` to resolve
+  concrete build variants.
+- `vendor-espressif` is not a public or accepted selector; use `vendor`.
 - CI is strict per tool and configurable. Local builds are tolerant by default,
   warn on dirty/deviated inputs, and record metadata for diagnostics.
 - Future generated paths must be ignored: `/.wiremux/`, `/build/out/`, and
@@ -688,7 +750,18 @@ Build configuration files use TOML.
 | docs mention `sources/host` as final crate root | fail review; target crate root is `sources/host/wiremux` |
 | command docs before migration use current paths | allowed if labeled current/pre-migration |
 | selected config differs from env var | selected config wins unless command explicitly documents debug override |
-| `core-only + device-only` requested | command fails with deterministic validation error |
+| `lunch --vendor skip --host vendor-enhanced` requested | command fails with deterministic validation error |
+| positional `lunch <device> <host-preset>` requested | command fails with migration guidance to `--vendor` and `--host` |
+| placeholder vendor model selected for build/check | command fails with deterministic "not implemented yet" style error |
+| `env --shell zsh` output is redirected to a file | file contains only `export WIREMUX_*=` lines, no bootstrap trace |
+| `tools/wiremux-build check` has no selector | default to `all` |
+| `tools/wiremux-build build` has no selector | build core, selected host, and selected vendor scope |
+| `vendor-espressif` is used as a selector | fail with a deterministic target error |
+| selected vendor is `esp32-s3` and host is `vendor-enhanced` | host build uses Cargo feature `esp32` |
+| selected vendor is `all` | build vendor dispatches implemented model entries with `include_in_all = true` |
+| selected vendor is `skip` | build vendor prints a warning and does not invoke `idf.py` |
+| selected vendor is `esp32-s3` and `idf.py` is available | build vendor runs `idf.py set-target esp32s3` before `idf.py build` |
+| `check vendor` runs in CI with `idf.py` available | dispatch every implemented vendor model |
 | CI detects dirty/deviated generated output under strict policy | command fails |
 | local build detects dirty/deviated input | command warns and records build metadata |
 
@@ -699,17 +772,66 @@ Build configuration files use TOML.
 - Runtime layout PRs must additionally run the commands affected by the moved
   paths, such as host Cargo checks, portable C CMake/CTest checks, ESP-IDF
   builds, and release packaging validation.
+- Build selector changes must run:
+  - `cargo test --manifest-path tools/wiremux-build-helper/Cargo.toml`
+  - `cargo fmt --check --manifest-path tools/wiremux-build-helper/Cargo.toml`
+  - `cargo check --manifest-path tools/wiremux-build-helper/Cargo.toml`
+  - `tools/wiremux-build lunch --vendor esp32-s3 --host vendor-enhanced`
+  - `tools/wiremux-build env --shell zsh > /tmp/wiremux-env.out` and assert the
+    redirected file contains only shell exports.
+  - `tools/wiremux-build lunch esp32-s3 vendor-enhanced` and assert it fails
+    with positional migration guidance.
+  - `tools/wiremux-build lunch --vendor skip --host vendor-enhanced` and assert
+    it fails deterministic validation.
+  - `tools/wiremux-build check` and verify it defaults to `all`.
+  - `tools/wiremux-build build` after selecting `esp32-s3 + vendor-enhanced`.
+  - `tools/wiremux-build check vendor` when `idf.py` is available. If local
+    ESP-IDF is not installed, record the local skip and rely on CI/ESP shell for
+    the full vendor assertion.
+  - `tools/wiremux-build check vendor-espressif` and
+    `tools/wiremux-build build vendor-espressif` fail with target errors.
+
+### 6. Good/Base/Bad Cases
+
+- Good: `tools/wiremux-build lunch` in a terminal shows vendor choices first and
+  filters host choices after the vendor selection.
+- Good: `tools/wiremux-build lunch --vendor esp32-s3 --host vendor-enhanced`
+  writes selected state with `vendor_kind = "model"` and `vendor_idf_target =
+  "esp32s3"`.
+- Good: `tools/wiremux-build env --shell zsh` can be safely used in command
+  substitution because stdout contains exports only.
+- Good: `tools/wiremux-build check` defaults to the full developer gate rather
+  than the selected lunch profile.
+- Good: `tools/wiremux-build build` builds core, the selected host mode, and
+  selected vendor scope.
+- Base: `tools/wiremux-build lunch --vendor all --host generic` is valid and
+  vendor build selects implemented `include_in_all` model entries while vendor
+  check validates implemented vendor targets.
+- Base: `tools/wiremux-build lunch --vendor skip --host all-features` is valid
+  and vendor build skips firmware work with a warning.
+- Bad: allowing `vendor-enhanced` with `skip` or `all`, because there is no
+  single vendor model whose enhanced host feature can be selected.
+- Bad: keeping positional `lunch <device> <host-preset>` as a compatibility
+  alias, because the build system is still in development and that shape
+  preserves the wrong mental model.
+- Bad: printing the Python bootstrap `+ cargo run ...` trace during normal
+  operation, because it exposes an implementation detail and can break command
+  substitution.
+- Bad: accepting `vendor-espressif` as a selector, because it leaks the current
+  vendor family implementation into the product CLI.
+
+### 7. Wrong vs Correct
 
 #### Wrong
 
 ```text
-Release host v2604.27.3 while ESP component manifest still says 2604.27.2.
+tools/wiremux-build lunch esp32-s3 vendor-enhanced
 ```
 
 #### Correct
 
 ```text
-Update `VERSION`, Cargo files, ESP manifest, and `ESP_WIREMUX_VERSION` together.
+tools/wiremux-build lunch --vendor esp32-s3 --host vendor-enhanced
 ```
 
 ## Testing Requirements

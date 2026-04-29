@@ -9,15 +9,15 @@
 There are no frontend components in the current codebase. This file intentionally
 does not prescribe a component framework because the project has not chosen one.
 
-Current interactive behavior is implemented at pre-migration paths:
+Current interactive behavior is implemented at host/vendor runtime paths:
 
-- Rust CLI argument parsing and serial I/O in `sources/host/wiremux/crates/wiremux-cli/src/main.rs`.
+- Rust CLI argument parsing in `sources/host/wiremux/crates/cli/src/args.rs`
+  and serial/interactive I/O in `sources/host/wiremux/crates/{cli,interactive}/src/`.
 - ESP-IDF console commands in
   `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.
 - ESP mux adapters in `sources/vendor/espressif/generic/components/esp-wiremux/src/`.
 
-Target paths after the source-layout migration are
-`sources/host/wiremux/crates/wiremux-cli/src/main.rs`,
+Current target paths are `sources/host/wiremux/crates/{host-session,interactive,tui,cli}/src/`,
 `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`, and
 `sources/vendor/espressif/generic/components/esp-wiremux/src/`.
 

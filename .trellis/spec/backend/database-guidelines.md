@@ -32,10 +32,10 @@ State is in memory and bounded by configuration:
   `sources/vendor/espressif/generic/components/esp-wiremux/src/esp_wiremux.c`.
 - ESP channel metadata is registered at runtime with
   `esp_wiremux_register_channel()`.
-- Host CLI state is process-local in `sources/host/wiremux/crates/wiremux-cli/src/main.rs`.
+- Host CLI state is process-local in `sources/host/wiremux/crates/cli/src/main.rs`.
 - Host protocol session state is process-local in the core C
   `wiremux_host_session_t`, reached from the Rust wrapper in
-  `sources/host/wiremux/crates/wiremux-cli/src/host_session.rs`.
+  `sources/host/wiremux/crates/host-session/src/lib.rs`.
 - Protocol compatibility is represented by constants and protobuf-compatible
   fields, not by stored schema migrations.
 
@@ -121,7 +121,7 @@ dangerous than changing its field number, but both require cross-language review
 
 ## Forbidden Patterns
 
-- Do not add an ORM or migration crate to `sources/host/wiremux/crates/wiremux-cli/Cargo.toml` for CLI-only
+- Do not add an ORM or migration crate to `sources/host/wiremux/crates/cli/Cargo.toml` for CLI-only
   state.
 - Do not use ESP NVS, filesystem, or flash storage for mux runtime queues unless
   the task explicitly changes durability requirements.
@@ -138,7 +138,7 @@ dangerous than changing its field number, but both require cross-language review
   constants plus protobuf-compatible field numbers; it must remain lightweight
   and stream-oriented.
 - Adding persistence to solve test setup. Prefer deterministic unit tests in
-  `sources/host/wiremux/crates/wiremux-cli/src/*.rs` and ESP-IDF build/demo verification.
+  `sources/host/wiremux/crates/{cli,host-session,interactive,tui}/src/*.rs` and ESP-IDF build/demo verification.
 - Assuming channel registration is durable. Channels are registered at runtime by
   application code such as
   `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.

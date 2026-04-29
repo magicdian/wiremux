@@ -1,10 +1,15 @@
+use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use host_session::{PassthroughPolicy, NEWLINE_POLICY_CR, NEWLINE_POLICY_CRLF, NEWLINE_POLICY_LF};
+
+pub const PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS: u64 = 750;
+pub const INTERACTIVE_SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractiveBackendMode {
@@ -90,7 +95,7 @@ pub fn open_interactive_backend(
 ) -> io::Result<(PathBuf, ConnectedInteractiveBackend)> {
     let mut last_err = None;
 
-    for candidate in super::port_candidates(requested) {
+    for candidate in port_candidates(requested) {
         match open_candidate(&candidate, baud, mode, read_timeout) {
             Ok(backend) => return Ok((candidate, backend)),
             Err(err) => last_err = Some(err),
@@ -103,6 +108,145 @@ pub fn open_interactive_backend(
             format!("no candidate ports found for {}", requested.display()),
         )
     }))
+}
+
+pub fn port_candidates(requested: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if requested_file_name_starts_with(requested, "tty.") {
+        if let Some(pair) = paired_tty_cu_path(requested) {
+            push_unique(&mut candidates, pair);
+        }
+        push_unique(&mut candidates, requested.to_path_buf());
+    } else {
+        push_unique(&mut candidates, requested.to_path_buf());
+        if let Some(pair) = paired_tty_cu_path(requested) {
+            push_unique(&mut candidates, pair);
+        }
+    }
+
+    if let Some(parent) = requested.parent() {
+        if let Some(fragment) = usbmodem_fragment(requested) {
+            for prefer_cu in [true, false] {
+                if let Ok(entries) = fs::read_dir(parent) {
+                    let mut matches = entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| {
+                            path.file_name().is_some_and(|name| {
+                                let name = name.to_string_lossy();
+                                name.contains(fragment)
+                                    && if prefer_cu {
+                                        name.starts_with("cu.")
+                                    } else {
+                                        name.starts_with("tty.")
+                                    }
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    matches.sort();
+                    for path in matches {
+                        push_unique(&mut candidates, path);
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+pub fn paired_tty_cu_path(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_string_lossy();
+    let paired_name = if let Some(rest) = file_name.strip_prefix("tty.") {
+        format!("cu.{rest}")
+    } else if let Some(rest) = file_name.strip_prefix("cu.") {
+        format!("tty.{rest}")
+    } else {
+        return None;
+    };
+
+    Some(path.with_file_name(paired_name))
+}
+
+pub fn usbmodem_fragment(path: &Path) -> Option<&'static str> {
+    let file_name = path.file_name()?.to_string_lossy();
+    if file_name.contains("usbmodem") {
+        Some("usbmodem")
+    } else if file_name.contains("usbserial") {
+        Some("usbserial")
+    } else {
+        None
+    }
+}
+
+fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+pub fn requested_file_name_starts_with(path: &Path, prefix: &str) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
+}
+
+pub fn passthrough_key_payload(key: KeyEvent, policy: PassthroughPolicy) -> Option<Vec<u8>> {
+    match key.code {
+        KeyCode::Char(ch) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            ascii_control_byte(ch).map(|byte| vec![byte])
+        }
+        KeyCode::Char(ch) => {
+            let mut out = [0; 4];
+            Some(ch.encode_utf8(&mut out).as_bytes().to_vec())
+        }
+        KeyCode::Enter => Some(newline_bytes(policy.input_newline_policy).to_vec()),
+        KeyCode::Backspace => Some(vec![0x7f]),
+        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
+        KeyCode::Tab => Some(vec![b'\t']),
+        KeyCode::Esc => Some(vec![0x1b]),
+        KeyCode::Left => Some(b"\x1b[D".to_vec()),
+        KeyCode::Right => Some(b"\x1b[C".to_vec()),
+        KeyCode::Up => Some(b"\x1b[A".to_vec()),
+        KeyCode::Down => Some(b"\x1b[B".to_vec()),
+        KeyCode::Home => Some(b"\x1b[H".to_vec()),
+        KeyCode::End => Some(b"\x1b[F".to_vec()),
+        _ => None,
+    }
+}
+
+pub fn is_passthrough_exit_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('\u{1d}'))
+        || (key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('}')))
+}
+
+pub fn is_passthrough_meta_exit_key(key: KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::ALT) && is_passthrough_escape_exit_suffix(key)
+}
+
+pub fn is_passthrough_escape_exit_suffix(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+}
+
+fn newline_bytes(policy: u32) -> &'static [u8] {
+    match policy {
+        NEWLINE_POLICY_LF => b"\n",
+        NEWLINE_POLICY_CR => b"\r",
+        NEWLINE_POLICY_CRLF => b"\r\n",
+        _ => b"\r",
+    }
+}
+
+fn ascii_control_byte(ch: char) -> Option<u8> {
+    let lower = ch.to_ascii_lowercase();
+    if lower.is_ascii_lowercase() {
+        Some((lower as u8) & 0x1f)
+    } else if matches!(ch, '[' | '\\' | ']' | '^' | '_') {
+        Some((ch as u8) & 0x1f)
+    } else {
+        None
+    }
 }
 
 fn open_candidate(
@@ -292,7 +436,7 @@ pub fn wait_terminal_event(deadline: Option<Instant>) -> io::Result<InteractiveE
     }
 }
 
-pub(crate) fn drain_terminal_event() -> io::Result<Option<Event>> {
+pub fn drain_terminal_event() -> io::Result<Option<Event>> {
     if retry_interrupted(|| event::poll(Duration::ZERO))? {
         Ok(Some(retry_interrupted(event::read)?))
     } else {
@@ -300,7 +444,7 @@ pub(crate) fn drain_terminal_event() -> io::Result<Option<Event>> {
     }
 }
 
-pub(crate) fn retry_interrupted<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+pub fn retry_interrupted<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     loop {
         match op() {
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
@@ -477,9 +621,15 @@ use unix_mio::UnixMioBackend;
 
 #[cfg(test)]
 mod tests {
-    use super::retry_interrupted;
+    use super::{
+        is_passthrough_exit_key, is_passthrough_meta_exit_key, paired_tty_cu_path,
+        passthrough_key_payload, port_candidates, requested_file_name_starts_with,
+        retry_interrupted, usbmodem_fragment,
+    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::cell::Cell;
     use std::io;
+    use std::path::PathBuf;
 
     #[test]
     fn retry_interrupted_retries_until_success() {
@@ -508,5 +658,95 @@ mod tests {
         .expect_err("non-interrupted errors should still propagate");
 
         assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn maps_tty_and_cu_port_pairs() {
+        assert_eq!(
+            paired_tty_cu_path(&PathBuf::from("/dev/tty.usbmodem2101")),
+            Some(PathBuf::from("/dev/cu.usbmodem2101"))
+        );
+        assert_eq!(
+            paired_tty_cu_path(&PathBuf::from("/dev/cu.usbmodem2101")),
+            Some(PathBuf::from("/dev/tty.usbmodem2101"))
+        );
+    }
+
+    #[test]
+    fn prefers_cu_pair_when_requested_port_is_tty() {
+        let candidates = port_candidates(&PathBuf::from("/dev/tty.usbmodem2101"));
+
+        assert_eq!(candidates[0], PathBuf::from("/dev/cu.usbmodem2101"));
+        assert_eq!(candidates[1], PathBuf::from("/dev/tty.usbmodem2101"));
+    }
+
+    #[test]
+    fn detects_tty_prefix_and_usb_serial_fragments() {
+        assert!(requested_file_name_starts_with(
+            &PathBuf::from("/dev/tty.usbmodem2101"),
+            "tty."
+        ));
+        assert!(!requested_file_name_starts_with(
+            &PathBuf::from("/dev/cu.usbmodem2101"),
+            "tty."
+        ));
+        assert_eq!(
+            usbmodem_fragment(&PathBuf::from("/dev/tty.usbmodem2101")),
+            Some("usbmodem")
+        );
+        assert_eq!(
+            usbmodem_fragment(&PathBuf::from("/dev/cu.usbserial-0001")),
+            Some("usbserial")
+        );
+        assert_eq!(usbmodem_fragment(&PathBuf::from("/tmp/file")), None);
+    }
+
+    #[test]
+    fn passthrough_key_payload_maps_terminal_keys() {
+        assert_eq!(
+            passthrough_key_payload(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()),
+                Default::default()
+            ),
+            Some(vec![b'a'])
+        );
+        assert_eq!(
+            passthrough_key_payload(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                Default::default()
+            ),
+            Some(vec![0x03])
+        );
+        assert_eq!(
+            passthrough_key_payload(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+                Default::default()
+            ),
+            Some(vec![b'\r'])
+        );
+    }
+
+    #[test]
+    fn passthrough_exit_keys_accept_control_and_alt_variants() {
+        assert!(is_passthrough_exit_key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(is_passthrough_exit_key(KeyEvent::new(
+            KeyCode::Char('\u{1d}'),
+            KeyModifiers::empty()
+        )));
+        assert!(!is_passthrough_exit_key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::empty()
+        )));
+        assert!(is_passthrough_meta_exit_key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::ALT
+        )));
+        assert!(is_passthrough_meta_exit_key(KeyEvent::new(
+            KeyCode::Char('X'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT
+        )));
     }
 }

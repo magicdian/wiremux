@@ -29,6 +29,9 @@ sources/
         `-- p4/
             `-- README.md
 build/
++-- wiremux-build.toml
++-- wiremux-vendors.toml
+`-- wiremux-hosts.toml
 tools/
 +-- wiremux-build
 `-- wiremux-build-helper/
@@ -70,7 +73,7 @@ The current repository still uses the pre-migration paths:
 | `sources/esp32/components/esp-wiremux` | `sources/vendor/espressif/generic/components/esp-wiremux` | PR3 |
 | `sources/esp32/examples/esp_wiremux_console_demo` | `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` | PR3 |
 | `sources/host` | `sources/host/wiremux` | PR4 |
-| host workspace skeleton | `sources/host/wiremux` workspace root with member crate at `sources/host/wiremux/crates/wiremux-cli` | PR5 |
+| host workspace skeleton | `sources/host/wiremux` workspace root with member crates under `sources/host/wiremux/crates/{host-session,interactive,tui,cli}` | PR5 + follow-up host crate split |
 | profile skeleton docs | `sources/profiles` | PR6 |
 | build orchestrator | `tools/wiremux-build`, `tools/wiremux-build-helper` | PR7 |
 | CI/release validation | migrated layout and generated outputs | PR8 |
@@ -89,8 +92,8 @@ The planned implementation shape is:
 - `tools/wiremux-build`: Python bootstrap and command entrypoint.
 - `tools/wiremux-build-helper`: Rust helper for product-specific validation,
   metadata, and operations that benefit from compiled code.
-- TOML configuration files for product defaults, presets, selected state, and
-  tool policy.
+- TOML configuration files for product defaults, vendor scopes, host modes,
+  selected state, and tool policy.
 
 The orchestrator may select products, validate tool availability, derive
 environment exports, call underlying tools, and collect metadata. It must leave
@@ -122,14 +125,68 @@ Environment variables do not normally override the selected configuration. They
 may be used for tool discovery or explicit debugging only when a command
 documents that behavior.
 
-Valid host presets are:
+Interactive lunch uses two dimensions:
 
+- Vendor scope/model, maintained in `build/wiremux-vendors.toml`.
+- Host mode, maintained in `build/wiremux-hosts.toml`.
+
+The primary user flow is:
+
+```bash
+tools/wiremux-build lunch
+```
+
+Non-interactive scripts must use explicit flags:
+
+```bash
+tools/wiremux-build lunch --vendor esp32-s3 --host vendor-enhanced
+tools/wiremux-build lunch --vendor all --host generic
+tools/wiremux-build lunch --vendor skip --host all-features
+```
+
+The old positional `lunch <device> <host-preset>` form is not supported.
+
+Valid host modes are:
+
+- `generic`
+- `vendor-enhanced`
 - `all-features`
-- `generic-only`
-- `device-only`
 
-The combination `core-only + device-only` is invalid because `device-only`
-requires a concrete device/vendor target, and `core-only` has none.
+`vendor-enhanced` requires a single concrete vendor model. Vendor scopes `skip`
+and `all` allow only `generic` or `all-features`. The initial vendor dispatch
+implementation supports ESP32-S3; other listed models may be placeholders and
+must fail clearly when build/check execution would require them.
+
+## Check and Build Commands
+
+`check` is the developer gate and is intentionally broader than the selected
+lunch profile:
+
+```bash
+tools/wiremux-build check
+tools/wiremux-build check core
+tools/wiremux-build check host
+tools/wiremux-build check vendor
+tools/wiremux-build check all
+```
+
+With no selector, `check` defaults to `all`. `check host` covers the configured
+host feature matrix, and `check vendor` covers every implemented vendor model
+instead of only the current lunch selection.
+
+`build` is selected-profile oriented:
+
+```bash
+tools/wiremux-build build
+tools/wiremux-build build core
+tools/wiremux-build build host
+tools/wiremux-build build vendor
+```
+
+With no selector, `build` compiles the selected project: core, the selected host
+mode, and the selected vendor target when vendor builds are enabled. If the
+selected vendor scope is `skip`, `build vendor` warns and performs no vendor
+firmware build.
 
 ## Reproducibility Policy
 

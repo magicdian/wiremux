@@ -1,0 +1,7 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "verify build selector tests and validation commands"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "verify wiremux-build source layout contract"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "verify deterministic CLI errors"}
+{"file": "tools/wiremux-build-helper/src/main.rs", "reason": "review command implementation and tests"}
+{"file": "docs/source-layout-build.md", "reason": "verify public CLI docs match implementation"}

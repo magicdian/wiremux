@@ -24,7 +24,6 @@ def main() -> int:
         "--",
         *sys.argv[1:],
     ]
-    print("+ " + " ".join(cmd))
     completed = subprocess.run(cmd, cwd=repo_root, env=os.environ.copy())
     return completed.returncode
 

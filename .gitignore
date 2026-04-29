@@ -2,6 +2,7 @@
 /sources/core/c/build/
 /sources/vendor/espressif/generic/examples/*/build/
 /sources/vendor/espressif/generic/examples/*/sdkconfig
+/sources/vendor/espressif/generic/examples/*/sdkconfig.old
 /dist/
 .DS_Store
 /sources/vendor/espressif/generic/examples/*/dependencies.lock

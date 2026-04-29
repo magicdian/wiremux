@@ -1,0 +1,9 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host workspace and crate/module layout rules"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Host error behavior and interactive interruption rules"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Host Rust validation and protocol behavior requirements"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Host diagnostics and output contracts touch logging-adjacent behavior"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Refactor extracts shared code instead of duplicating"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Crate boundary split across host-session, interactive, tui, cli"}
+{"file": "docs/source-layout-build.md", "reason": "Prior host workspace skeleton and target product layout"}

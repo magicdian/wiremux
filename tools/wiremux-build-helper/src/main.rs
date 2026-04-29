@@ -1,35 +1,69 @@
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use dialoguer::{theme::ColorfulTheme, Select};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const VENDOR_KIND_SKIP: &str = "skip";
+const VENDOR_KIND_ALL: &str = "all";
+const VENDOR_KIND_MODEL: &str = "model";
+
+const HOST_GENERIC: &str = "generic";
+const HOST_VENDOR_ENHANCED: &str = "vendor-enhanced";
+const HOST_ALL_FEATURES: &str = "all-features";
+
 #[derive(Debug, Deserialize)]
-struct Config {
+struct BuildConfig {
     defaults: Defaults,
-    devices: BTreeMap<String, DeviceDef>,
-    host_presets: BTreeMap<String, HostPresetDef>,
     tools: BTreeMap<String, ToolContract>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Defaults {
-    device: String,
-    host_preset: String,
+    vendor: String,
+    host: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct DeviceDef {
-    product: String,
+struct VendorConfig {
+    vendors: Vec<VendorDef>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct VendorDef {
+    id: String,
+    label: String,
+    kind: String,
+    #[serde(default)]
+    family: Option<String>,
+    #[serde(default)]
+    idf_target: Option<String>,
+    #[serde(default)]
+    example_path: Option<String>,
+    #[serde(default)]
+    host_feature: Option<String>,
+    #[serde(default)]
+    implemented: bool,
+    #[serde(default)]
+    include_in_all: bool,
 }
 
 #[derive(Debug, Deserialize)]
-struct HostPresetDef {
+struct HostConfig {
+    hosts: Vec<HostDef>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct HostDef {
+    id: String,
+    label: String,
     profile: String,
+    allowed_vendor_kinds: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,10 +74,18 @@ struct ToolContract {
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 struct Selected {
-    device: String,
-    host_preset: String,
-    product: Option<String>,
-    profile: Option<String>,
+    vendor: String,
+    host: String,
+    vendor_kind: String,
+    vendor_label: String,
+    host_profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vendor_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vendor_idf_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vendor_example_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     selected_at_unix: Option<u64>,
 }
 
@@ -63,6 +105,50 @@ struct MetadataRecord {
     idf_py: Option<bool>,
 }
 
+#[derive(Debug)]
+enum LunchRequest {
+    Interactive,
+    Explicit { vendor: String, host: String },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CheckTarget {
+    Core,
+    Host,
+    Vendor,
+    All,
+}
+
+impl CheckTarget {
+    fn as_str(self) -> &'static str {
+        match self {
+            CheckTarget::Core => "core",
+            CheckTarget::Host => "host",
+            CheckTarget::Vendor => "vendor",
+            CheckTarget::All => "all",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildTarget {
+    Selected,
+    Core,
+    Host,
+    Vendor,
+}
+
+impl BuildTarget {
+    fn as_str(self) -> &'static str {
+        match self {
+            BuildTarget::Selected => "selected",
+            BuildTarget::Core => "core",
+            BuildTarget::Host => "host",
+            BuildTarget::Vendor => "vendor",
+        }
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -75,10 +161,15 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let repo_root = repo_root()?;
-    let config_path = repo_root.join("build/wiremux-build.toml");
+    let build_config_path = repo_root.join("build/wiremux-build.toml");
+    let vendor_config_path = repo_root.join("build/wiremux-vendors.toml");
+    let host_config_path = repo_root.join("build/wiremux-hosts.toml");
     let selected_path = repo_root.join(".wiremux/build/selected.toml");
     let metadata_path = repo_root.join("build/out/metadata.jsonl");
-    let config = read_config(&config_path)?;
+    let build_config: BuildConfig = read_toml(&build_config_path)?;
+    let vendor_config: VendorConfig = read_toml(&vendor_config_path)?;
+    let host_config: HostConfig = read_toml(&host_config_path)?;
+    validate_configs(&build_config, &vendor_config, &host_config)?;
 
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
@@ -86,18 +177,46 @@ fn run() -> Result<(), String> {
     }
 
     match args[0].as_str() {
-        "lunch" => cmd_lunch(&repo_root, &config, &selected_path, &args[1..]),
-        "env" => cmd_env(&config, &selected_path, &args[1..]),
-        "doctor" => cmd_doctor(&repo_root, &config, &metadata_path),
-        "check" => cmd_check(&repo_root, &config, &metadata_path, &args[1..]),
-        "build" => cmd_build(&repo_root, &config, &metadata_path, &args[1..]),
-        "package" => cmd_package(&repo_root, &config, &metadata_path, &args[1..]),
+        "lunch" => cmd_lunch(
+            &build_config,
+            &vendor_config,
+            &host_config,
+            &selected_path,
+            &args[1..],
+        ),
+        "env" => cmd_env(
+            &build_config,
+            &vendor_config,
+            &host_config,
+            &selected_path,
+            &args[1..],
+        ),
+        "doctor" => cmd_doctor(&repo_root, &build_config, &metadata_path),
+        "check" => cmd_check(
+            &repo_root,
+            &build_config,
+            &vendor_config,
+            &host_config,
+            &selected_path,
+            &metadata_path,
+            &args[1..],
+        ),
+        "build" => cmd_build(
+            &repo_root,
+            &build_config,
+            &vendor_config,
+            &host_config,
+            &selected_path,
+            &metadata_path,
+            &args[1..],
+        ),
+        "package" => cmd_package(&repo_root, &build_config, &metadata_path, &args[1..]),
         _ => Err(usage()),
     }
 }
 
 fn usage() -> String {
-    "usage: wiremux-build <command>\n  lunch <device> <host-preset>\n  env --shell bash|zsh\n  doctor\n  check core|host|vendor-espressif|all\n  build core|host|vendor-espressif\n  package esp-registry".to_string()
+    "usage: wiremux-build <command>\n  lunch [--vendor <skip|all|model> --host <generic|vendor-enhanced|all-features>]\n  env --shell bash|zsh\n  doctor\n  check [core|host|vendor|all]\n  build [core|host|vendor]\n  package esp-registry".to_string()
 }
 
 fn repo_root() -> Result<PathBuf, String> {
@@ -109,7 +228,7 @@ fn repo_root() -> Result<PathBuf, String> {
     Ok(root.to_path_buf())
 }
 
-fn read_config(path: &Path) -> Result<Config, String> {
+fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
 }
@@ -119,8 +238,12 @@ fn read_selected(path: &Path) -> Result<Option<Selected>, String> {
         return Ok(None);
     }
     let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let selected: Selected =
-        toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let selected: Selected = toml::from_str(&text).map_err(|e| {
+        format!(
+            "parse {}; run `tools/wiremux-build lunch` to regenerate selected state: {e}",
+            path.display()
+        )
+    })?;
     Ok(Some(selected))
 }
 
@@ -132,44 +255,202 @@ fn write_selected(path: &Path, selected: &Selected) -> Result<(), String> {
     fs::write(path, body).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
-fn cmd_lunch(
-    _repo_root: &Path,
-    config: &Config,
-    selected_path: &Path,
-    args: &[String],
+fn validate_configs(
+    build_config: &BuildConfig,
+    vendor_config: &VendorConfig,
+    host_config: &HostConfig,
 ) -> Result<(), String> {
-    if args.len() != 2 {
-        return Err("lunch requires <device> <host-preset>".to_string());
+    let mut vendor_ids = BTreeSet::new();
+    for vendor in &vendor_config.vendors {
+        if !vendor_ids.insert(vendor.id.as_str()) {
+            return Err(format!("duplicate vendor id: {}", vendor.id));
+        }
+        match vendor.kind.as_str() {
+            VENDOR_KIND_SKIP | VENDOR_KIND_ALL | VENDOR_KIND_MODEL => {}
+            _ => {
+                return Err(format!(
+                    "vendor {} has unknown kind {}",
+                    vendor.id, vendor.kind
+                ))
+            }
+        }
     }
-    let device = &args[0];
-    let host_preset = &args[1];
 
-    if device == "core-only" && host_preset == "device-only" {
-        return Err("invalid selection: core-only cannot be paired with device-only".to_string());
+    let mut host_ids = BTreeSet::new();
+    for host in &host_config.hosts {
+        if !host_ids.insert(host.id.as_str()) {
+            return Err(format!("duplicate host id: {}", host.id));
+        }
     }
 
-    let device_def = config
-        .devices
-        .get(device)
-        .ok_or_else(|| format!("unknown device: {device}"))?;
-    let host_def = config
-        .host_presets
-        .get(host_preset)
-        .ok_or_else(|| format!("unknown host preset: {host_preset}"))?;
-
-    let selected = Selected {
-        device: device.clone(),
-        host_preset: host_preset.clone(),
-        product: Some(device_def.product.clone()),
-        profile: Some(host_def.profile.clone()),
-        selected_at_unix: Some(now_unix()),
-    };
-    write_selected(selected_path, &selected)?;
-    println!("selected device={device} host_preset={host_preset}");
+    find_vendor(vendor_config, &build_config.defaults.vendor)?;
+    find_host(host_config, &build_config.defaults.host)?;
+    validate_selection(
+        vendor_config,
+        host_config,
+        &build_config.defaults.vendor,
+        &build_config.defaults.host,
+    )?;
     Ok(())
 }
 
-fn cmd_env(config: &Config, selected_path: &Path, args: &[String]) -> Result<(), String> {
+fn cmd_lunch(
+    build_config: &BuildConfig,
+    vendor_config: &VendorConfig,
+    host_config: &HostConfig,
+    selected_path: &Path,
+    args: &[String],
+) -> Result<(), String> {
+    let (vendor_id, host_id) = match parse_lunch_args(args)? {
+        LunchRequest::Interactive => {
+            choose_lunch_interactively(build_config, vendor_config, host_config)?
+        }
+        LunchRequest::Explicit { vendor, host } => (vendor, host),
+    };
+
+    let selected = resolve_selection(
+        vendor_config,
+        host_config,
+        &vendor_id,
+        &host_id,
+        Some(now_unix()),
+    )?;
+    write_selected(selected_path, &selected)?;
+    println!("selected vendor={} host={}", selected.vendor, selected.host);
+    Ok(())
+}
+
+fn parse_lunch_args(args: &[String]) -> Result<LunchRequest, String> {
+    if args.is_empty() {
+        return Ok(LunchRequest::Interactive);
+    }
+
+    let mut vendor = None;
+    let mut host = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--vendor" => {
+                if vendor.is_some() {
+                    return Err("lunch received duplicate --vendor".to_string());
+                }
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "lunch --vendor requires a value".to_string())?;
+                vendor = Some(value.clone());
+            }
+            "--host" => {
+                if host.is_some() {
+                    return Err("lunch received duplicate --host".to_string());
+                }
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "lunch --host requires a value".to_string())?;
+                host = Some(value.clone());
+            }
+            _ => {
+                return Err(
+                    "lunch positional arguments are no longer supported; use `lunch --vendor <id> --host <id>` or run `lunch` interactively".to_string(),
+                );
+            }
+        }
+        i += 1;
+    }
+
+    match (vendor, host) {
+        (Some(vendor), Some(host)) => Ok(LunchRequest::Explicit { vendor, host }),
+        _ => Err("lunch requires both --vendor and --host for non-interactive use".to_string()),
+    }
+}
+
+fn choose_lunch_interactively(
+    build_config: &BuildConfig,
+    vendor_config: &VendorConfig,
+    host_config: &HostConfig,
+) -> Result<(String, String), String> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return Err(
+            "interactive lunch requires a terminal; use `lunch --vendor <id> --host <id>` in scripts"
+                .to_string(),
+        );
+    }
+
+    let theme = ColorfulTheme::default();
+    let vendor_items = vendor_config
+        .vendors
+        .iter()
+        .map(format_vendor_choice)
+        .collect::<Vec<String>>();
+    let default_vendor = vendor_config
+        .vendors
+        .iter()
+        .position(|v| v.id == build_config.defaults.vendor)
+        .unwrap_or(0);
+    let vendor_index = Select::with_theme(&theme)
+        .with_prompt("Select vendor build scope")
+        .items(&vendor_items)
+        .default(default_vendor)
+        .interact_opt()
+        .map_err(|e| format!("interactive vendor selection failed: {e}"))?
+        .ok_or_else(|| "lunch cancelled".to_string())?;
+    let vendor = &vendor_config.vendors[vendor_index];
+
+    let host_choices = allowed_hosts_for_vendor(vendor, host_config);
+    if host_choices.is_empty() {
+        return Err(format!("vendor {} has no allowed host modes", vendor.id));
+    }
+    let host_items = host_choices
+        .iter()
+        .map(|h| format!("{} ({})", h.label, h.id))
+        .collect::<Vec<String>>();
+    let default_host = host_choices
+        .iter()
+        .position(|h| h.id == build_config.defaults.host)
+        .unwrap_or(0);
+    let host_index = Select::with_theme(&theme)
+        .with_prompt("Select host mode")
+        .items(&host_items)
+        .default(default_host)
+        .interact_opt()
+        .map_err(|e| format!("interactive host selection failed: {e}"))?
+        .ok_or_else(|| "lunch cancelled".to_string())?;
+    let host = host_choices[host_index];
+
+    Ok((vendor.id.clone(), host.id.clone()))
+}
+
+fn format_vendor_choice(vendor: &VendorDef) -> String {
+    match vendor.kind.as_str() {
+        VENDOR_KIND_MODEL if vendor.implemented => format!("{} ({})", vendor.label, vendor.id),
+        VENDOR_KIND_MODEL => format!("{} ({}, placeholder)", vendor.label, vendor.id),
+        _ => format!("{} ({})", vendor.label, vendor.id),
+    }
+}
+
+fn allowed_hosts_for_vendor<'a>(
+    vendor: &VendorDef,
+    host_config: &'a HostConfig,
+) -> Vec<&'a HostDef> {
+    host_config
+        .hosts
+        .iter()
+        .filter(|host| {
+            host.allowed_vendor_kinds
+                .iter()
+                .any(|kind| kind == &vendor.kind)
+        })
+        .collect()
+}
+
+fn cmd_env(
+    build_config: &BuildConfig,
+    vendor_config: &VendorConfig,
+    host_config: &HostConfig,
+    selected_path: &Path,
+    args: &[String],
+) -> Result<(), String> {
     if args.len() != 2 || args[0] != "--shell" {
         return Err("env requires --shell bash|zsh".to_string());
     }
@@ -178,19 +459,37 @@ fn cmd_env(config: &Config, selected_path: &Path, args: &[String]) -> Result<(),
         return Err("env --shell supports only bash|zsh".to_string());
     }
 
-    let resolved = resolve_selected(config, selected_path, None, None)?;
-    println!("export WIREMUX_DEVICE='{}'", resolved.device);
-    println!("export WIREMUX_HOST_PRESET='{}'", resolved.host_preset);
-    if let Some(product) = resolved.product {
-        println!("export WIREMUX_PRODUCT='{}'", product);
+    let resolved = resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+    println!("export WIREMUX_VENDOR={}", shell_quote(&resolved.vendor));
+    println!(
+        "export WIREMUX_VENDOR_KIND={}",
+        shell_quote(&resolved.vendor_kind)
+    );
+    println!("export WIREMUX_HOST={}", shell_quote(&resolved.host));
+    println!(
+        "export WIREMUX_HOST_PROFILE={}",
+        shell_quote(&resolved.host_profile)
+    );
+    if let Some(family) = resolved.vendor_family {
+        println!("export WIREMUX_VENDOR_FAMILY={}", shell_quote(&family));
     }
-    if let Some(profile) = resolved.profile {
-        println!("export WIREMUX_PROFILE='{}'", profile);
+    if let Some(idf_target) = resolved.vendor_idf_target {
+        println!("export WIREMUX_IDF_TARGET={}", shell_quote(&idf_target));
+    }
+    if let Some(example_path) = resolved.vendor_example_path {
+        println!(
+            "export WIREMUX_VENDOR_EXAMPLE={}",
+            shell_quote(&example_path)
+        );
     }
     Ok(())
 }
 
-fn cmd_doctor(repo_root: &Path, config: &Config, metadata_path: &Path) -> Result<(), String> {
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn cmd_doctor(repo_root: &Path, config: &BuildConfig, metadata_path: &Path) -> Result<(), String> {
     let ci = is_ci();
     let dirty = git_dirty(repo_root).unwrap_or(false);
 
@@ -200,7 +499,8 @@ fn cmd_doctor(repo_root: &Path, config: &Config, metadata_path: &Path) -> Result
     check_tool_contract("cmake", &["--version"], config.tools.get("cmake"), ci)?;
     check_tool_contract("ctest", &["--version"], config.tools.get("ctest"), ci)?;
 
-    let idf_ok = check_optional_tool_contract("idf.py", &["--version"], config.tools.get("idf_py"), ci)?;
+    let idf_ok =
+        check_optional_tool_contract("idf.py", &["--version"], config.tools.get("idf_py"), ci)?;
 
     append_metadata(
         metadata_path,
@@ -219,68 +519,146 @@ fn cmd_doctor(repo_root: &Path, config: &Config, metadata_path: &Path) -> Result
 
 fn cmd_check(
     repo_root: &Path,
-    config: &Config,
+    build_config: &BuildConfig,
+    vendor_config: &VendorConfig,
+    _host_config: &HostConfig,
+    _selected_path: &Path,
     metadata_path: &Path,
     args: &[String],
 ) -> Result<(), String> {
     let ci = is_ci();
-    if args.len() != 1 {
-        return Err("check requires core|host|vendor-espressif|all".to_string());
-    }
-    match args[0].as_str() {
-        "core" => run_core_check(repo_root)?,
-        "host" => run_host_check(repo_root)?,
-        "vendor-espressif" => run_vendor_build(repo_root, config.tools.get("idf_py"), ci, true)?,
-        "all" => {
-            run_core_check(repo_root)?;
-            run_host_check(repo_root)?;
-            run_vendor_build(repo_root, config.tools.get("idf_py"), ci, true)?;
+    let target = parse_check_target(args)?;
+    match target {
+        CheckTarget::Core => run_core_check(repo_root)?,
+        CheckTarget::Host => run_host_gate_check(repo_root, vendor_config)?,
+        CheckTarget::Vendor => {
+            run_vendor_gate_check(
+                repo_root,
+                vendor_config,
+                build_config.tools.get("idf_py"),
+                ci,
+            )?;
         }
-        _ => return Err("check requires core|host|vendor-espressif|all".to_string()),
+        CheckTarget::All => {
+            run_core_check(repo_root)?;
+            run_host_gate_check(repo_root, vendor_config)?;
+            run_vendor_gate_check(
+                repo_root,
+                vendor_config,
+                build_config.tools.get("idf_py"),
+                ci,
+            )?;
+        }
     }
-    append_metadata(metadata_path, &MetadataRecord {
-        event: "check".to_string(),
-        unix: now_unix(),
-        target: Some(args[0].clone()),
-        status: Some("ok".to_string()),
-        ci: None,
-        dirty: None,
-        idf_py: None,
-    })?;
+    append_metadata(
+        metadata_path,
+        &MetadataRecord {
+            event: "check".to_string(),
+            unix: now_unix(),
+            target: Some(target.as_str().to_string()),
+            status: Some("ok".to_string()),
+            ci: None,
+            dirty: None,
+            idf_py: None,
+        },
+    )?;
     Ok(())
 }
 
 fn cmd_build(
     repo_root: &Path,
-    config: &Config,
+    build_config: &BuildConfig,
+    vendor_config: &VendorConfig,
+    host_config: &HostConfig,
+    selected_path: &Path,
     metadata_path: &Path,
     args: &[String],
 ) -> Result<(), String> {
     let ci = is_ci();
+    let target = parse_build_target(args)?;
+    match target {
+        BuildTarget::Selected => {
+            let selected =
+                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+            run_core_build(repo_root)?;
+            run_host_build(repo_root, vendor_config, &selected)?;
+            run_selected_vendor_build(
+                repo_root,
+                vendor_config,
+                &selected,
+                build_config.tools.get("idf_py"),
+                ci,
+                false,
+            )?;
+        }
+        BuildTarget::Core => run_core_build(repo_root)?,
+        BuildTarget::Host => {
+            let selected =
+                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+            run_host_build(repo_root, vendor_config, &selected)?;
+        }
+        BuildTarget::Vendor => {
+            let selected =
+                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+            run_selected_vendor_build(
+                repo_root,
+                vendor_config,
+                &selected,
+                build_config.tools.get("idf_py"),
+                ci,
+                false,
+            )?;
+        }
+    }
+    append_metadata(
+        metadata_path,
+        &MetadataRecord {
+            event: "build".to_string(),
+            unix: now_unix(),
+            target: Some(target.as_str().to_string()),
+            status: Some("ok".to_string()),
+            ci: None,
+            dirty: None,
+            idf_py: None,
+        },
+    )?;
+    Ok(())
+}
+
+fn parse_check_target(args: &[String]) -> Result<CheckTarget, String> {
+    if args.is_empty() {
+        return Ok(CheckTarget::All);
+    }
     if args.len() != 1 {
-        return Err("build requires core|host|vendor-espressif".to_string());
+        return Err("check accepts at most one target: core|host|vendor|all".to_string());
     }
     match args[0].as_str() {
-        "core" => run_core_build(repo_root)?,
-        "host" => run_host_build(repo_root)?,
-        "vendor-espressif" => run_vendor_build(repo_root, config.tools.get("idf_py"), ci, false)?,
-        _ => return Err("build requires core|host|vendor-espressif".to_string()),
+        "core" => Ok(CheckTarget::Core),
+        "host" => Ok(CheckTarget::Host),
+        "vendor" => Ok(CheckTarget::Vendor),
+        "all" => Ok(CheckTarget::All),
+        _ => Err("check target must be core|host|vendor|all".to_string()),
     }
-    append_metadata(metadata_path, &MetadataRecord {
-        event: "build".to_string(),
-        unix: now_unix(),
-        target: Some(args[0].clone()),
-        status: Some("ok".to_string()),
-        ci: None,
-        dirty: None,
-        idf_py: None,
-    })?;
-    Ok(())
+}
+
+fn parse_build_target(args: &[String]) -> Result<BuildTarget, String> {
+    if args.is_empty() {
+        return Ok(BuildTarget::Selected);
+    }
+    if args.len() != 1 {
+        return Err("build accepts at most one target: core|host|vendor".to_string());
+    }
+    match args[0].as_str() {
+        "core" => Ok(BuildTarget::Core),
+        "host" => Ok(BuildTarget::Host),
+        "vendor" => Ok(BuildTarget::Vendor),
+        _ => Err("build target must be core|host|vendor".to_string()),
+    }
 }
 
 fn cmd_package(
     repo_root: &Path,
-    _config: &Config,
+    _config: &BuildConfig,
     metadata_path: &Path,
     args: &[String],
 ) -> Result<(), String> {
@@ -293,51 +671,110 @@ fn cmd_package(
         &[],
         None,
     )?;
-    append_metadata(metadata_path, &MetadataRecord {
-        event: "package".to_string(),
-        unix: now_unix(),
-        target: Some("esp-registry".to_string()),
-        status: Some("ok".to_string()),
-        ci: None,
-        dirty: None,
-        idf_py: None,
-    })?;
+    append_metadata(
+        metadata_path,
+        &MetadataRecord {
+            event: "package".to_string(),
+            unix: now_unix(),
+            target: Some("esp-registry".to_string()),
+            status: Some("ok".to_string()),
+            ci: None,
+            dirty: None,
+            idf_py: None,
+        },
+    )?;
     Ok(())
 }
 
 fn resolve_selected(
-    config: &Config,
+    build_config: &BuildConfig,
+    vendor_config: &VendorConfig,
+    host_config: &HostConfig,
     selected_path: &Path,
-    cli_device: Option<String>,
-    cli_host: Option<String>,
 ) -> Result<Selected, String> {
-    let selected = read_selected(selected_path)?;
-    let selected_device = selected.as_ref().map(|s| s.device.clone());
-    let selected_host = selected.as_ref().map(|s| s.host_preset.clone());
+    if let Some(selected) = read_selected(selected_path)? {
+        return resolve_selection(
+            vendor_config,
+            host_config,
+            &selected.vendor,
+            &selected.host,
+            selected.selected_at_unix,
+        );
+    }
 
-    let device = cli_device
-        .or(selected_device)
-        .unwrap_or_else(|| config.defaults.device.clone());
-    let host_preset = cli_host
-        .or(selected_host)
-        .unwrap_or_else(|| config.defaults.host_preset.clone());
+    resolve_selection(
+        vendor_config,
+        host_config,
+        &build_config.defaults.vendor,
+        &build_config.defaults.host,
+        None,
+    )
+}
 
-    let device_def = config
-        .devices
-        .get(&device)
-        .ok_or_else(|| format!("unknown device: {device}"))?;
-    let host_def = config
-        .host_presets
-        .get(&host_preset)
-        .ok_or_else(|| format!("unknown host preset: {host_preset}"))?;
+fn resolve_selection(
+    vendor_config: &VendorConfig,
+    host_config: &HostConfig,
+    vendor_id: &str,
+    host_id: &str,
+    selected_at_unix: Option<u64>,
+) -> Result<Selected, String> {
+    let (vendor, host) = validate_selection(vendor_config, host_config, vendor_id, host_id)?;
+    Ok(selected_from_defs(vendor, host, selected_at_unix))
+}
 
-    Ok(Selected {
-        device,
-        host_preset,
-        product: Some(device_def.product.clone()),
-        profile: Some(host_def.profile.clone()),
-        selected_at_unix: selected.and_then(|s| s.selected_at_unix),
-    })
+fn validate_selection<'a>(
+    vendor_config: &'a VendorConfig,
+    host_config: &'a HostConfig,
+    vendor_id: &str,
+    host_id: &str,
+) -> Result<(&'a VendorDef, &'a HostDef), String> {
+    let vendor = find_vendor(vendor_config, vendor_id)?;
+    let host = find_host(host_config, host_id)?;
+    if !host
+        .allowed_vendor_kinds
+        .iter()
+        .any(|kind| kind == &vendor.kind)
+    {
+        return Err(format!(
+            "host mode {} is not valid for vendor {} ({})",
+            host.id, vendor.id, vendor.kind
+        ));
+    }
+    Ok((vendor, host))
+}
+
+fn selected_from_defs(
+    vendor: &VendorDef,
+    host: &HostDef,
+    selected_at_unix: Option<u64>,
+) -> Selected {
+    Selected {
+        vendor: vendor.id.clone(),
+        host: host.id.clone(),
+        vendor_kind: vendor.kind.clone(),
+        vendor_label: vendor.label.clone(),
+        host_profile: host.profile.clone(),
+        vendor_family: vendor.family.clone(),
+        vendor_idf_target: vendor.idf_target.clone(),
+        vendor_example_path: vendor.example_path.clone(),
+        selected_at_unix,
+    }
+}
+
+fn find_vendor<'a>(config: &'a VendorConfig, id: &str) -> Result<&'a VendorDef, String> {
+    config
+        .vendors
+        .iter()
+        .find(|vendor| vendor.id == id)
+        .ok_or_else(|| format!("unknown vendor: {id}"))
+}
+
+fn find_host<'a>(config: &'a HostConfig, id: &str) -> Result<&'a HostDef, String> {
+    config
+        .hosts
+        .iter()
+        .find(|host| host.id == id)
+        .ok_or_else(|| format!("unknown host mode: {id}"))
 }
 
 fn run_core_check(repo_root: &Path) -> Result<(), String> {
@@ -347,7 +784,12 @@ fn run_core_check(repo_root: &Path) -> Result<(), String> {
         &["-S", "sources/core/c", "-B", "sources/core/c/build"],
         None,
     )?;
-    run_native(repo_root, "cmake", &["--build", "sources/core/c/build"], None)?;
+    run_native(
+        repo_root,
+        "cmake",
+        &["--build", "sources/core/c/build"],
+        None,
+    )?;
     run_native(
         repo_root,
         "ctest",
@@ -364,26 +806,143 @@ fn run_core_build(repo_root: &Path) -> Result<(), String> {
         &["-S", "sources/core/c", "-B", "sources/core/c/build"],
         None,
     )?;
-    run_native(repo_root, "cmake", &["--build", "sources/core/c/build"], None)?;
+    run_native(
+        repo_root,
+        "cmake",
+        &["--build", "sources/core/c/build"],
+        None,
+    )?;
     Ok(())
 }
 
-fn run_host_check(repo_root: &Path) -> Result<(), String> {
+fn run_host_gate_check(repo_root: &Path, vendor_config: &VendorConfig) -> Result<(), String> {
     let host_dir = repo_root.join("sources/host/wiremux");
     run_native(&host_dir, "cargo", &["fmt", "--check"], None)?;
-    run_native(&host_dir, "cargo", &["check"], None)?;
-    run_native(&host_dir, "cargo", &["test"], None)?;
+    for feature in host_gate_features(vendor_config) {
+        run_native_owned(
+            &host_dir,
+            "cargo",
+            &cargo_args_with_feature("check", &feature),
+            None,
+        )?;
+        run_native_owned(
+            &host_dir,
+            "cargo",
+            &cargo_args_with_feature("test", &feature),
+            None,
+        )?;
+    }
     Ok(())
 }
 
-fn run_host_build(repo_root: &Path) -> Result<(), String> {
-    let host_dir = repo_root.join("sources/host/wiremux");
-    run_native(&host_dir, "cargo", &["build"], None)?;
-    Ok(())
+fn host_gate_features(vendor_config: &VendorConfig) -> Vec<String> {
+    let mut features = Vec::new();
+    push_unique(&mut features, HOST_GENERIC.to_string());
+    push_unique(&mut features, HOST_ALL_FEATURES.to_string());
+    for vendor in &vendor_config.vendors {
+        if vendor.kind == VENDOR_KIND_MODEL && vendor.implemented {
+            if let Some(feature) = &vendor.host_feature {
+                push_unique(&mut features, feature.clone());
+            }
+        }
+    }
+    features
 }
 
-fn run_vendor_build(
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
+}
+
+fn run_host_build(
     repo_root: &Path,
+    vendor_config: &VendorConfig,
+    selected: &Selected,
+) -> Result<(), String> {
+    let host_dir = repo_root.join("sources/host/wiremux");
+    run_native_owned(
+        &host_dir,
+        "cargo",
+        &cargo_args_with_host_features("build", vendor_config, selected)?,
+        None,
+    )?;
+    Ok(())
+}
+
+fn cargo_args_with_host_features(
+    command: &str,
+    vendor_config: &VendorConfig,
+    selected: &Selected,
+) -> Result<Vec<String>, String> {
+    let feature = match selected.host.as_str() {
+        HOST_GENERIC => "generic".to_string(),
+        HOST_ALL_FEATURES => HOST_ALL_FEATURES.to_string(),
+        HOST_VENDOR_ENHANCED => {
+            if selected.vendor_kind != VENDOR_KIND_MODEL {
+                return Err("vendor-enhanced host mode requires a single vendor model".to_string());
+            }
+            let vendor = find_vendor(vendor_config, &selected.vendor)?;
+            if !vendor.implemented {
+                return Err(format!(
+                    "vendor target {} is listed but host dispatch is not implemented yet",
+                    vendor.id
+                ));
+            }
+            vendor.host_feature.clone().ok_or_else(|| {
+                format!(
+                    "vendor target {} does not define a host feature for vendor-enhanced mode",
+                    vendor.id
+                )
+            })?
+        }
+        _ => return Err(format!("unknown selected host mode: {}", selected.host)),
+    };
+
+    Ok(vec![command.to_string(), "--features".to_string(), feature])
+}
+
+fn cargo_args_with_feature(command: &str, feature: &str) -> Vec<String> {
+    vec![
+        command.to_string(),
+        "--features".to_string(),
+        feature.to_string(),
+    ]
+}
+
+fn run_selected_vendor_build(
+    repo_root: &Path,
+    vendor_config: &VendorConfig,
+    selected: &Selected,
+    idf_contract: Option<&ToolContract>,
+    ci: bool,
+    local_skip_ok: bool,
+) -> Result<(), String> {
+    let vendors = selected_vendor_targets(vendor_config, selected)?;
+    if vendors.is_empty() {
+        eprintln!("warning: vendor scope is skip; vendor build skipped");
+        return Ok(());
+    }
+    run_vendor_targets(repo_root, &vendors, idf_contract, ci, local_skip_ok)
+}
+
+fn run_vendor_gate_check(
+    repo_root: &Path,
+    vendor_config: &VendorConfig,
+    idf_contract: Option<&ToolContract>,
+    ci: bool,
+) -> Result<(), String> {
+    let vendors = implemented_vendor_targets(vendor_config);
+    if vendors.is_empty() {
+        eprintln!("warning: no implemented vendor targets; vendor check skipped");
+        return Ok(());
+    }
+    run_vendor_targets(repo_root, &vendors, idf_contract, ci, true)
+}
+
+fn run_vendor_targets(
+    repo_root: &Path,
+    vendors: &[&VendorDef],
     idf_contract: Option<&ToolContract>,
     ci: bool,
     local_skip_ok: bool,
@@ -391,13 +950,83 @@ fn run_vendor_build(
     let idf_ok = check_optional_tool_contract("idf.py", &["--version"], idf_contract, ci)?;
     if !idf_ok {
         if local_skip_ok && !ci {
-            println!("skip: idf.py not found; vendor-espressif check skipped for local environment");
+            println!("skip: idf.py not found; vendor check skipped for local environment");
             return Ok(());
         }
-        return Err("idf.py not found; cannot build vendor-espressif".to_string());
+        return Err("idf.py not found; cannot build selected vendor targets".to_string());
     }
-    let vendor_dir =
-        repo_root.join("sources/vendor/espressif/generic/examples/esp_wiremux_console_demo");
+
+    for vendor in vendors {
+        run_vendor_model(repo_root, vendor)?;
+    }
+    Ok(())
+}
+
+fn implemented_vendor_targets(vendor_config: &VendorConfig) -> Vec<&VendorDef> {
+    vendor_config
+        .vendors
+        .iter()
+        .filter(|vendor| vendor.kind == VENDOR_KIND_MODEL && vendor.implemented)
+        .collect()
+}
+
+fn selected_vendor_targets<'a>(
+    vendor_config: &'a VendorConfig,
+    selected: &Selected,
+) -> Result<Vec<&'a VendorDef>, String> {
+    match selected.vendor_kind.as_str() {
+        VENDOR_KIND_SKIP => Ok(Vec::new()),
+        VENDOR_KIND_MODEL => {
+            let vendor = find_vendor(vendor_config, &selected.vendor)?;
+            if !vendor.implemented {
+                return Err(format!(
+                    "vendor target {} is listed but build dispatch is not implemented yet",
+                    vendor.id
+                ));
+            }
+            Ok(vec![vendor])
+        }
+        VENDOR_KIND_ALL => {
+            let vendors = vendor_config
+                .vendors
+                .iter()
+                .filter(|vendor| {
+                    vendor.kind == VENDOR_KIND_MODEL && vendor.implemented && vendor.include_in_all
+                })
+                .collect::<Vec<&VendorDef>>();
+            if vendors.is_empty() {
+                return Err("vendor scope all has no implemented vendor targets".to_string());
+            }
+            Ok(vendors)
+        }
+        _ => Err(format!(
+            "unknown selected vendor kind: {}",
+            selected.vendor_kind
+        )),
+    }
+}
+
+fn run_vendor_model(repo_root: &Path, vendor: &VendorDef) -> Result<(), String> {
+    let family = vendor
+        .family
+        .as_deref()
+        .ok_or_else(|| format!("vendor target {} does not define a family", vendor.id))?;
+    if family != "espressif" {
+        return Err(format!(
+            "vendor family {family} for {} is listed but build dispatch is not implemented yet",
+            vendor.id
+        ));
+    }
+    let idf_target = vendor
+        .idf_target
+        .as_deref()
+        .ok_or_else(|| format!("vendor target {} does not define idf_target", vendor.id))?;
+    let example_path = vendor
+        .example_path
+        .as_deref()
+        .ok_or_else(|| format!("vendor target {} does not define example_path", vendor.id))?;
+    let vendor_dir = repo_root.join(example_path);
+    run_native(&vendor_dir, "idf.py", &["set-target", idf_target], None)?;
     run_native(&vendor_dir, "idf.py", &["build"], None)?;
     Ok(())
 }
@@ -438,9 +1067,27 @@ fn check_optional_tool_contract(
     }
 }
 
-fn run_native(cwd: &Path, program: &str, args: &[&str], extra_env: Option<(&str, &str)>) -> Result<(), String> {
+fn run_native(
+    cwd: &Path,
+    program: &str,
+    args: &[&str],
+    extra_env: Option<(&str, &str)>,
+) -> Result<(), String> {
+    let owned_args = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<String>>();
+    run_native_owned(cwd, program, &owned_args, extra_env)
+}
+
+fn run_native_owned(
+    cwd: &Path,
+    program: &str,
+    args: &[String],
+    extra_env: Option<(&str, &str)>,
+) -> Result<(), String> {
     let cmdline = std::iter::once(program.to_string())
-        .chain(args.iter().map(|s| s.to_string()))
+        .chain(args.iter().cloned())
         .collect::<Vec<String>>()
         .join(" ");
     println!("+ {cmdline}");
@@ -495,7 +1142,9 @@ fn check_tool_contract(
 }
 
 fn is_ci() -> bool {
-    env::var("CI").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+    env::var("CI")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn git_dirty(repo_root: &Path) -> Result<bool, String> {
@@ -532,4 +1181,197 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_vendors() -> VendorConfig {
+        VendorConfig {
+            vendors: vec![
+                VendorDef {
+                    id: "skip".to_string(),
+                    label: "Skip vendor builds".to_string(),
+                    kind: VENDOR_KIND_SKIP.to_string(),
+                    family: None,
+                    idf_target: None,
+                    example_path: None,
+                    host_feature: None,
+                    implemented: false,
+                    include_in_all: false,
+                },
+                VendorDef {
+                    id: "all".to_string(),
+                    label: "All implemented vendor targets".to_string(),
+                    kind: VENDOR_KIND_ALL.to_string(),
+                    family: None,
+                    idf_target: None,
+                    example_path: None,
+                    host_feature: None,
+                    implemented: false,
+                    include_in_all: false,
+                },
+                VendorDef {
+                    id: "esp32-s3".to_string(),
+                    label: "Espressif ESP32-S3".to_string(),
+                    kind: VENDOR_KIND_MODEL.to_string(),
+                    family: Some("espressif".to_string()),
+                    idf_target: Some("esp32s3".to_string()),
+                    example_path: Some(
+                        "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+                            .to_string(),
+                    ),
+                    host_feature: Some("esp32".to_string()),
+                    implemented: true,
+                    include_in_all: true,
+                },
+                VendorDef {
+                    id: "esp32-p4".to_string(),
+                    label: "Espressif ESP32-P4".to_string(),
+                    kind: VENDOR_KIND_MODEL.to_string(),
+                    family: Some("espressif".to_string()),
+                    idf_target: Some("esp32p4".to_string()),
+                    example_path: Some(
+                        "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+                            .to_string(),
+                    ),
+                    host_feature: Some("esp32".to_string()),
+                    implemented: false,
+                    include_in_all: false,
+                },
+            ],
+        }
+    }
+
+    fn sample_hosts() -> HostConfig {
+        HostConfig {
+            hosts: vec![
+                HostDef {
+                    id: HOST_GENERIC.to_string(),
+                    label: "Generic host".to_string(),
+                    profile: "generic".to_string(),
+                    allowed_vendor_kinds: vec![
+                        VENDOR_KIND_SKIP.to_string(),
+                        VENDOR_KIND_ALL.to_string(),
+                        VENDOR_KIND_MODEL.to_string(),
+                    ],
+                },
+                HostDef {
+                    id: HOST_VENDOR_ENHANCED.to_string(),
+                    label: "Vendor enhanced".to_string(),
+                    profile: "vendor-enhanced".to_string(),
+                    allowed_vendor_kinds: vec![VENDOR_KIND_MODEL.to_string()],
+                },
+                HostDef {
+                    id: HOST_ALL_FEATURES.to_string(),
+                    label: "All features".to_string(),
+                    profile: "all-features".to_string(),
+                    allowed_vendor_kinds: vec![
+                        VENDOR_KIND_SKIP.to_string(),
+                        VENDOR_KIND_ALL.to_string(),
+                        VENDOR_KIND_MODEL.to_string(),
+                    ],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn lunch_flags_require_vendor_and_host() {
+        let args = vec![
+            "--vendor".to_string(),
+            "esp32-s3".to_string(),
+            "--host".to_string(),
+            HOST_VENDOR_ENHANCED.to_string(),
+        ];
+        let parsed = parse_lunch_args(&args).unwrap();
+        match parsed {
+            LunchRequest::Explicit { vendor, host } => {
+                assert_eq!(vendor, "esp32-s3");
+                assert_eq!(host, HOST_VENDOR_ENHANCED);
+            }
+            LunchRequest::Interactive => panic!("expected explicit lunch request"),
+        }
+    }
+
+    #[test]
+    fn lunch_rejects_positional_arguments() {
+        let args = vec!["esp32-s3".to_string(), HOST_VENDOR_ENHANCED.to_string()];
+        let err = parse_lunch_args(&args).unwrap_err();
+        assert!(err.contains("positional arguments are no longer supported"));
+    }
+
+    #[test]
+    fn check_defaults_to_all_and_rejects_vendor_family_alias() {
+        assert_eq!(parse_check_target(&[]).unwrap(), CheckTarget::All);
+
+        let args = vec!["vendor".to_string()];
+        assert_eq!(parse_check_target(&args).unwrap(), CheckTarget::Vendor);
+
+        let args = vec!["vendor-espressif".to_string()];
+        let err = parse_check_target(&args).unwrap_err();
+        assert!(err.contains("core|host|vendor|all"));
+    }
+
+    #[test]
+    fn build_defaults_to_selected_and_rejects_vendor_family_alias() {
+        assert_eq!(parse_build_target(&[]).unwrap(), BuildTarget::Selected);
+
+        let args = vec!["host".to_string()];
+        assert_eq!(parse_build_target(&args).unwrap(), BuildTarget::Host);
+
+        let args = vec!["vendor-espressif".to_string()];
+        let err = parse_build_target(&args).unwrap_err();
+        assert!(err.contains("core|host|vendor"));
+    }
+
+    #[test]
+    fn vendor_enhanced_requires_model_vendor() {
+        let vendors = sample_vendors();
+        let hosts = sample_hosts();
+        let err = validate_selection(&vendors, &hosts, "skip", HOST_VENDOR_ENHANCED).unwrap_err();
+        assert!(err.contains("not valid"));
+        validate_selection(&vendors, &hosts, "esp32-s3", HOST_VENDOR_ENHANCED).unwrap();
+    }
+
+    #[test]
+    fn vendor_all_dispatches_only_implemented_included_models() {
+        let vendors = sample_vendors();
+        let selected =
+            resolve_selection(&vendors, &sample_hosts(), "all", HOST_GENERIC, None).unwrap();
+        let targets = selected_vendor_targets(&vendors, &selected).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, "esp32-s3");
+    }
+
+    #[test]
+    fn placeholder_model_fails_for_vendor_dispatch() {
+        let vendors = sample_vendors();
+        let selected =
+            resolve_selection(&vendors, &sample_hosts(), "esp32-p4", HOST_GENERIC, None).unwrap();
+        let err = selected_vendor_targets(&vendors, &selected).unwrap_err();
+        assert!(err.contains("not implemented yet"));
+    }
+
+    #[test]
+    fn check_host_gate_covers_product_feature_matrix() {
+        let features = host_gate_features(&sample_vendors());
+        assert_eq!(
+            features,
+            vec![
+                HOST_GENERIC.to_string(),
+                HOST_ALL_FEATURES.to_string(),
+                "esp32".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn check_vendor_gate_uses_all_implemented_vendor_models() {
+        let vendors = sample_vendors();
+        let targets = implemented_vendor_targets(&vendors);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, "esp32-s3");
+    }
 }

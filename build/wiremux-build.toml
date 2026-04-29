@@ -1,21 +1,11 @@
 # Wiremux build orchestrator MVP config
-# Priority resolution: CLI args > .wiremux/build/selected.toml > defaults
+# Priority resolution: CLI args > .wiremux/build/selected.toml > defaults.
+# Vendor and host menu definitions live in wiremux-vendors.toml and
+# wiremux-hosts.toml.
 
 [defaults]
-device = "generic-only"
-host_preset = "generic-only"
-
-[devices.core-only]
-product = "core"
-
-[devices.generic-only]
-product = "generic"
-
-[host_presets.generic-only]
-profile = "generic"
-
-[host_presets.device-only]
-profile = "device"
+vendor = "skip"
+host = "generic"
 
 [tools.python]
 expected_contains = "Python 3."
