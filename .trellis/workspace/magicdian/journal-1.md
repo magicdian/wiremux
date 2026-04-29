@@ -257,7 +257,11 @@ Implemented generic Wiremux batch records and compression support across core C,
 
 ### Main Changes
 
-(Add details)
+- Added `generic-enhanced` host mode and wired build helper/Cargo feature mapping.
+- Implemented generic virtual serial broker with Unix PTY endpoints, manifest channel export, bounded output queueing, and TUI input ownership controls.
+- Preserved generic host as core-only while generic-enhanced/all-features can default virtual serial on.
+- Normalized virtual serial terminal output: non-passthrough text records get terminal line breaks; passthrough channels preserve byte streams.
+- Added platform feature matrix and TUI shortcut matrix, updated architecture/docs/specs, and bumped release version to `2604.29.7`.
 
 ### Git Commits
 
@@ -272,7 +276,8 @@ Implemented generic Wiremux batch records and compression support across core C,
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `tools/wiremux-build check host`
+- [OK] `git diff --check`
 
 ### Status
 
@@ -1334,6 +1339,39 @@ Implemented host global physical serial profile config, menuconfig-style TUI set
 - [OK] `cargo test`
 - [OK] `tools/wiremux-build check host`
 - [OK] `git diff --check`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 34: Generic enhanced virtual serial
+
+**Date**: 2026-04-29
+**Task**: Generic enhanced virtual serial
+**Branch**: `dev`
+
+### Summary
+
+Added generic-enhanced host mode and virtual serial PTY overlay, including manifest channel export, TUI enable/input ownership controls, Unix PTY backpressure handling, terminal line-delimited non-passthrough text output, platform/shortcut matrices, code-spec updates, and version bump to 2604.29.7.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6d8b98e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
 
 ### Status
 
