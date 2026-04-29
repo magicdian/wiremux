@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 32
+- **Total Sessions**: 33
 - **Last Active**: 2026-04-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1303 | Active |
+| `journal-1.md` | ~1336 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 33 | 2026-04-29 | Host serial config and TUI settings | `32f3435` | `dev` |
 | 32 | 2026-04-29 | Split host Rust workspace crates | `1036384` | `dev` |
 | 31 | 2026-04-29 | Optimize wiremux-build targets | `c9e674c` | `dev` |
 | 30 | 2026-04-29 | Interactive wiremux-build lunch | `4753201` | `dev` |
