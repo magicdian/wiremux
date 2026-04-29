@@ -70,7 +70,7 @@ typedef enum {
 } esp_wiremux_console_mode_t;
 ```
 
-interaction mode 由 core/proto 定义，ESP console API 只映射这些通用能力。
+interaction mode 由 `sources/api/proto/versions/current/wiremux.proto` 定义，ESP console API 只映射这些通用能力。
 `PASSTHROUGH` 是通用 channel 能力，不等同于 ESP-IDF REPL。ESP component 中的
 `ESP_WIREMUX_PASSTHROUGH_BACKEND_ESP_REPL` 只是 ESP-facing alias，core 层命名保持为
 `WIREMUX_PASSTHROUGH_BACKEND_REPL`。

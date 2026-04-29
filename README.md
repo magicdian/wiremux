@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-[![Version](https://img.shields.io/badge/version-2604.28.1-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2604.29.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux is a lightweight channel multiplexer for serial-style byte streams. It lets one UART, USB CDC, USB Serial/JTAG, TCP bridge, or other ordered byte transport carry multiple logical channels at the same time, so logs, console commands, telemetry, and structured diagnostics do not have to fight over one raw stream.
@@ -12,9 +12,9 @@ The current reference device integration is an ESP32/ESP-IDF component and demo,
 The repository contains:
 
 - A portable C protocol core in `sources/core/c`.
-- An ESP-IDF adapter component in `sources/esp32/components/esp-wiremux`.
-- An ESP-IDF console demo in `sources/esp32/examples/esp_wiremux_console_demo`.
-- A Rust host tool in `sources/host` with `listen`, `send`, and interactive TUI modes.
+- An ESP-IDF adapter component in `sources/vendor/espressif/generic/components/esp-wiremux`.
+- An ESP-IDF console demo in `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo`.
+- A Rust host tool in `sources/host/wiremux` with `listen`, `send`, and interactive TUI modes.
 
 ## Why Wiremux
 
@@ -43,7 +43,7 @@ Wiremux keeps the transport simple but adds a small framed protocol:
 Wiremux has two layers:
 
 - `sources/core/c`: portable frame, envelope, manifest, batch, and compression primitives.
-- `sources/esp32/components/esp-wiremux`: ESP-IDF integration built on top of the portable core.
+- `sources/vendor/espressif/generic/components/esp-wiremux`: ESP-IDF integration built on top of the portable core.
 
 Use the portable core directly when you are building a new platform adapter:
 
@@ -125,7 +125,7 @@ ESP_ERROR_CHECK(esp_wiremux_bind_esp_log(&log_config));
 Build and run the Rust host tool:
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 cargo run -- passthrough --port /dev/tty.usbmodem2101 --baud 115200 --channel 1
@@ -148,7 +148,7 @@ On macOS, passing `/dev/tty.usbmodem*` is accepted, but the host tool prefers th
 Use ESP-IDF v5.4 or newer:
 
 ```bash
-cd sources/esp32/examples/esp_wiremux_console_demo
+cd sources/vendor/espressif/generic/examples/esp_wiremux_console_demo
 idf.py set-target esp32s3
 idf.py build flash monitor
 ```
@@ -158,7 +158,7 @@ After flashing, stop `idf.py monitor` before starting the host tool. Most serial
 Run a console command through Wiremux channel 1:
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 ```
 
@@ -172,6 +172,8 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 
 
 ## Documentation
 
+- [Product Architecture](docs/product-architecture.md)
+- [Source Layout and Build Orchestration](docs/source-layout-build.md)
 - [Host CLI](docs/zh/host-tool.md)
 - [Getting Started](docs/zh/getting-started.md)
 - [ESP-IDF Console Integration](docs/zh/esp-idf-console-integration.md)

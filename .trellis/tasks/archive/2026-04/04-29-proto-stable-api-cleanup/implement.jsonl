@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Protocol source layout and target path rules"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Search old paths and avoid duplicate schema sources"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Path change spans schema docs specs tests"}

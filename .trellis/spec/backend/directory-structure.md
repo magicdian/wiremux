@@ -13,13 +13,32 @@ The current framework is bidirectional: the host can decode ESP mux output and
 send input frames, while the ESP component can parse inbound mux frames and
 dispatch them to registered channel handlers.
 
-## Directory Layout
+The current paths are transitional. The target product layout is documented in
+`docs/source-layout-build.md` and is:
+
+- `sources/api/proto` for shared API/protobuf definitions.
+- `sources/core/c` for the platform-neutral C core.
+- `sources/profiles` for profile contracts and reusable profile code.
+- `sources/host/wiremux` for the Rust Wiremux host crate after migration.
+- `sources/vendor/espressif/generic/{components,examples}` for the generic
+  ESP-IDF integration, with `sources/vendor/espressif/{s3,p4}` reserved for
+  platform-specific README placeholders until real code exists.
+- `build` for checked-in build product definitions, not generated output.
+- `tools/wiremux-build` and `tools/wiremux-build-helper` for the future product
+  build orchestrator.
+- `.wiremux/build/selected.toml` for local selected build state.
+
+Do not treat `sources/host` or `sources/esp32` as
+permanent architecture in new docs or specs. Mention them as current
+pre-migration paths only when giving commands that still apply before the owner
+PR lands.
+
+## Current Directory Layout
 
 ```text
 sources/
 ├── core/
 │   ├── README.md
-│   ├── proto/wiremux.proto
 │   └── c/
 │       ├── CMakeLists.txt
 │       ├── include/
@@ -42,6 +61,12 @@ sources/
 │           └── wiremux_version.c
 │       └── tests/
 │           └── wiremux_core_test.cpp
+├── api/
+│   └── proto/
+│       └── versions/
+│           ├── current/wiremux.proto
+│           ├── 1/wiremux.proto
+│           └── 2/wiremux.proto
 ├── host/
 │   ├── Cargo.toml
 │   └── src/
@@ -49,24 +74,33 @@ sources/
 │       ├── frame.rs
 │       ├── lib.rs
 │       └── main.rs
-└── esp32/
-    ├── components/esp-wiremux/
-    │   ├── CMakeLists.txt
-    │   ├── include/
-    │   └── src/
-    └── examples/esp_wiremux_console_demo/
+└── vendor/
+    └── espressif/
+        ├── README.md
+        ├── generic/
+        │   ├── components/esp-wiremux/
+        │   │   ├── CMakeLists.txt
+        │   │   ├── include/
+        │   │   └── src/
+        │   └── examples/esp_wiremux_console_demo/
+        ├── s3/README.md
+        └── p4/README.md
 ```
 
 ## Module Organization
 
 ### Host Rust
 
+Current path: `sources/host/wiremux`. Target path after PR4/PR5:
+`sources/host/wiremux` inside a host workspace.
+
 Keep protocol parsing in the library crate and CLI behavior in `src/main.rs`.
 
 - `src/frame.rs`: binary frame constants, encoder helpers, mixed-stream scanner.
 - `src/crc32.rs`: CRC32 implementation used by the frame scanner.
 - `src/lib.rs`: public module exports for tests and later tools.
-- `sources/core/proto/wiremux.proto`: stable envelope and manifest schema.
+- `sources/api/proto/versions/current/wiremux.proto`: stable envelope and
+  manifest schema used by new device SDK builds.
 
 Do not put parser state machines directly in `main.rs`; they must stay
 unit-testable without a serial device.
@@ -123,7 +157,7 @@ single-frame decode rules.
 
 ### ESP-IDF
 
-The reusable ESP component lives under `sources/esp32/components/esp-wiremux`.
+Path: `sources/vendor/espressif/generic/components/esp-wiremux`.
 
 - `include/esp_wiremux.h`: core init, channel registration, input handler,
   receive, and write APIs.
@@ -138,7 +172,7 @@ The reusable ESP component lives under `sources/esp32/components/esp-wiremux`.
 - `src/esp_wiremux_console.c`: line-mode console adapter.
 - `src/esp_wiremux_log.c`: `esp_log_set_vprintf()` adapter.
 
-Examples belong under `sources/esp32/examples/<name>`.
+Examples belong under `sources/vendor/espressif/generic/examples/<name>`.
 
 ## Naming Conventions
 
@@ -411,7 +445,7 @@ Required behavior:
   timeout with interactive loops unless the loop polls keyboard input before any
   blocking serial read.
 - TUI passthrough output uses stream semantics only for channels whose manifest
-  advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/src/tui.rs` must
+  advertises `CHANNEL_INTERACTION_PASSTHROUGH`. `sources/host/wiremux/crates/wiremux-cli/src/tui.rs` must
   keep each passthrough channel's incomplete `OutputLine` independent: when a
   ch1 console echo line is incomplete, interleaved ch2/ch3/ch4 log or telemetry
   records must not force later ch1 echo bytes into a new ch1 line. Backspace
@@ -429,7 +463,7 @@ Required behavior:
 - TUI channel filters use `Ctrl-B 0` for unfiltered mode and `Ctrl-B 1..9` for
   channel filters 1 through 9.
 - TUI output scrollback is an in-memory viewport over the existing bounded
-  `MAX_LINES` buffer in `sources/host/src/tui.rs`. `scroll_offset = 0` means the
+  `MAX_LINES` buffer in `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`. `scroll_offset = 0` means the
   output pane follows live tail output. Mouse wheel up increases
   `scroll_offset` and freezes the visible window; matching incoming lines must
   increase `scroll_offset` while frozen so the same historical rows stay visible.
@@ -573,9 +607,9 @@ impl HostSession {
 
 ### 3. Contracts
 
-- `sources/core/proto/api/current/wiremux.proto` is the API used by new device
+- `sources/api/proto/versions/current/wiremux.proto` is the API used by new device
   SDK builds.
-- `sources/core/proto/api/<version>/wiremux.proto` directories are frozen API
+- `sources/api/proto/versions/<version>/wiremux.proto` directories are frozen API
   snapshots compiled into host SDK builds.
 - Host-side compatibility is compile-time bounded: a host build supports its
   compiled current API and all older frozen API versions included in the source
@@ -613,7 +647,7 @@ impl HostSession {
 - Good: `wiremux_host_session_feed()` receives mixed terminal text, a manifest
   frame, and a compressed batch; Rust host receives terminal, manifest,
   compatibility, and inner record events without parsing protobuf itself.
-- Base: current API version is `2`, and `api/current/wiremux.proto` matches
+- Base: current API version is `2`, and `versions/current/wiremux.proto` matches
   the latest frozen API snapshot.
 - Bad: Rust host decodes `MuxBatch` or `DeviceManifest` directly in CLI/TUI
   paths after the core host session API exists.

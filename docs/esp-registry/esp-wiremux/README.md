@@ -82,6 +82,6 @@ Applications can register their own channel descriptors and input handlers.
 
 ## Source
 
-Canonical source: {{repository_url}}/tree/main/sources/esp32/components/esp-wiremux
+Canonical source: {{repository_url}}/tree/main/sources/vendor/espressif/generic/components/esp-wiremux
 
 Release packaging: {{repository_url}}/blob/main/tools/esp-registry/generate-packages.sh

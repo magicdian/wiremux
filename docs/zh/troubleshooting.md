@@ -32,7 +32,7 @@ ls /dev/cu.usbserial*
 
 - ESP-IDF 版本为 v5.4 或更新。
 - 当前 shell 已执行 ESP-IDF export 脚本。
-- 从 `sources/esp32/examples/esp_wiremux_console_demo` 目录执行 `idf.py build`。
+- 从 `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` 目录执行 `idf.py build`。
 
 ## 日志重复
 

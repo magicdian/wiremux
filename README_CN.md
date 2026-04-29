@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[![Version](https://img.shields.io/badge/version-2604.28.1-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2604.29.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以在一个 UART、USB CDC、USB Serial/JTAG、TCP bridge 或其他有序字节 transport 上同时承载多个逻辑 channel，让日志、console 命令、telemetry 和诊断数据不再挤在同一个原始字节流里。
@@ -12,9 +12,9 @@ Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以
 当前仓库包含：
 
 - `sources/core/c`：平台无关的 C 协议核心。
-- `sources/esp32/components/esp-wiremux`：ESP-IDF adapter component。
-- `sources/esp32/examples/esp_wiremux_console_demo`：ESP-IDF console 示例。
-- `sources/host`：Rust host 工具，提供 `listen`、`send` 和 TUI 模式。
+- `sources/vendor/espressif/generic/components/esp-wiremux`：ESP-IDF adapter component。
+- `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo`：ESP-IDF console 示例。
+- `sources/host/wiremux`：Rust host 工具，提供 `listen`、`send` 和 TUI 模式。
 
 ## 适用场景
 
@@ -41,7 +41,7 @@ Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以
 Wiremux 分为两层：
 
 - `sources/core/c`：平台无关的 frame、envelope、manifest、batch 和 compression 基础能力。
-- `sources/esp32/components/esp-wiremux`：基于 portable core 实现的 ESP-IDF adapter。
+- `sources/vendor/espressif/generic/components/esp-wiremux`：基于 portable core 实现的 ESP-IDF adapter。
 
 如果要为新的平台写 adapter，可以直接使用 portable core：
 
@@ -123,7 +123,7 @@ ESP_ERROR_CHECK(esp_wiremux_bind_esp_log(&log_config));
 构建和运行 Rust host 工具：
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 cargo run -- passthrough --port /dev/tty.usbmodem2101 --baud 115200 --channel 1
@@ -146,7 +146,7 @@ macOS 上可以传入 `/dev/tty.usbmodem*`，host 工具会优先尝试配对的
 使用 ESP-IDF v5.4 或更新版本：
 
 ```bash
-cd sources/esp32/examples/esp_wiremux_console_demo
+cd sources/vendor/espressif/generic/examples/esp_wiremux_console_demo
 idf.py set-target esp32s3
 idf.py build flash monitor
 ```
@@ -156,7 +156,7 @@ idf.py build flash monitor
 通过 Wiremux channel 1 执行 console 命令：
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 ```
 
@@ -170,6 +170,8 @@ cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --send-channel 1 
 
 ## 文档
 
+- [Product Architecture](docs/product-architecture.md)
+- [Source Layout and Build Orchestration](docs/source-layout-build.md)
 - [Host CLI](docs/zh/host-tool.md)
 - [快速开始](docs/zh/getting-started.md)
 - [ESP-IDF Console 接入](docs/zh/esp-idf-console-integration.md)

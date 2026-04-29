@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
-- **Last Active**: 2026-04-28
+- **Total Sessions**: 28
+- **Last Active**: 2026-04-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1064 | Active |
+| `journal-1.md` | ~1158 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 28 | 2026-04-29 | Proto API schema version path cleanup | `faa436e` | `dev` |
+| 27 | 2026-04-29 | Productize source layout and build orchestration | `505ea91` | `dev` |
 | 26 | 2026-04-28 | Host TUI selectable output | `af9f2e0` | `dev` |
 | 25 | 2026-04-28 | TUI scrollbar button live-follow fix | `a3d9df0`, `4a05402` | `dev` |
 | 24 | 2026-04-28 | TUI resize EINTR fix | `725c6dd` | `dev` |

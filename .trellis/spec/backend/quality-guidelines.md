@@ -31,6 +31,10 @@ operation.
 - Do not make console mode a compile-time-only behavior. Public config must preserve line-mode and passthrough mode.
 - Do not call ESP logging APIs from mux internals after installing the log adapter.
 - Do not implement host-to-device frames with a separate ad-hoc wire format. Use the same `WMUX` frame and `MuxEnvelope` payload contract.
+- Do not treat transitional paths as permanent architecture. New specs and
+  design docs must use the target layout from `docs/source-layout-build.md` and
+  label `sources/host` and `sources/esp32` as current pre-migration paths when
+  they are still needed for commands.
 
 ## Required Patterns
 
@@ -39,7 +43,7 @@ operation.
 Required command:
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo test
 cargo check
 cargo fmt --check
@@ -90,7 +94,7 @@ Rules:
 - Portable host session changes must test callback ordering, callback-scope
   event copying, CRC errors, manifest parsing, batch expansion, compression
   decode failures, scratch exhaustion, and API compatibility classification.
-- Protocol API changes must update `sources/core/proto/api/current/`, freeze a
+- Protocol API changes update `sources/api/proto/versions/current/`. Freeze a
   numbered API snapshot when shipped, update `wiremux_version.h` constants, and
   keep snapshot tests current.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
@@ -237,7 +241,7 @@ the demo, and host verification commands in the same task.
   reserve frame-by-frame animation for coarse scrollbar drag targets.
 - TUI text selection is application-managed because crossterm mouse capture
   prevents terminal-native selection from seeing ratatui's internal scrollback.
-  In `sources/host/src/tui.rs`, selection state must track pane
+  In `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`, selection state must track pane
   (`Output`/`Status`), anchor row/column, cursor row/column, active drag state,
   pending clipboard text, and any edge auto-scroll direction. Rendering must
   highlight selected spans from the same wrapped visual rows used by scrollback
@@ -260,7 +264,7 @@ the demo, and host verification commands in the same task.
   `DeviceManifest.protocol_version` as the device proto API version. Backend and
   FPS status belong in the existing status area, not a separate debug panel.
 - TUI passthrough display is channel-local stream editing. In
-  `sources/host/src/tui.rs`, `complete_stream_line()`,
+  `sources/host/wiremux/crates/wiremux-cli/src/tui.rs`, `complete_stream_line()`,
   `backspace_stream_line()`, and `append_stream_segment()` must operate on the
   latest incomplete `OutputLine` for the same channel. Do not use only
   `lines.back_mut()` for passthrough stream editing, because interleaved log or
@@ -268,7 +272,7 @@ the demo, and host verification commands in the same task.
 - TUI passthrough prompt rendering must preserve terminal semantics. Empty
   `CR`, `LF`, or `CRLF` echoes are completed prompt history rows, not reusable
   input buffers. If the latest active-channel row is complete and the view is at
-  live tail, `sources/host/src/tui.rs` may append a virtual current prompt row
+  live tail, `sources/host/wiremux/crates/wiremux-cli/src/tui.rs` may append a virtual current prompt row
   during rendering; this row must not mutate `App::lines` or scrollback history.
   In passthrough mode, place the terminal cursor in the output pane after the
   active channel prompt/echo. Cursor placement must account for visual wrapping
@@ -485,10 +489,10 @@ Version files and declarations:
 
 ```text
 VERSION
-sources/host/Cargo.toml
-sources/host/Cargo.lock
-sources/esp32/components/esp-wiremux/idf_component.yml
-sources/esp32/components/esp-wiremux/include/esp_wiremux.h
+sources/host/wiremux/crates/wiremux-cli/Cargo.toml
+sources/host/wiremux/Cargo.lock
+sources/vendor/espressif/generic/components/esp-wiremux/idf_component.yml
+sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux.h
 ```
 
 Generator:
@@ -573,7 +577,7 @@ CI:
   README_CN, LICENSE, and `idf_component.yml`.
 - Good: `magicdian/esp-wiremux` Registry page shows one example after the patch
   upload because the generated package includes `examples/esp_wiremux_console_demo`.
-- Base: local ESP example still builds from `sources/esp32/examples/...` using
+- Base: local ESP example still builds from `sources/vendor/espressif/generic/examples/...` using
   the source-tree component and parent-relative local core reference.
 - Bad: editing `sources/core/c/CMakeLists.txt` to use
   `idf_component_register()` makes future maintainers think the portable core is
@@ -583,8 +587,9 @@ CI:
 
 ### 6. Tests Required
 
-- `bash -n tools/esp-registry/generate-packages.sh`
-- `tools/esp-registry/generate-packages.sh`
+- `tools/wiremux-build doctor`
+- `tools/wiremux-build check all`
+- `tools/wiremux-build package esp-registry`
 - `rg` check that release declarations use the same version.
 - `rg` check that generated packages do not contain parent-relative core paths.
 - `compote component pack --name wiremux-core` in
@@ -600,7 +605,7 @@ CI:
   `dist/esp-registry/esp-wiremux/examples/esp_wiremux_console_demo` after
   package generation.
 - Host checks: `cargo fmt --check`, `cargo check`, and `cargo test` in
-  `sources/host`.
+  `sources/host/wiremux`.
 - Portable core checks when core files changed: configure, build, and run
   `ctest` for `sources/core/c`.
 - ESP example build with ESP-IDF when ESP component or packaging behavior
@@ -621,6 +626,79 @@ directly from the source tree.
 Keep `sources/core/c` portable. Generate `dist/esp-registry/wiremux-core` at
 release time with a registry-specific `CMakeLists.txt` and manifest.
 ```
+
+## Scenario: Source Layout and Build Orchestration
+
+### 1. Scope / Trigger
+
+Trigger: changing source layout, build product definitions, lunch/select
+behavior, reproducibility policy, generated build output, or the future
+`wiremux-build` tool.
+
+This is a product architecture boundary. Runtime source moves are staged across
+PR2 through PR8; documentation and specs should use the target layout even while
+commands still reference current paths.
+
+### 2. Signatures
+
+Target source roots:
+
+```text
+sources/api/proto
+sources/core/c
+sources/profiles
+sources/host/wiremux
+sources/vendor/espressif/generic/components
+sources/vendor/espressif/generic/examples
+sources/vendor/espressif/s3/README.md
+sources/vendor/espressif/p4/README.md
+build
+tools/wiremux-build
+tools/wiremux-build-helper
+.wiremux/build/selected.toml
+```
+
+Build configuration files use TOML.
+
+### 3. Contracts
+
+- `wiremux-build` is a product orchestrator. It may select products, validate
+  tools, call Cargo/CMake/`idf.py`, derive environment exports, and collect build
+  metadata. It must not replace those underlying tools.
+- Planned implementation split: `tools/wiremux-build` is the Python bootstrap;
+  `tools/wiremux-build-helper` is the Rust helper.
+- Lunch selected state source of truth:
+  `.wiremux/build/selected.toml`.
+- Optional environment exports from `env --shell bash|zsh` are derived state.
+- Configuration priority is `CLI args > selected.toml > product defaults`.
+- Environment variables do not normally override selected config.
+- Valid host presets: `all-features`, `generic-only`, and `device-only`.
+- `core-only + device-only` is invalid.
+- CI is strict per tool and configurable. Local builds are tolerant by default,
+  warn on dirty/deviated inputs, and record metadata for diagnostics.
+- Future generated paths must be ignored: `/.wiremux/`, `/build/out/`, and
+  `/tools/wiremux-build-helper/target/`.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| docs mention `sources/core/proto` as target | fail review; target is `sources/api/proto` |
+| docs mention `sources/esp32` as target | fail review; target is `sources/vendor/espressif/generic` |
+| docs mention `sources/host` as final crate root | fail review; target crate root is `sources/host/wiremux` |
+| command docs before migration use current paths | allowed if labeled current/pre-migration |
+| selected config differs from env var | selected config wins unless command explicitly documents debug override |
+| `core-only + device-only` requested | command fails with deterministic validation error |
+| CI detects dirty/deviated generated output under strict policy | command fails |
+| local build detects dirty/deviated input | command warns and records build metadata |
+
+### 5. Tests Required
+
+- Documentation-only PRs must run stale-path `rg` checks across docs/specs and
+  `git diff --stat`.
+- Runtime layout PRs must additionally run the commands affected by the moved
+  paths, such as host Cargo checks, portable C CMake/CTest checks, ESP-IDF
+  builds, and release packaging validation.
 
 #### Wrong
 
@@ -644,7 +722,12 @@ Update `VERSION`, Cargo files, ESP manifest, and `ESP_WIREMUX_VERSION` together.
 - New portable C core functionality must include related GoogleTest coverage in
   `sources/core/c/tests/wiremux_core_test.cpp` before the change is considered
   complete.
-- ESP-IDF code must be built with `idf.py build` in `sources/esp32/examples/esp_wiremux_console_demo` when ESP-IDF is available.
+- ESP-IDF code must be built with `idf.py build` in `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo`.
+  In CI release validation, `idf.py` presence/version is strict and must not be
+  skipped.
+- For release validation and packaging, run orchestrator entrypoints (`doctor`,
+  `check all`, `package esp-registry`) through `tools/wiremux-build`; direct
+  script invocation remains optional for focused packaging diagnostics.
 - Any frame layout change must add or update a host parser test.
 - Any portable C frame validation change must keep ESP inbound dispatch using `wiremux_frame_decode()`.
 - Any ESP encoder change must be manually or automatically validated against the host scanner.

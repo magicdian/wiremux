@@ -12,10 +12,13 @@ implementation.
 
 The actual product surface is:
 
-- ESP-IDF C component code under `sources/esp32/components/esp-wiremux/`.
-- ESP-IDF demo application under `sources/esp32/examples/esp_wiremux_console_demo/`.
-- Rust host CLI/library code under `sources/host/`.
-- Protocol schema under `sources/core/proto/wiremux.proto`.
+- Current ESP-IDF C component code under
+  `sources/vendor/espressif/generic/components/esp-wiremux/`.
+- Current ESP-IDF demo application under
+  `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/`.
+- Current Rust host CLI/library code under `sources/host/`, migrating to
+  `sources/host/wiremux/`.
+- Protocol schema under `sources/api/proto/versions/current/wiremux.proto`.
 - Chinese user documentation under `docs/zh/`.
 
 Do not introduce a database, embedded key-value store, or migration framework
@@ -26,13 +29,13 @@ unless a task explicitly requires persistent state.
 State is in memory and bounded by configuration:
 
 - ESP mux runtime state is held in the static `s_mux` context in
-  `sources/esp32/components/esp-wiremux/src/esp_wiremux.c`.
+  `sources/vendor/espressif/generic/components/esp-wiremux/src/esp_wiremux.c`.
 - ESP channel metadata is registered at runtime with
   `esp_wiremux_register_channel()`.
-- Host CLI state is process-local in `sources/host/src/main.rs`.
+- Host CLI state is process-local in `sources/host/wiremux/crates/wiremux-cli/src/main.rs`.
 - Host protocol session state is process-local in the core C
   `wiremux_host_session_t`, reached from the Rust wrapper in
-  `sources/host/src/host_session.rs`.
+  `sources/host/wiremux/crates/wiremux-cli/src/host_session.rs`.
 - Protocol compatibility is represented by constants and protobuf-compatible
   fields, not by stored schema migrations.
 
@@ -74,6 +77,11 @@ fixtures, keep persistence outside the transport-critical path first. Prefer an
 explicit file or fixture format for developer tooling before adding a general
 database dependency.
 
+The future build selector stores local selected state in
+`.wiremux/build/selected.toml`. Treat that as local generated configuration, not
+as a database layer. Commands may derive shell exports from it, but the TOML file
+remains the source of truth.
+
 Before adding persistence, define:
 
 - What data is persisted and why in the task PRD.
@@ -93,7 +101,8 @@ in the same change. That update must document:
 - How migrations are run in development and release workflows.
 - Rollback or forward-only policy.
 - Good/base/bad test cases for schema evolution.
-- How schema changes relate to `sources/core/proto/wiremux.proto`.
+- How schema changes relate to
+  `sources/api/proto/versions/current/wiremux.proto`.
 
 ## Naming Conventions
 
@@ -112,15 +121,16 @@ dangerous than changing its field number, but both require cross-language review
 
 ## Forbidden Patterns
 
-- Do not add an ORM or migration crate to `sources/host/Cargo.toml` for CLI-only
+- Do not add an ORM or migration crate to `sources/host/wiremux/crates/wiremux-cli/Cargo.toml` for CLI-only
   state.
 - Do not use ESP NVS, filesystem, or flash storage for mux runtime queues unless
   the task explicitly changes durability requirements.
 - Do not persist raw frames as the only source of truth without recording the
   frame version and envelope schema version.
 - Do not hide protocol compatibility changes inside a database migration.
-- Do not add generated database artifacts under `sources/esp32/examples/*/build`
-  or `sources/host/target`.
+- Do not add generated database artifacts under
+  `sources/vendor/espressif/generic/examples/*/build`
+  or `sources/host/wiremux/target`.
 
 ## Common Mistakes
 
@@ -128,7 +138,7 @@ dangerous than changing its field number, but both require cross-language review
   constants plus protobuf-compatible field numbers; it must remain lightweight
   and stream-oriented.
 - Adding persistence to solve test setup. Prefer deterministic unit tests in
-  `sources/host/src/*.rs` and ESP-IDF build/demo verification.
+  `sources/host/wiremux/crates/wiremux-cli/src/*.rs` and ESP-IDF build/demo verification.
 - Assuming channel registration is durable. Channels are registered at runtime by
   application code such as
-  `sources/esp32/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.
+  `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo/main/esp_wiremux_console_demo_main.c`.

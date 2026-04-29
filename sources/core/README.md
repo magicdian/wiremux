@@ -2,8 +2,8 @@
 
 This directory contains portable Wiremux protocol code and documents the
 boundary between shared protocol logic and platform adapters. The runnable Rust
-host code still lives in `sources/host`, and the first device SDK is
-`sources/esp32/components/esp-wiremux`, but new platform SDKs should share this
+host code still lives in `sources/host/wiremux`, and the first device SDK is
+`sources/vendor/espressif/generic/components/esp-wiremux`, but new platform SDKs should share this
 core instead of inventing platform-specific protocol variants.
 
 Core-owned concepts:
@@ -11,7 +11,8 @@ Core-owned concepts:
 - Frame layout: `WMUX` magic, version, flags, payload length, CRC32, payload.
 - Portable C frame/CRC API: `c/include/wiremux_frame.h` and
   `c/src/wiremux_frame.c`.
-- Schema: `proto/wiremux.proto`, with API snapshots under `proto/api/`.
+- Schema: `../api/proto/versions/current/wiremux.proto`, with frozen API
+  snapshots under `../api/proto/versions/`.
 - Envelope fields: channel ID, direction, sequence, timestamp, payload kind,
   payload type, payload bytes, and flags.
 - Portable C envelope API: `c/include/wiremux_envelope.h` and
@@ -69,9 +70,9 @@ Current ESP adapter integration:
 
 Current Rust host integration:
 
-- `sources/host/build.rs` compiles `wiremux_core_c` into a static library for
+- `sources/host/wiremux/build.rs` compiles `wiremux_core_c` into a static library for
   the Rust host crate.
-- `sources/host/src/host_session.rs` wraps the C host session API and copies
+- `sources/host/wiremux/crates/wiremux-cli/src/host_session.rs` wraps the C host session API and copies
   callback-scope C views into Rust-owned events.
 - `listen` and `tui` feed serial bytes into `wiremux_host_session_feed()` and
   render returned Rust events. The Rust layer owns transport and UI behavior,

@@ -4,9 +4,9 @@
 
 当前首期结构：
 
-- ESP32 侧组件：`sources/esp32/components/esp-wiremux`
-- ESP32 示例：`sources/esp32/examples/esp_wiremux_console_demo`
-- Host 侧 Rust CLI：`sources/host`
+- ESP32 侧组件：`sources/vendor/espressif/generic/components/esp-wiremux`
+- ESP32 示例：`sources/vendor/espressif/generic/examples/esp_wiremux_console_demo`
+- Host 侧 Rust CLI：`sources/host/wiremux`
 
 ## Host 侧运行
 
@@ -14,7 +14,7 @@
 调试、channel 过滤切换和 console line-mode 输入。
 
 ```bash
-cd sources/host
+cd sources/host/wiremux
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200
 cargo run -- listen --port /dev/tty.usbmodem2101 --baud 115200 --channel 1 --line help
 cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
@@ -27,7 +27,7 @@ cargo run -- tui --port /dev/tty.usbmodem2101 --baud 115200
 在已配置 ESP-IDF v5.4 或更新版本的 shell 中：
 
 ```bash
-cd sources/esp32/examples/esp_wiremux_console_demo
+cd sources/vendor/espressif/generic/examples/esp_wiremux_console_demo
 idf.py set-target esp32s3
 idf.py build flash monitor
 ```

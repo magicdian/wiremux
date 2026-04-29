@@ -1062,3 +1062,97 @@ Implemented app-managed selection for host TUI output/status text with OSC52 cop
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: Productize source layout and build orchestration
+
+**Date**: 2026-04-29
+**Task**: Productize source layout and build orchestration
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+Implemented and committed a productization refactor for Wiremux.
+
+| Area | Summary |
+|------|---------|
+| Product architecture | Added product architecture and source-layout/build orchestration docs. |
+| API boundary | Moved protobuf API schema from `sources/core/proto` to `sources/api/proto`. |
+| Vendor layout | Moved Espressif implementation to `sources/vendor/espressif/generic`, with `s3` and `p4` placeholder directories. |
+| Host layout | Moved host tool to `sources/host/wiremux` and added a Cargo workspace skeleton with `crates/wiremux-cli`. |
+| Profiles | Added `sources/profiles` skeleton docs for transfer, console, and pty profile contracts. |
+| Build orchestration | Added `tools/wiremux-build` Python bootstrap, Rust helper, TOML product config, lunch/env/doctor/check/build/package commands, JSONL metadata, and CI strict idf.py policy. |
+| CI/release | Updated ESP registry release workflow and docs to use `wiremux-build`, final paths, and ESP-IDF v5.4.1 installation. |
+| Specs | Updated Trellis backend/frontend specs with executable source-layout, build, validation, and release contracts. |
+
+Validation performed:
+- User manually verified ESP32 example project build and host build.
+- `tools/wiremux-build check all` passed locally: core CMake/CTest passed 35/35, host cargo fmt/check/test passed 97 tests, local vendor check skipped because `idf.py` is not available in this shell.
+- `tools/wiremux-build package esp-registry` passed and generated ignored `dist/esp-registry` output.
+- `CI=true tools/wiremux-build check vendor-espressif` failed as expected when `idf.py` is missing, confirming CI strict vendor enforcement.
+- `cargo check --features generic`, `esp32`, `all-vendors`, and `all-features` passed from `sources/host/wiremux`.
+- `tools/wiremux-build lunch core-only device-only` failed clearly; `lunch core-only generic-only` succeeded; `env --shell bash|zsh` emitted selected exports.
+- `git diff --check` passed before commit.
+- Generated artifacts are ignored: `.wiremux/`, `build/out/`, `dist/`, host/helper targets, and ESP-IDF local outputs.
+
+Commit:
+- `505ea91 refactor: productize source layout and build orchestration`
+
+Follow-up note:
+- Future host behavior refactoring can now happen inside `sources/host/wiremux/crates/` without blocking this layout migration.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `505ea91` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 28: Proto API schema version path cleanup
+
+**Date**: 2026-04-29
+**Task**: Proto API schema version path cleanup
+**Branch**: `dev`
+
+### Summary
+
+Removed the duplicate top-level proto schema, moved API snapshots to versions/current and numbered snapshot paths, updated specs/docs/tests, and bumped release metadata to 2604.29.1.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `faa436e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

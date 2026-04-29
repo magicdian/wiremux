@@ -1,0 +1,44 @@
+# Wiremux build orchestrator MVP config
+# Priority resolution: CLI args > .wiremux/build/selected.toml > defaults
+
+[defaults]
+device = "generic-only"
+host_preset = "generic-only"
+
+[devices.core-only]
+product = "core"
+
+[devices.generic-only]
+product = "generic"
+
+[host_presets.generic-only]
+profile = "generic"
+
+[host_presets.device-only]
+profile = "device"
+
+[tools.python]
+expected_contains = "Python 3."
+ci_strict = false
+
+[tools.rustc]
+expected_contains = "rustc 1."
+ci_strict = true
+
+[tools.cargo]
+expected_contains = "cargo 1."
+ci_strict = true
+
+[tools.cmake]
+expected_contains = "cmake version "
+ci_strict = false
+
+[tools.ctest]
+expected_contains = "ctest version "
+ci_strict = false
+
+# `idf.py --version` output typically includes `ESP-IDF v5.4.1`.
+# Keep this contract substring-based to avoid brittle full-string matching.
+[tools.idf_py]
+expected_contains = "ESP-IDF v5.4.1"
+ci_strict = true
