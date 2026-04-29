@@ -111,6 +111,44 @@ enum LunchRequest {
     Explicit { vendor: String, host: String },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CheckTarget {
+    Core,
+    Host,
+    Vendor,
+    All,
+}
+
+impl CheckTarget {
+    fn as_str(self) -> &'static str {
+        match self {
+            CheckTarget::Core => "core",
+            CheckTarget::Host => "host",
+            CheckTarget::Vendor => "vendor",
+            CheckTarget::All => "all",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildTarget {
+    Selected,
+    Core,
+    Host,
+    Vendor,
+}
+
+impl BuildTarget {
+    fn as_str(self) -> &'static str {
+        match self {
+            BuildTarget::Selected => "selected",
+            BuildTarget::Core => "core",
+            BuildTarget::Host => "host",
+            BuildTarget::Vendor => "vendor",
+        }
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -178,7 +216,7 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: wiremux-build <command>\n  lunch [--vendor <skip|all|model> --host <generic|vendor-enhanced|all-features>]\n  env --shell bash|zsh\n  doctor\n  check core|host|vendor|vendor-espressif|all\n  build core|host|vendor|vendor-espressif\n  package esp-registry".to_string()
+    "usage: wiremux-build <command>\n  lunch [--vendor <skip|all|model> --host <generic|vendor-enhanced|all-features>]\n  env --shell bash|zsh\n  doctor\n  check [core|host|vendor|all]\n  build [core|host|vendor]\n  package esp-registry".to_string()
 }
 
 fn repo_root() -> Result<PathBuf, String> {
@@ -483,56 +521,41 @@ fn cmd_check(
     repo_root: &Path,
     build_config: &BuildConfig,
     vendor_config: &VendorConfig,
-    host_config: &HostConfig,
-    selected_path: &Path,
+    _host_config: &HostConfig,
+    _selected_path: &Path,
     metadata_path: &Path,
     args: &[String],
 ) -> Result<(), String> {
     let ci = is_ci();
-    if args.len() != 1 {
-        return Err("check requires core|host|vendor|vendor-espressif|all".to_string());
-    }
-    match args[0].as_str() {
-        "core" => run_core_check(repo_root)?,
-        "host" => {
-            let selected =
-                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
-            run_host_check(repo_root, vendor_config, &selected)?;
-        }
-        "vendor" | "vendor-espressif" => {
-            let selected =
-                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
-            run_vendor_build(
+    let target = parse_check_target(args)?;
+    match target {
+        CheckTarget::Core => run_core_check(repo_root)?,
+        CheckTarget::Host => run_host_gate_check(repo_root, vendor_config)?,
+        CheckTarget::Vendor => {
+            run_vendor_gate_check(
                 repo_root,
                 vendor_config,
-                &selected,
                 build_config.tools.get("idf_py"),
                 ci,
-                true,
             )?;
         }
-        "all" => {
-            let selected =
-                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+        CheckTarget::All => {
             run_core_check(repo_root)?;
-            run_host_check(repo_root, vendor_config, &selected)?;
-            run_vendor_build(
+            run_host_gate_check(repo_root, vendor_config)?;
+            run_vendor_gate_check(
                 repo_root,
                 vendor_config,
-                &selected,
                 build_config.tools.get("idf_py"),
                 ci,
-                true,
             )?;
         }
-        _ => return Err("check requires core|host|vendor|vendor-espressif|all".to_string()),
     }
     append_metadata(
         metadata_path,
         &MetadataRecord {
             event: "check".to_string(),
             unix: now_unix(),
-            target: Some(args[0].clone()),
+            target: Some(target.as_str().to_string()),
             status: Some("ok".to_string()),
             ci: None,
             dirty: None,
@@ -552,20 +575,14 @@ fn cmd_build(
     args: &[String],
 ) -> Result<(), String> {
     let ci = is_ci();
-    if args.len() != 1 {
-        return Err("build requires core|host|vendor|vendor-espressif".to_string());
-    }
-    match args[0].as_str() {
-        "core" => run_core_build(repo_root)?,
-        "host" => {
+    let target = parse_build_target(args)?;
+    match target {
+        BuildTarget::Selected => {
             let selected =
                 resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+            run_core_build(repo_root)?;
             run_host_build(repo_root, vendor_config, &selected)?;
-        }
-        "vendor" | "vendor-espressif" => {
-            let selected =
-                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
-            run_vendor_build(
+            run_selected_vendor_build(
                 repo_root,
                 vendor_config,
                 &selected,
@@ -574,14 +591,31 @@ fn cmd_build(
                 false,
             )?;
         }
-        _ => return Err("build requires core|host|vendor|vendor-espressif".to_string()),
+        BuildTarget::Core => run_core_build(repo_root)?,
+        BuildTarget::Host => {
+            let selected =
+                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+            run_host_build(repo_root, vendor_config, &selected)?;
+        }
+        BuildTarget::Vendor => {
+            let selected =
+                resolve_selected(build_config, vendor_config, host_config, selected_path)?;
+            run_selected_vendor_build(
+                repo_root,
+                vendor_config,
+                &selected,
+                build_config.tools.get("idf_py"),
+                ci,
+                false,
+            )?;
+        }
     }
     append_metadata(
         metadata_path,
         &MetadataRecord {
             event: "build".to_string(),
             unix: now_unix(),
-            target: Some(args[0].clone()),
+            target: Some(target.as_str().to_string()),
             status: Some("ok".to_string()),
             ci: None,
             dirty: None,
@@ -589,6 +623,37 @@ fn cmd_build(
         },
     )?;
     Ok(())
+}
+
+fn parse_check_target(args: &[String]) -> Result<CheckTarget, String> {
+    if args.is_empty() {
+        return Ok(CheckTarget::All);
+    }
+    if args.len() != 1 {
+        return Err("check accepts at most one target: core|host|vendor|all".to_string());
+    }
+    match args[0].as_str() {
+        "core" => Ok(CheckTarget::Core),
+        "host" => Ok(CheckTarget::Host),
+        "vendor" => Ok(CheckTarget::Vendor),
+        "all" => Ok(CheckTarget::All),
+        _ => Err("check target must be core|host|vendor|all".to_string()),
+    }
+}
+
+fn parse_build_target(args: &[String]) -> Result<BuildTarget, String> {
+    if args.is_empty() {
+        return Ok(BuildTarget::Selected);
+    }
+    if args.len() != 1 {
+        return Err("build accepts at most one target: core|host|vendor".to_string());
+    }
+    match args[0].as_str() {
+        "core" => Ok(BuildTarget::Core),
+        "host" => Ok(BuildTarget::Host),
+        "vendor" => Ok(BuildTarget::Vendor),
+        _ => Err("build target must be core|host|vendor".to_string()),
+    }
 }
 
 fn cmd_package(
@@ -750,26 +815,44 @@ fn run_core_build(repo_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run_host_check(
-    repo_root: &Path,
-    vendor_config: &VendorConfig,
-    selected: &Selected,
-) -> Result<(), String> {
+fn run_host_gate_check(repo_root: &Path, vendor_config: &VendorConfig) -> Result<(), String> {
     let host_dir = repo_root.join("sources/host/wiremux");
     run_native(&host_dir, "cargo", &["fmt", "--check"], None)?;
-    run_native_owned(
-        &host_dir,
-        "cargo",
-        &cargo_args_with_host_features("check", vendor_config, selected)?,
-        None,
-    )?;
-    run_native_owned(
-        &host_dir,
-        "cargo",
-        &cargo_args_with_host_features("test", vendor_config, selected)?,
-        None,
-    )?;
+    for feature in host_gate_features(vendor_config) {
+        run_native_owned(
+            &host_dir,
+            "cargo",
+            &cargo_args_with_feature("check", &feature),
+            None,
+        )?;
+        run_native_owned(
+            &host_dir,
+            "cargo",
+            &cargo_args_with_feature("test", &feature),
+            None,
+        )?;
+    }
     Ok(())
+}
+
+fn host_gate_features(vendor_config: &VendorConfig) -> Vec<String> {
+    let mut features = Vec::new();
+    push_unique(&mut features, HOST_GENERIC.to_string());
+    push_unique(&mut features, HOST_ALL_FEATURES.to_string());
+    for vendor in &vendor_config.vendors {
+        if vendor.kind == VENDOR_KIND_MODEL && vendor.implemented {
+            if let Some(feature) = &vendor.host_feature {
+                push_unique(&mut features, feature.clone());
+            }
+        }
+    }
+    features
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 fn run_host_build(
@@ -819,7 +902,15 @@ fn cargo_args_with_host_features(
     Ok(vec![command.to_string(), "--features".to_string(), feature])
 }
 
-fn run_vendor_build(
+fn cargo_args_with_feature(command: &str, feature: &str) -> Vec<String> {
+    vec![
+        command.to_string(),
+        "--features".to_string(),
+        feature.to_string(),
+    ]
+}
+
+fn run_selected_vendor_build(
     repo_root: &Path,
     vendor_config: &VendorConfig,
     selected: &Selected,
@@ -829,10 +920,33 @@ fn run_vendor_build(
 ) -> Result<(), String> {
     let vendors = selected_vendor_targets(vendor_config, selected)?;
     if vendors.is_empty() {
-        println!("skip: vendor scope is skip; vendor build skipped");
+        eprintln!("warning: vendor scope is skip; vendor build skipped");
         return Ok(());
     }
+    run_vendor_targets(repo_root, &vendors, idf_contract, ci, local_skip_ok)
+}
 
+fn run_vendor_gate_check(
+    repo_root: &Path,
+    vendor_config: &VendorConfig,
+    idf_contract: Option<&ToolContract>,
+    ci: bool,
+) -> Result<(), String> {
+    let vendors = implemented_vendor_targets(vendor_config);
+    if vendors.is_empty() {
+        eprintln!("warning: no implemented vendor targets; vendor check skipped");
+        return Ok(());
+    }
+    run_vendor_targets(repo_root, &vendors, idf_contract, ci, true)
+}
+
+fn run_vendor_targets(
+    repo_root: &Path,
+    vendors: &[&VendorDef],
+    idf_contract: Option<&ToolContract>,
+    ci: bool,
+    local_skip_ok: bool,
+) -> Result<(), String> {
     let idf_ok = check_optional_tool_contract("idf.py", &["--version"], idf_contract, ci)?;
     if !idf_ok {
         if local_skip_ok && !ci {
@@ -846,6 +960,14 @@ fn run_vendor_build(
         run_vendor_model(repo_root, vendor)?;
     }
     Ok(())
+}
+
+fn implemented_vendor_targets(vendor_config: &VendorConfig) -> Vec<&VendorDef> {
+    vendor_config
+        .vendors
+        .iter()
+        .filter(|vendor| vendor.kind == VENDOR_KIND_MODEL && vendor.implemented)
+        .collect()
 }
 
 fn selected_vendor_targets<'a>(
@@ -1181,6 +1303,30 @@ mod tests {
     }
 
     #[test]
+    fn check_defaults_to_all_and_rejects_vendor_family_alias() {
+        assert_eq!(parse_check_target(&[]).unwrap(), CheckTarget::All);
+
+        let args = vec!["vendor".to_string()];
+        assert_eq!(parse_check_target(&args).unwrap(), CheckTarget::Vendor);
+
+        let args = vec!["vendor-espressif".to_string()];
+        let err = parse_check_target(&args).unwrap_err();
+        assert!(err.contains("core|host|vendor|all"));
+    }
+
+    #[test]
+    fn build_defaults_to_selected_and_rejects_vendor_family_alias() {
+        assert_eq!(parse_build_target(&[]).unwrap(), BuildTarget::Selected);
+
+        let args = vec!["host".to_string()];
+        assert_eq!(parse_build_target(&args).unwrap(), BuildTarget::Host);
+
+        let args = vec!["vendor-espressif".to_string()];
+        let err = parse_build_target(&args).unwrap_err();
+        assert!(err.contains("core|host|vendor"));
+    }
+
+    #[test]
     fn vendor_enhanced_requires_model_vendor() {
         let vendors = sample_vendors();
         let hosts = sample_hosts();
@@ -1206,5 +1352,26 @@ mod tests {
             resolve_selection(&vendors, &sample_hosts(), "esp32-p4", HOST_GENERIC, None).unwrap();
         let err = selected_vendor_targets(&vendors, &selected).unwrap_err();
         assert!(err.contains("not implemented yet"));
+    }
+
+    #[test]
+    fn check_host_gate_covers_product_feature_matrix() {
+        let features = host_gate_features(&sample_vendors());
+        assert_eq!(
+            features,
+            vec![
+                HOST_GENERIC.to_string(),
+                HOST_ALL_FEATURES.to_string(),
+                "esp32".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn check_vendor_gate_uses_all_implemented_vendor_models() {
+        let vendors = sample_vendors();
+        let targets = implemented_vendor_targets(&vendors);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, "esp32-s3");
     }
 }

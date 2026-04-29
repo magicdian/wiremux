@@ -157,6 +157,37 @@ and `all` allow only `generic` or `all-features`. The initial vendor dispatch
 implementation supports ESP32-S3; other listed models may be placeholders and
 must fail clearly when build/check execution would require them.
 
+## Check and Build Commands
+
+`check` is the developer gate and is intentionally broader than the selected
+lunch profile:
+
+```bash
+tools/wiremux-build check
+tools/wiremux-build check core
+tools/wiremux-build check host
+tools/wiremux-build check vendor
+tools/wiremux-build check all
+```
+
+With no selector, `check` defaults to `all`. `check host` covers the configured
+host feature matrix, and `check vendor` covers every implemented vendor model
+instead of only the current lunch selection.
+
+`build` is selected-profile oriented:
+
+```bash
+tools/wiremux-build build
+tools/wiremux-build build core
+tools/wiremux-build build host
+tools/wiremux-build build vendor
+```
+
+With no selector, `build` compiles the selected project: core, the selected host
+mode, and the selected vendor target when vendor builds are enabled. If the
+selected vendor scope is `skip`, `build vendor` warns and performs no vendor
+firmware build.
+
 ## Reproducibility Policy
 
 CI and local development intentionally have different strictness:

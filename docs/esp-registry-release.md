@@ -180,11 +180,11 @@ before uploading.
 - `tools/wiremux-build check host`
 - install ESP-IDF `v5.4.1`
 - `tools/wiremux-build doctor`
-- `tools/wiremux-build check vendor-espressif`
+- `tools/wiremux-build check vendor`
 - `tools/wiremux-build package esp-registry`
 
 `publish` runs only after `validate` succeeds, and uploads generated packages
-from artifact output. In CI, vendor-espressif validation is strict: missing or
+from artifact output. In CI, vendor validation is strict: missing or
 mismatched `idf.py` fails validation.
 
 Registry setup required before the first CI upload:
