@@ -58,11 +58,13 @@ struct OutputLine {
 }
 
 struct RenderOutputLine<'a> {
+    logical_index: usize,
     channel: Option<u32>,
     text: &'a str,
 }
 
 struct RenderOutputRow {
+    logical_index: usize,
     channel: Option<u32>,
     prefix: Option<String>,
     text: String,
@@ -2546,11 +2548,13 @@ fn rendered_output_lines<'a>(
             if index < filtered.len() {
                 let line = filtered[index];
                 Some(RenderOutputLine {
+                    logical_index: index,
                     channel: line.channel,
                     text: line.text.as_str(),
                 })
             } else if append_prompt {
                 Some(RenderOutputLine {
+                    logical_index: index,
                     channel: Some(active_channel),
                     text: "",
                 })
@@ -2572,7 +2576,14 @@ fn output_rows(
         let prefix = line
             .channel
             .map(|channel| format!("{}> ", app.channel_prefix(channel)));
-        append_output_rows(&mut rows, line.channel, prefix, line.text, output_width);
+        append_output_rows(
+            &mut rows,
+            line.logical_index,
+            line.channel,
+            prefix,
+            line.text,
+            output_width,
+        );
     }
     rows
 }
@@ -2644,7 +2655,46 @@ fn status_row_text(row: &StatusRow) -> String {
 }
 
 fn selected_output_text(selection: &TextSelection, rows: &[RenderOutputRow]) -> String {
-    selected_text_from_rows(selection, rows.len(), |index| row_text(&rows[index]))
+    if rows.is_empty() {
+        return String::new();
+    }
+    let Some((start, end)) = normalized_selection(selection) else {
+        return String::new();
+    };
+    if start.row >= rows.len() {
+        return String::new();
+    }
+
+    let mut selected = String::new();
+    let last_row = end.row.min(rows.len().saturating_sub(1));
+    let mut previous_logical_index = None;
+    let mut has_selected_row = false;
+    for row_index in start.row..=last_row {
+        let text = row_text(&rows[row_index]);
+        let len = char_len(&text);
+        let start_col = if row_index == start.row {
+            start.col.min(len)
+        } else {
+            0
+        };
+        let end_col = if row_index == end.row {
+            end.col.min(len)
+        } else {
+            len
+        };
+        if end_col < start_col {
+            continue;
+        }
+
+        let logical_index = rows[row_index].logical_index;
+        if has_selected_row && previous_logical_index != Some(logical_index) {
+            selected.push('\n');
+        }
+        selected.push_str(&char_range(&text, start_col, end_col));
+        previous_logical_index = Some(logical_index);
+        has_selected_row = true;
+    }
+    selected
 }
 
 fn selected_status_text(
@@ -2744,13 +2794,14 @@ fn selection_is_empty(selection: &TextSelection) -> bool {
 
 fn append_output_rows(
     rows: &mut Vec<RenderOutputRow>,
+    logical_index: usize,
     channel: Option<u32>,
     prefix: Option<String>,
     text: &str,
     output_width: usize,
 ) {
     let Some(prefix) = prefix else {
-        append_continuation_rows(rows, channel, text, output_width);
+        append_continuation_rows(rows, logical_index, channel, text, output_width);
         return;
     };
 
@@ -2758,11 +2809,12 @@ fn append_output_rows(
     let first_text_width = output_width.saturating_sub(prefix_width);
     if first_text_width == 0 {
         rows.push(RenderOutputRow {
+            logical_index,
             channel,
             prefix: Some(prefix),
             text: String::new(),
         });
-        append_continuation_rows(rows, channel, text, output_width);
+        append_continuation_rows(rows, logical_index, channel, text, output_width);
         return;
     }
 
@@ -2775,6 +2827,7 @@ fn append_output_rows(
         first_text.push(ch);
     }
     rows.push(RenderOutputRow {
+        logical_index,
         channel,
         prefix: Some(prefix),
         text: first_text,
@@ -2782,18 +2835,20 @@ fn append_output_rows(
 
     let rest = chars.collect::<String>();
     if !rest.is_empty() {
-        append_continuation_rows(rows, channel, &rest, output_width);
+        append_continuation_rows(rows, logical_index, channel, &rest, output_width);
     }
 }
 
 fn append_continuation_rows(
     rows: &mut Vec<RenderOutputRow>,
+    logical_index: usize,
     channel: Option<u32>,
     text: &str,
     output_width: usize,
 ) {
     if text.is_empty() {
         rows.push(RenderOutputRow {
+            logical_index,
             channel,
             prefix: None,
             text: String::new(),
@@ -2806,6 +2861,7 @@ fn append_continuation_rows(
     for ch in text.chars() {
         if width == output_width {
             rows.push(RenderOutputRow {
+                logical_index,
                 channel,
                 prefix: None,
                 text: row,
@@ -2817,6 +2873,7 @@ fn append_continuation_rows(
         width = width.saturating_add(1);
     }
     rows.push(RenderOutputRow {
+        logical_index,
         channel,
         prefix: None,
         text: row,
@@ -3400,6 +3457,49 @@ mod tests {
             terminal.backend().buffer()[(output_area.x + 1, output_area.y + 1)].bg,
             Color::Blue
         );
+    }
+
+    #[test]
+    fn output_copy_omits_newline_inserted_by_soft_wrap() {
+        let mut app = App::new("diag.log".to_string());
+        let line = "wiremux> vtty ch1 wiremux-usbmodem2101-console owner=host /tmp/wiremux/tty/tty.wiremux-usbmodem2101-console";
+        app.push_line(None, format!("{line}\n"));
+        let output_area = output_area_for_content(40, 8);
+        let model = output_render_model(&app, output_area);
+        assert!(model.rows.len() > 1);
+        let last_row = model.rows.len() - 1;
+
+        app.selection = Some(TextSelection {
+            pane: SelectionPane::Output,
+            anchor: SelectionPosition { row: 0, col: 0 },
+            cursor: SelectionPosition {
+                row: last_row,
+                col: char_len(&row_text(&model.rows[last_row])),
+            },
+            active: false,
+        });
+
+        app.request_copy_selection(output_area, Rect::new(0, 0, 0, 0));
+
+        assert_eq!(app.pending_clipboard.as_deref(), Some(line));
+    }
+
+    #[test]
+    fn output_copy_preserves_real_logical_line_breaks() {
+        let mut app = App::new("diag.log".to_string());
+        app.push_line(None, "first\nsecond\n".to_string());
+        let output_area = output_area_for_content(40, 8);
+
+        app.selection = Some(TextSelection {
+            pane: SelectionPane::Output,
+            anchor: SelectionPosition { row: 0, col: 0 },
+            cursor: SelectionPosition { row: 1, col: 6 },
+            active: false,
+        });
+
+        app.request_copy_selection(output_area, Rect::new(0, 0, 0, 0));
+
+        assert_eq!(app.pending_clipboard.as_deref(), Some("first\nsecond"));
     }
 
     #[test]
