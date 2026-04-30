@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 39
+- **Total Sessions**: 40
 - **Last Active**: 2026-04-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1606 | Active |
+| `journal-1.md` | ~1662 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-04-30 | TUI dynamic status pagination | `d596985` | `dev` |
 | 39 | 2026-04-30 | Vendor enhanced capability registry | `d33bd10` | `dev` |
 | 38 | 2026-04-30 | ESP enhanced esptool passthrough MVP | `18eb90b` | `dev` |
 | 37 | 2026-04-30 | Host generic enhanced capability registry | `f4c9d11` | `dev` |

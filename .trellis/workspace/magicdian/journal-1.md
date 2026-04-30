@@ -1627,3 +1627,36 @@ API-family crates decode catalogs into common capability declarations, while
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: TUI dynamic status pagination
+
+**Date**: 2026-04-30
+**Task**: TUI dynamic status pagination
+**Branch**: `dev`
+
+### Summary
+
+Implemented compile-time TOML-driven TUI status priorities, dynamic width-based status pagination, passthrough-safe page navigation, version 2604.30.3, and backend spec coverage.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d596985` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
