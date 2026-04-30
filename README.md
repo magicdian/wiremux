@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-[![Version](https://img.shields.io/badge/version-2604.30.1-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2604.30.2-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux is a lightweight channel multiplexer for serial-style byte streams. It lets one UART, USB CDC, USB Serial/JTAG, TCP bridge, or other ordered byte transport carry multiple logical channels at the same time, so logs, console commands, telemetry, and structured diagnostics do not have to fight over one raw stream.
@@ -149,6 +149,20 @@ When `[virtual_serial]` is omitted, generic enhanced, vendor enhanced, and
 all-feature builds enable it by default and export every manifest channel.
 Output-only channels are read-only; input-capable channels accept virtual serial
 writes only after the input owner is switched to virtual serial.
+
+Vendor enhanced ESP32 host builds add a TUI-only enhanced endpoint for matched
+Espressif manifests. While `wiremux tui` owns the physical serial port, it
+creates a stable `tty.wiremux-esp-enhanced` alias; use the exact path shown by
+TUI, usually `/dev/tty.wiremux-esp-enhanced` when `/dev` aliases are permitted
+or `/tmp/wiremux/tty/tty.wiremux-esp-enhanced` as the user-writable fallback.
+Terminal tools can open it as an aggregate channel monitor. `idf.py flash
+--port <shown-esp-enhanced-path> --baud 115200` is detected from a complete
+esptool SYNC frame, then TUI uses DTR/RTS to enter the ROM bootloader and
+bridges raw bytes until the flashing client disconnects. The explicit
+`--baud 115200` keeps esptool from issuing a high-baud PTY ioctl that macOS PTY
+aliases reject; native DriverKit virtual serial support is the roadmap path for
+default high-baud flashing. Normal channel virtual serial input ownership is
+unchanged.
 
 ```toml
 [virtual_serial]

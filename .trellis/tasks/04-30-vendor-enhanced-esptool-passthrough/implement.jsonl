@@ -1,0 +1,10 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/tasks/04-30-vendor-enhanced-esptool-passthrough/prd.md", "reason": "confirmed MVP requirements for ESP vendor enhanced esptool passthrough"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "interactive IO and diagnostics error behavior"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "host TUI/interactive quality and testing requirements"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "host workspace crate boundaries and dependency direction"}
+{"file": "docs/product-architecture.md", "reason": "generic vs vendor enhanced architecture boundary"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "reuse PTY and interactive backend patterns"}
+{"file": "sources/host/wiremux/crates/interactive/src/lib.rs", "reason": "existing virtual serial PTY and interactive serial backend implementation"}
+{"file": "sources/host/wiremux/crates/tui/src/lib.rs", "reason": "TUI runtime loop and virtual serial integration point"}

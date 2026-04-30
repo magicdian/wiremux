@@ -1,0 +1,10 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/tasks/04-30-vendor-enhanced-esptool-passthrough/prd.md", "reason": "acceptance criteria for ESP vendor enhanced MVP"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "host workspace crate boundaries and dependency direction"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "interactive IO and diagnostics error behavior"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "host TUI/interactive quality and testing requirements"}
+{"file": "docs/product-architecture.md", "reason": "verify generic vs vendor enhanced architecture boundary"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "verify no duplicated PTY/backend logic"}
+{"file": "sources/host/wiremux/crates/interactive/src/lib.rs", "reason": "review PTY/backend changes against existing implementation"}
+{"file": "sources/host/wiremux/crates/tui/src/lib.rs", "reason": "review TUI runtime integration and tests"}

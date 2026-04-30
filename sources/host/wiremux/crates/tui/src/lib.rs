@@ -43,8 +43,78 @@ use ratatui::Terminal;
 
 mod args;
 mod clipboard;
+#[cfg(feature = "esp32")]
+mod esp_enhanced;
+#[cfg(not(feature = "esp32"))]
+mod esp_enhanced {
+    use std::fs::File;
+    use std::io;
+    use std::path::PathBuf;
+
+    use host_session::{DeviceManifest, MuxEnvelope};
+    use interactive::ConnectedInteractiveBackend;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct EspressifEnhancedPoll {
+        pub dirty: bool,
+        pub reset_host_session: bool,
+    }
+
+    #[derive(Debug, Default)]
+    pub struct EspressifEnhancedHost;
+
+    impl EspressifEnhancedHost {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn set_source_port(&mut self, _source_port: PathBuf) {}
+
+        pub fn set_monitor_baud(&mut self, _baud: u32) {}
+
+        pub fn clear(&mut self) {}
+
+        pub fn sync_manifest(&mut self, _manifest: &DeviceManifest) -> Vec<String> {
+            Vec::new()
+        }
+
+        pub fn summary(&self) -> String {
+            "esp-enhanced unsupported".to_string()
+        }
+
+        pub fn is_raw_bridge_active(&self) -> bool {
+            false
+        }
+
+        pub fn should_poll(&self) -> bool {
+            false
+        }
+
+        pub fn mirror_mux_output(&mut self, _envelope: &MuxEnvelope) -> io::Result<()> {
+            Ok(())
+        }
+
+        pub fn write_raw_serial_output(
+            &mut self,
+            _bytes: &[u8],
+            _serial: &mut ConnectedInteractiveBackend,
+            _diagnostics: &mut File,
+        ) -> io::Result<bool> {
+            Ok(false)
+        }
+
+        pub fn poll_input(
+            &mut self,
+            _serial: &mut ConnectedInteractiveBackend,
+            _diagnostics: &mut File,
+        ) -> io::Result<EspressifEnhancedPoll> {
+            Ok(EspressifEnhancedPoll::default())
+        }
+    }
+}
 
 pub use args::TuiArgs;
+use esp_enhanced::EspressifEnhancedHost;
 
 const MAX_LINES: usize = 1000;
 const WHEEL_SCROLL_LINES: usize = 1;
@@ -264,6 +334,7 @@ struct App {
     virtual_serial: VirtualSerialBroker,
     virtual_serial_config: VirtualSerialConfig,
     virtual_serial_supported: bool,
+    esp_enhanced: EspressifEnhancedHost,
 }
 
 impl App {
@@ -310,6 +381,7 @@ impl App {
             virtual_serial,
             virtual_serial_config,
             virtual_serial_supported,
+            esp_enhanced: EspressifEnhancedHost::new(),
         }
     }
 
@@ -865,6 +937,8 @@ fn run_loop(
                     app.connected_port = Some(path.display().to_string());
                     app.backend_label = connected_backend.label().to_string();
                     app.status = format!("connected {}", path.display());
+                    app.esp_enhanced.set_source_port(path.clone());
+                    app.esp_enhanced.set_monitor_baud(app.serial.baud);
                     writeln!(
                         diagnostics,
                         "[wiremux] connected: {} backend={}",
@@ -906,6 +980,32 @@ fn run_loop(
             dirty = true;
         }
 
+        if let Some(serial) = backend.as_mut() {
+            let poll = app.esp_enhanced.poll_input(serial, &mut diagnostics)?;
+            if poll.reset_host_session {
+                host_session = HostSession::new(args.max_payload_len).map_err(|status| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("host session init failed: {status}"),
+                    )
+                })?;
+                app.manifest = None;
+                app.virtual_serial.clear_endpoints();
+                app.push_marker(app.esp_enhanced.summary());
+                if !app.esp_enhanced.is_raw_bridge_active() {
+                    let request = build_manifest_request_frame(args.max_payload_len)
+                        .map_err(build_frame_error_to_io)?;
+                    serial.write_all(&request)?;
+                    serial.flush()?;
+                    app.push_marker("manifest requested");
+                }
+            }
+            if poll.dirty {
+                app.status = app.esp_enhanced.summary();
+                dirty = true;
+            }
+        }
+
         if let Some(serial) = backend.as_mut().map(|backend| backend as &mut dyn Write) {
             if handle_virtual_serial_input(&mut app, serial, &mut diagnostics, &args)? {
                 dirty = true;
@@ -941,8 +1041,9 @@ fn run_loop(
                 started_at + Duration::from_millis(PASSTHROUGH_EXIT_ESCAPE_TIMEOUT_MS)
             }),
             (dirty || app.selection_auto_scroll.is_some()).then_some(next_render_at),
-            (backend.is_some() && app.virtual_serial.is_enabled())
-                .then_some(Instant::now() + Duration::from_millis(25)),
+            (backend.is_some()
+                && (app.virtual_serial.is_enabled() || app.esp_enhanced.should_poll()))
+            .then_some(Instant::now() + Duration::from_millis(25)),
         );
 
         let event = if let Some(backend) = backend.as_mut() {
@@ -953,13 +1054,21 @@ fn run_loop(
 
         match event {
             InteractiveEvent::SerialBytes(bytes) => {
-                for event in host_session.feed(&bytes).map_err(|status| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("host session feed failed: {status}"),
-                    )
-                })? {
-                    handle_stream_event(&mut app, &mut diagnostics, event)?;
+                let handled_by_esp_enhanced = if let Some(serial) = backend.as_mut() {
+                    app.esp_enhanced
+                        .write_raw_serial_output(&bytes, serial, &mut diagnostics)?
+                } else {
+                    false
+                };
+                if !handled_by_esp_enhanced {
+                    for event in host_session.feed(&bytes).map_err(|status| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("host session feed failed: {status}"),
+                        )
+                    })? {
+                        handle_stream_event(&mut app, &mut diagnostics, event)?;
+                    }
                 }
                 dirty = true;
             }
@@ -970,6 +1079,7 @@ fn run_loop(
                 app.manifest = None;
                 app.input.clear();
                 app.virtual_serial.clear_endpoints();
+                app.esp_enhanced.clear();
                 backend = None;
                 dirty = true;
             }
@@ -984,6 +1094,7 @@ fn run_loop(
                 app.manifest = None;
                 app.input.clear();
                 app.virtual_serial.clear_endpoints();
+                app.esp_enhanced.clear();
                 backend = None;
                 dirty = true;
             }
@@ -1023,6 +1134,7 @@ fn run_loop(
                     app.manifest = None;
                     app.input.clear();
                     app.virtual_serial.clear_endpoints();
+                    app.esp_enhanced.clear();
                     backend = None;
                     host_session = HostSession::new(args.max_payload_len).map_err(|status| {
                         io::Error::new(
@@ -1964,6 +2076,9 @@ fn handle_stream_event(app: &mut App, diagnostics: &mut File, event: HostEvent) 
                     endpoint.channel_id, endpoint.name, endpoint.input_owner, path
                 ));
             }
+            for marker in app.esp_enhanced.sync_manifest(&manifest) {
+                app.push_marker(marker);
+            }
             app.manifest = Some(manifest);
             app.clear_input_if_read_only();
         }
@@ -2050,6 +2165,14 @@ fn handle_envelope(
             envelope.channel_id
         )?;
         app.status = format!("virtual serial output error: {err}");
+    }
+    if let Err(err) = app.esp_enhanced.mirror_mux_output(envelope) {
+        writeln!(
+            diagnostics,
+            "[wiremux] esp_enhanced output channel={} error={err}",
+            envelope.channel_id
+        )?;
+        app.status = format!("esp enhanced output error: {err}");
     }
     Ok(())
 }
@@ -2628,6 +2751,9 @@ fn status_rows(app: &App) -> Vec<StatusRow> {
                 segment("  ", Style::default()),
                 segment("vtty ", label),
                 segment(app.virtual_serial.summary(), Style::default()),
+                segment("  ", Style::default()),
+                segment("esp ", label),
+                segment(app.esp_enhanced.summary(), Style::default()),
             ],
         },
     ]
