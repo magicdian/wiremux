@@ -1571,3 +1571,59 @@ Added Rust host generic-enhanced crate with protobuf catalog decoding and regist
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: Vendor enhanced capability registry
+
+**Date**: 2026-04-30
+**Task**: Vendor enhanced capability registry
+**Branch**: `dev`
+
+### Summary
+
+Added the stable/frozen Espressif vendor enhanced host API and refactored host
+enhanced capability registration around a shared registry boundary. The new
+model keeps generic enhanced, vendor enhanced, and provider resolution separate:
+API-family crates decode catalogs into common capability declarations, while
+`crates/enhanced-registry` owns shared provider registration and resolution.
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| API | Added `sources/api/host/vendor_enhanced/espressif/versions/{current,1}` with `wiremux.vendor.enhanced.espressif.esptool_bridge@1`. |
+| Registry | Added `crates/enhanced-registry` for shared `CapabilityId`, requirements, declarations, provider registration, and resolve errors. |
+| Generic enhanced | Refactored `crates/generic-enhanced` to translate generic catalogs into shared registry declarations. |
+| Vendor enhanced | Added `crates/vendor-enhanced` for Espressif vendor catalog decode, generic capability requirement validation, and esptool bridge provider registration. |
+| TUI | Wired ESP enhanced support through the vendor enhanced provider check without changing flashing runtime behavior. |
+| Specs | Updated backend code-specs with executable host enhanced registry boundary contracts, validation matrix, tests, and wrong-vs-correct examples. |
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d33bd10` | feat(host): add vendor enhanced capability registry |
+
+### Testing
+
+- [OK] `cargo fmt --check`
+- [OK] `cargo check`
+- [OK] `cargo check --features generic-enhanced`
+- [OK] `cargo check --features esp32`
+- [OK] `cargo check --features all-vendors`
+- [OK] `cargo check --features all-features`
+- [OK] `cargo test`
+- [OK] `cargo test -p enhanced-registry`
+- [OK] `cargo test -p generic-enhanced`
+- [OK] `cargo test -p vendor-enhanced`
+- [OK] `cargo test -p tui --features esp32 esp_enhanced`
+- [OK] `protoc` descriptor generation for current and frozen v1 Espressif vendor enhanced proto.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
