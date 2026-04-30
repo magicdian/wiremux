@@ -70,7 +70,9 @@ sources/
 │   │   └── generic_enhanced/
 │   │       └── versions/
 │   │           ├── current/generic_enhanced.proto
-│   │           └── 1/generic_enhanced.proto
+│   │           ├── current/catalog.textproto
+│   │           ├── 1/generic_enhanced.proto
+│   │           └── 1/catalog.textproto
 │   └── proto/
 │       └── versions/
 │           ├── current/wiremux.proto
@@ -80,6 +82,7 @@ sources/
 │   └── wiremux/
 │       ├── Cargo.toml
 │       └── crates/
+│           ├── generic-enhanced/
 │           ├── host-session/
 │           ├── interactive/
 │           ├── tui/
@@ -103,8 +106,12 @@ sources/
 
 Path: `sources/host/wiremux`.
 
-The host is a Cargo workspace with four crates:
+The host is a Cargo workspace with these crates:
 
+- `crates/generic-enhanced`: Rust protobuf codegen for host-side generic
+  enhanced API schemas, decoded built-in capability catalogs, registry/resolver
+  types, and capability/provider matching tests. This crate owns generic
+  enhanced contracts; it must not depend on concrete provider crates.
 - `crates/host-session`: Rust wrapper around the portable C
   `wiremux_host_session_*` API, host event/data models, host-to-device frame
   builders, C core static linking through `build.rs`, and focused unit tests.
@@ -140,6 +147,7 @@ Signatures:
 ```toml
 [workspace]
 members = [
+    "crates/generic-enhanced",
     "crates/host-session",
     "crates/interactive",
     "crates/tui",
@@ -154,6 +162,7 @@ path = "src/main.rs"
 Dependency direction:
 
 ```text
+interactive -> generic-enhanced
 cli -> tui -> interactive -> host-session
 cli -> interactive
 cli -> host-session
@@ -162,9 +171,13 @@ tui -> host-session
 
 Contracts:
 
+- `generic-enhanced` must not depend on `host-session`, `interactive`, `tui`, or
+  `cli`; it owns host-side generic enhanced contracts and provider-neutral
+  registry types.
 - `host-session` must not depend on `cli`, `tui`, or `interactive`.
 - `interactive` may depend on `host-session` only for shared input policy types
-  such as `PassthroughPolicy`; it must not depend on `cli` or `tui`.
+  such as `PassthroughPolicy`, and on `generic-enhanced` for capability
+  registration/resolution; it must not depend on `cli` or `tui`.
 - `tui` may depend on `interactive` and `host-session`; it must not depend on
   `cli`.
 - `cli` composes the other crates and owns the `wiremux` executable.
@@ -176,6 +189,7 @@ Validation matrix:
 |------|-------------------|
 | `cargo run -- listen ...` | still resolves the `wiremux` binary from `crates/cli` |
 | host-session frame builder change | `crates/host-session` tests cover round-trip through `HostSession` |
+| generic enhanced catalog change | `crates/generic-enhanced` tests cover catalog decode and registry resolution |
 | interactive backend change | `crates/interactive` tests cover retry, serial candidate, and passthrough key behavior |
 | TUI behavior change | `crates/tui` tests cover app/render/input behavior |
 | CLI parse or display change | `crates/cli` tests cover argument and listen display behavior |

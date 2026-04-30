@@ -241,6 +241,9 @@ provider such as the built-in virtual serial broker. Future vendor enhanced
 overlays can declare a dependency on
 `wiremux.generic.enhanced.virtual_serial` and let the host resolver find the
 matching implementation instead of importing private virtual serial internals.
+In the Rust host workspace, this contract is owned by the
+`crates/generic-enhanced` crate; concrete providers such as virtual serial stay
+in their implementation crates and register through that shared boundary.
 
 Future overlay package identity, package trust metadata, and TUI contribution
 contracts should be added additively after the overlay package/runtime format is

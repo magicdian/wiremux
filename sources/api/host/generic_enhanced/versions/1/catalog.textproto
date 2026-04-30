@@ -1,0 +1,7 @@
+current_version: 1
+apis {
+  api_name: "wiremux.generic.enhanced.virtual_serial"
+  frozen_version: 1
+  stability: GENERIC_ENHANCED_API_STABILITY_FROZEN
+  description: "Generic enhanced virtual serial endpoints derived from manifest channel descriptors."
+}

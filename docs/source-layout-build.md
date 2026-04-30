@@ -53,7 +53,8 @@ Top-level responsibilities:
 - `sources/profiles`: profile contracts and reusable profile implementations.
   PR1 does not edit PR6-owned profile skeleton files.
 - `sources/host/wiremux`: Rust host CLI/library workspace root after migration
-  from `sources/host`.
+  from `sources/host`. Host-side generic enhanced catalog and resolver code
+  belongs in `sources/host/wiremux/crates/generic-enhanced`.
 - `sources/vendor/espressif`: Espressif-owned integration surface. The generic
   ESP-IDF component and examples move under
   `sources/vendor/espressif/generic/{components,examples}`. S3 and P4 start as

@@ -31,6 +31,9 @@ Generic enhanced API names use the `wiremux.generic.enhanced.*` namespace. The
 first frozen API is `wiremux.generic.enhanced.virtual_serial` at
 `frozen_version = 1`; it derives endpoint behavior from core manifest channel
 descriptors and has no dedicated typed config message in version 1.
+The latest built-in host catalog data lives beside the current schema in
+`current/catalog.textproto`; Rust host tooling decodes that catalog instead of
+hand-writing built-in capability declarations in implementation code.
 
 Future overlay package identity, package trust metadata, and TUI contribution
 contracts should be added through new fields or API families after the

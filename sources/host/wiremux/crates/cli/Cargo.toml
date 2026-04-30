@@ -7,7 +7,7 @@ license = "Apache-2.0"
 [features]
 default = []
 generic = []
-generic-enhanced = ["generic"]
+generic-enhanced = ["generic", "interactive/generic-enhanced"]
 esp32 = ["generic-enhanced"]
 all-vendors = ["generic-enhanced", "esp32"]
 all-features = ["all-vendors"]

@@ -298,7 +298,7 @@ pub fn default_virtual_serial_enabled_for_host() -> bool {
 }
 
 pub fn host_supports_virtual_serial() -> bool {
-    cfg!(feature = "generic-enhanced")
+    interactive::host_supports_virtual_serial_provider()
 }
 
 fn parse_channel(value: &str) -> Result<u8, String> {

@@ -101,6 +101,10 @@ Rules:
   `sources/api/host/<api-family>/versions/current/`. Freeze a numbered snapshot
   when shipping a stable host API contract for overlay providers. Do not couple
   host-side enhanced API versioning to `DeviceManifest.protocol_version`.
+- Generic enhanced host API catalog changes must keep
+  `sources/api/host/generic_enhanced/versions/current/catalog.textproto`, any
+  matching frozen catalog snapshot, and the Rust
+  `crates/generic-enhanced` decode/registry tests in sync.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.

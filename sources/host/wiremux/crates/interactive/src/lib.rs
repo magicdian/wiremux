@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use generic_enhanced::{GenericEnhancedRegistry, RegistryError};
 use host_session::{
     ChannelDescriptor, DeviceManifest, MuxEnvelope, PassthroughPolicy,
     CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_INPUT, NEWLINE_POLICY_CR, NEWLINE_POLICY_CRLF,
@@ -623,6 +624,36 @@ pub fn is_passthrough_meta_exit_key(key: KeyEvent) -> bool {
 
 pub fn is_passthrough_escape_exit_suffix(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+}
+
+pub fn generic_enhanced_registry() -> Result<GenericEnhancedRegistry, RegistryError> {
+    #[cfg(feature = "generic-enhanced")]
+    {
+        let mut registry = GenericEnhancedRegistry::new();
+        generic_enhanced::register_virtual_serial_provider(&mut registry)?;
+        Ok(registry)
+    }
+
+    #[cfg(not(feature = "generic-enhanced"))]
+    {
+        Ok(GenericEnhancedRegistry::new())
+    }
+}
+
+pub fn host_supports_virtual_serial_provider() -> bool {
+    #[cfg(feature = "generic-enhanced")]
+    {
+        let registry =
+            generic_enhanced_registry().expect("built-in generic enhanced registry is valid");
+        let capability_id = generic_enhanced::latest_virtual_serial_capability_id()
+            .expect("built-in virtual serial capability is declared");
+        registry.supports(&capability_id)
+    }
+
+    #[cfg(not(feature = "generic-enhanced"))]
+    {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1690,13 +1721,14 @@ use unix_mio::UnixMioBackend;
 #[cfg(test)]
 mod tests {
     use super::{
-        is_passthrough_exit_key, is_passthrough_meta_exit_key, paired_tty_cu_path,
-        passthrough_key_payload, port_candidates, requested_file_name_starts_with,
-        retry_interrupted, source_port_virtual_serial_name_part, terminal_text_output_bytes,
-        usbmodem_fragment, virtual_serial_name, virtual_serial_record_delimited_output, HostConfig,
-        SerialConfig, SerialFlowControl, SerialParity, SerialProfileOverrides, VirtualSerialBroker,
-        VirtualSerialConfig, VirtualSerialEndpoint, VirtualSerialEndpointBackend,
-        VirtualSerialEndpointIo, VirtualSerialExport, VirtualSerialInputOwner,
+        host_supports_virtual_serial_provider, is_passthrough_exit_key,
+        is_passthrough_meta_exit_key, paired_tty_cu_path, passthrough_key_payload, port_candidates,
+        requested_file_name_starts_with, retry_interrupted, source_port_virtual_serial_name_part,
+        terminal_text_output_bytes, usbmodem_fragment, virtual_serial_name,
+        virtual_serial_record_delimited_output, HostConfig, SerialConfig, SerialFlowControl,
+        SerialParity, SerialProfileOverrides, VirtualSerialBroker, VirtualSerialConfig,
+        VirtualSerialEndpoint, VirtualSerialEndpointBackend, VirtualSerialEndpointIo,
+        VirtualSerialExport, VirtualSerialInputOwner,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use host_session::{
@@ -1833,6 +1865,14 @@ name_template = "wiremux-{device}-{channel_id}"
             b"\nfour\r\n"
         );
         assert!(!previous_was_cr);
+    }
+
+    #[test]
+    fn generic_enhanced_registry_matches_virtual_serial_feature_support() {
+        assert_eq!(
+            host_supports_virtual_serial_provider(),
+            cfg!(feature = "generic-enhanced")
+        );
     }
 
     #[test]

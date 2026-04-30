@@ -1,0 +1,15 @@
+[package]
+name = "generic-enhanced"
+version = "2604.30.1"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "generic_enhanced"
+path = "src/lib.rs"
+
+[dependencies]
+prost = "0.13"
+
+[build-dependencies]
+prost-build = "0.13"
