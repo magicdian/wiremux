@@ -16,7 +16,9 @@ dispatch them to registered channel handlers.
 The current paths are transitional. The target product layout is documented in
 `docs/source-layout-build.md` and is:
 
-- `sources/api/proto` for shared API/protobuf definitions.
+- `sources/api/proto` for shared device/host API/protobuf definitions.
+- `sources/api/host` for host-side API contracts that are not mandatory for
+  minimal device SDKs, such as generic enhanced host APIs.
 - `sources/core/c` for the platform-neutral C core.
 - `sources/profiles` for profile contracts and reusable profile code.
 - `sources/host/wiremux` for the Rust Wiremux host crate after migration.
@@ -64,6 +66,11 @@ sources/
 │       └── tests/
 │           └── wiremux_core_test.cpp
 ├── api/
+│   ├── host/
+│   │   └── generic_enhanced/
+│   │       └── versions/
+│   │           ├── current/generic_enhanced.proto
+│   │           └── 1/generic_enhanced.proto
 │   └── proto/
 │       └── versions/
 │           ├── current/wiremux.proto
@@ -715,8 +722,11 @@ impl HostSession {
 
 - `sources/api/proto/versions/current/wiremux.proto` is the API used by new device
   SDK builds.
-- `sources/api/proto/versions/<version>/wiremux.proto` directories are frozen API
-  snapshots compiled into host SDK builds.
+- `sources/api/proto/versions/<version>/wiremux.proto` directories are frozen
+  device/host protocol API snapshots compiled into host SDK builds.
+- Host-side enhanced API snapshots live under
+  `sources/api/host/<api-family>/versions/<version>/`. These APIs are consumed
+  by host tooling and overlay providers, not by minimal core device SDKs.
 - Host-side compatibility is compile-time bounded: a host build supports its
   compiled current API and all older frozen API versions included in the source
   tree.

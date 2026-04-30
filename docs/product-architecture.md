@@ -195,6 +195,76 @@ with an already-open descriptor can observe disconnect.
 Vendor enhanced adapters may later request ownership for special endpoints, for
 example an ESP32 aggregate flashing PTY.
 
+## Generic Enhanced API Stability
+
+Generic enhanced services expose a host-side API contract for vendor-neutral
+features that vendor enhanced overlays can depend on. These APIs are separate
+from the core device/host protocol: a core-only Wiremux integration can ignore
+them, while enhanced hosts and overlay providers can use them as a stable base.
+The proto contract is a capability catalog between host core/session behavior
+and enhanced implementations; it does not replace the runtime implementation of
+each feature.
+
+Generic enhanced API schemas live under
+`sources/api/host/generic_enhanced/versions`. The `current/` directory is the
+latest development schema. Numbered directories are frozen snapshots that
+released overlays may target. A host may expose the current schema and multiple
+older frozen snapshots concurrently, so an overlay targeting frozen version 1 can
+continue to run after the host current API moves to a later version.
+
+Generic enhanced API states are explicit:
+
+- development APIs may change before they are published as stable;
+- stable APIs preserve compatibility within their declared version;
+- frozen APIs are immutable numbered snapshots for released overlays.
+
+Each declared API uses a stable string name in the
+`wiremux.generic.enhanced.*` namespace plus a single `frozen_version` value.
+Version ranges are resolved by the host or overlay manager, not declared by the
+device manifest. Generic enhanced v1 contains only
+`wiremux.generic.enhanced.virtual_serial`; it derives endpoint behavior from the
+existing manifest channel descriptors and does not define a dedicated virtual
+serial config message. The v1 schema still carries an optional typed config
+extension point so later APIs can add typed configuration without changing the
+meaning of existing fields.
+
+The intended host flow is:
+
+```text
+host core/session state -> generic enhanced API catalog -> implementation registry
+                         -> virtual serial provider
+```
+
+The catalog answers which generic enhanced APIs the host supports. The
+implementation registry maps a supported `api_name` and `frozen_version` to a
+provider such as the built-in virtual serial broker. Future vendor enhanced
+overlays can declare a dependency on
+`wiremux.generic.enhanced.virtual_serial` and let the host resolver find the
+matching implementation instead of importing private virtual serial internals.
+
+Future overlay package identity, package trust metadata, and TUI contribution
+contracts should be added additively after the overlay package/runtime format is
+designed. The preferred runtime direction for closed-source overlays is an
+out-of-process provider that communicates with the host through a stable local
+protocol. In-process dynamic libraries are a higher-risk optional mode and are
+not part of the stable generic enhanced ABI commitment.
+
+## Future Overlay Package Identity
+
+Future vendor overlay activation should be based on explicit package identity
+rather than only compile-time host features. Official Wiremux overlays reserve
+the `wiremux.*` package namespace, for example
+`wiremux.espressif.esp32`. Third-party overlays must not use the `wiremux`
+prefix; they should use a publisher-owned namespace such as reverse-DNS or an
+account-scoped identifier.
+
+An overlay package is the install, update, compatibility, and trust unit. A
+runtime executable, WASM module, or shared library inside that package is only
+the execution unit. The host overlay resolver should eventually read installed
+package manifests, validate namespace and signature metadata, compare generic
+enhanced API compatibility, then activate a matching built-in or installed
+provider when the connected device manifest requests it.
+
 ## Profile Discovery
 
 Vendor or enhanced protocol selection should be driven by manifest-declared

@@ -47,13 +47,10 @@ the host application binary.
 * `build/wiremux-hosts.toml` and host Cargo features currently model overlays
   as compile-time host modes/features, not independently installed packages.
 
-## Assumptions (temporary)
+## Assumptions
 
-* This task is currently design/PRD work, not implementation.
-* Do not enter implementation until the user explicitly confirms the final
-  requirements and asks to proceed.
-* The first implementable scope should probably update product and architecture
-  docs before adding runtime plugin loading code.
+* The first implementable scope updates product/architecture docs and host-side
+  generic enhanced API schemas before adding runtime plugin loading code.
 * "Stable API" means an API surface that preserves compatibility within a
   declared version range.
 * "Frozen API" means an immutable compatibility profile that a shipped overlay
@@ -61,13 +58,8 @@ the host application binary.
 
 ## Open Questions
 
-* How much of the overlay package identity and signature model belongs in a
-  future implementation after the generic enhanced API contract is defined?
-* Can future closed-source overlays extend host behavior without host rebuilds?
-* How should a closed-source overlay expose additional TUI information without
-  depending on private TUI internals?
-* None currently blocking. Final implementation confirmation is still required
-  before entering the task workflow.
+* None currently blocking. User confirmed the MVP may proceed to implementation
+  on 2026-04-30.
 
 ## Requirements (evolving)
 
@@ -81,6 +73,13 @@ the host application binary.
 * Generic enhanced proto structure must preserve forward compatibility for later
   overlay packages and TUI contribution APIs without requiring breaking schema
   changes.
+* Generic enhanced proto is a host-side capability catalog, not a replacement
+  runtime for feature implementations.
+* Host resolution should follow `host core/session state -> enhanced proto
+  catalog -> implementation registry -> virtual serial provider`.
+* Future vendor enhanced features should be able to depend on
+  `wiremux.generic.enhanced.virtual_serial` through this catalog and resolver
+  instead of importing private virtual serial internals.
 * Generic enhanced compatibility uses a single `frozen_version` field. The host
   can support multiple frozen versions concurrently so an overlay/API consumer
   targeting version 1 can keep working when the host current API reaches version
@@ -92,6 +91,10 @@ the host application binary.
   schema.
 * Future overlay package declarations and TUI contribution messages should not
   be added to proto in the MVP; document the direction only.
+* Future closed-source overlays should default toward an out-of-process runtime
+  communicating with the host through a stable local protocol.
+* In-process dynamic libraries may be revisited later as a higher-risk optional
+  mode, but they are not part of the stable generic enhanced ABI commitment.
 * Generic enhanced virtual serial v1 should not define a dedicated
   `VirtualSerialV1` config message yet. It should declare the API and derive
   behavior from existing manifest channel descriptors.
@@ -111,9 +114,9 @@ the host application binary.
 * Host overlay resolution should be manifest-driven: read device manifest,
   inspect enhanced overlay/package declarations, resolve to installed or
   built-in overlay providers, then activate compatible providers.
-* Future closed-source overlays should be treated as separate processes or
-  dynamically loaded providers behind a stable generic enhanced ABI, not as
-  direct dependencies on host internals.
+* Future closed-source overlays should default to separate out-of-process
+  providers behind a stable host protocol, not direct dependencies on host
+  internals.
 * Overlay package installation should be separated from overlay execution:
   a package is the install/update/signing unit; an executable, WASM module, or
   shared library inside the package is the runtime unit.
@@ -123,18 +126,18 @@ the host application binary.
 
 ## Acceptance Criteria (evolving)
 
-* [ ] The PRD records a clear compatibility model for stable and frozen generic
+* [x] The PRD records a clear compatibility model for stable and frozen generic
   enhanced APIs.
-* [ ] The PRD records that generic enhanced v1 only includes virtual serial.
-* [ ] The proto design reserves an additive path for future overlay package
+* [x] The PRD records that generic enhanced v1 only includes virtual serial.
+* [x] The proto design reserves an additive path for future overlay package
   identity and TUI contribution APIs.
-* [ ] The proto design reserves an additive typed config position without
+* [x] The proto design reserves an additive typed config position without
   requiring a virtual serial config message in v1.
-* [ ] The PRD records a package naming and namespace reservation model for
+* [x] The PRD records a package naming and namespace reservation model for
   overlays.
-* [ ] The PRD records the protocol and host-side components likely affected by
+* [x] The PRD records the protocol and host-side components likely affected by
   overlay activation.
-* [ ] Out-of-scope runtime work is explicit if the first task is docs-only.
+* [x] Out-of-scope runtime work is explicit if the first task is docs-only.
 
 ## Definition of Done (team quality bar)
 
@@ -151,6 +154,7 @@ the host application binary.
   boundaries are agreed.
 * Final overlay package/runtime format for this MVP; package shape remains a
   follow-up design topic.
+* Stable ABI commitment for in-process dynamic library overlays.
 
 ## Technical Notes
 
@@ -252,8 +256,13 @@ Virtual serial config decision: do not add a dedicated `VirtualSerialV1`
 message in MVP. The first frozen generic enhanced API only declares
 `wiremux.generic.enhanced.virtual_serial` at `frozen_version = 1` and derives
 endpoints from the existing manifest channel descriptors. Reserve a future
-typed config field/oneof position so a later `VirtualSerialV1` message can be
-added additively.
+typed config field so a later `VirtualSerialV1` message can be added
+additively.
+
+Final runtime direction confirmed on 2026-04-30: future closed-source overlays
+should default to out-of-process providers. Dynamic library loading is a
+higher-risk optional mode and should not be treated as the stable generic
+enhanced ABI.
 
 **Approach C: Host OverlayManager MVP**
 

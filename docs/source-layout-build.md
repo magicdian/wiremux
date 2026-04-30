@@ -43,9 +43,11 @@ tools/
 Top-level responsibilities:
 
 - `sources/api`: stable API definitions shared across host, core, profiles, and
-  vendor integrations. Protobuf files migrate here from `sources/core/proto`,
-  with `sources/api/proto/versions/current` as the latest schema and numbered
-  directories as frozen API snapshots.
+  vendor integrations. Core protobuf files live under
+  `sources/api/proto/versions/current` as the latest device/host protocol schema,
+  with numbered directories as frozen API snapshots. Host-side extension API
+  contracts, such as generic enhanced host APIs, live under
+  `sources/api/host/<api-family>/versions`.
 - `sources/core`: platform-neutral Wiremux protocol implementation. The C core
   remains under `sources/core/c`.
 - `sources/profiles`: profile contracts and reusable profile implementations.

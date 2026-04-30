@@ -94,9 +94,13 @@ Rules:
 - Portable host session changes must test callback ordering, callback-scope
   event copying, CRC errors, manifest parsing, batch expansion, compression
   decode failures, scratch exhaustion, and API compatibility classification.
-- Protocol API changes update `sources/api/proto/versions/current/`. Freeze a
-  numbered API snapshot when shipped, update `wiremux_version.h` constants, and
-  keep snapshot tests current.
+- Core protocol API changes update `sources/api/proto/versions/current/`. Freeze
+  a numbered API snapshot when shipped, update `wiremux_version.h` constants,
+  and keep snapshot tests current.
+- Host-side enhanced API changes update
+  `sources/api/host/<api-family>/versions/current/`. Freeze a numbered snapshot
+  when shipping a stable host API contract for overlay providers. Do not couple
+  host-side enhanced API versioning to `DeviceManifest.protocol_version`.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.
