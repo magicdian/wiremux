@@ -22,6 +22,8 @@ The current paths are transitional. The target product layout is documented in
 - `sources/core/c` for the platform-neutral C core.
 - `sources/profiles` for profile contracts and reusable profile code.
 - `sources/host/wiremux` for the Rust Wiremux host crate after migration.
+- `sources/poc` for isolated feasibility spikes that must not be wired into
+  production workspaces until promoted by an explicit implementation task.
 - `sources/vendor/espressif/generic/{components,examples}` for the generic
   ESP-IDF integration, with `sources/vendor/espressif/{s3,p4}` reserved for
   platform-specific README placeholders until real code exists.
@@ -95,6 +97,9 @@ sources/
 │           ├── interactive/
 │           ├── tui/
 │           └── cli/
+├── poc/
+│   └── macos/
+│       └── driverkit-serial-poc/
 └── vendor/
     └── espressif/
         ├── README.md

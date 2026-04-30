@@ -1288,6 +1288,177 @@ idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200
 until a DriverKit/native virtual serial backend can accept esptool's high-baud
 ioctl on the enhanced tty path.
 
+## Scenario: macOS Native Virtual Serial Backend
+
+### 1. Scope / Trigger
+
+Trigger: any change to macOS virtual serial endpoint creation, ESP enhanced
+flash UX, pyserial/esptool compatibility, DriverKit POCs, virtual serial
+distribution, or fallback transports such as PTY, RFC2217, symlink handoff,
+Virtualization.framework, or process injection.
+
+This is a platform boundary. macOS has materially different serial semantics
+from Linux PTYs because pyserial uses `IOSSIOSPEED` for custom baud rates and
+ESP-IDF/esptool expects modem-control behavior on the opened serial file
+descriptor.
+
+### 2. Signatures
+
+POC location:
+
+```text
+sources/poc/macos/driverkit-serial-poc/
+sources/poc/macos/driverkit-serial-poc/probes/driverkit-env.sh
+sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh
+sources/poc/macos/driverkit-serial-poc/probes/activate-driverkit-poc.sh
+sources/poc/macos/driverkit-serial-poc/xcode/WiremuxDriverKitSerialPOC.xcodeproj
+```
+
+DriverKit serial hook surface:
+
+```cpp
+class WiremuxSerialDriver : public IOUserSerial {
+public:
+    kern_return_t HwProgramBaudRate(uint32_t baudRate) override;
+    kern_return_t HwProgramMCR(bool dtr, bool rts) override;
+    kern_return_t HwGetModemStatus(
+        bool *cts,
+        bool *dsr,
+        bool *ri,
+        bool *dcd) override;
+    kern_return_t HwProgramUART(
+        uint32_t baudRate,
+        uint8_t nDataBits,
+        uint8_t nHalfStopBits,
+        uint8_t parity) override;
+};
+```
+
+Build probes:
+
+```bash
+./sources/poc/macos/driverkit-serial-poc/probes/driverkit-env.sh
+./sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh
+CODE_SIGNING_ALLOWED=YES \
+DEVELOPMENT_TEAM=<team-id> \
+PROVISIONING_PROFILE_SPECIFIER=<profile-name> \
+./sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh
+```
+
+### 3. Contracts
+
+- POCs and platform feasibility spikes belong under `sources/poc/`, not under
+  `sources/host/wiremux`, until they are promoted into a production backend.
+- A seamless macOS ESP enhanced flash experience means external tools can use a
+  normal tty-shaped port and default esptool behavior such as high baud changes
+  and DTR/RTS control without a Wiremux-specific wrapper.
+- For that seamless macOS experience, DriverKit/SerialDriverKit is the only
+  accepted roadmap backend discovered so far. It is the API surface that can
+  expose an OS serial service and receive baud/modem-control callbacks from the
+  kernel serial stack.
+- macOS PTY aliases remain a compatibility backend only. They can carry bytes,
+  but must not be treated as high-baud-compatible serial devices because
+  pyserial's `IOSSIOSPEED` ioctl can fail with `ENOTTY`.
+- `VZSerialPortConfiguration`, `VZConsolePortConfiguration`, and related
+  Virtualization.framework APIs configure serial/console devices for a VM
+  guest. They do not create a host macOS `/dev/cu.*` or `/dev/tty.*` serial node
+  for host-side `idf.py` / pyserial.
+- Symlink handoff to a physical `/dev/cu.*` device can avoid the PTY ioctl only
+  if Wiremux releases the physical serial port before esptool opens the
+  symlink. Changing a symlink after esptool has opened the PTY does not change
+  the already-open file descriptor.
+- `DYLD_INSERT_LIBRARIES` shims may be used only as an explicit wrapper/debug
+  workaround for non-platform Python processes. They must be injected before
+  Python/esptool starts and must not be represented as seamless serial-device
+  support.
+- DriverKit loading/distribution requires code signing, provisioning, and
+  Apple-granted DriverKit serial entitlements. Unsigned builds prove source,
+  IIG, link, and bundle shape only; they do not prove activation or `/dev`
+  creation.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| unsigned DriverKit POC build requested | run `build-driverkit-poc.sh` with `CODE_SIGNING_ALLOWED=NO` and validate IIG/link/embed only |
+| signed DriverKit POC requested without provisioning | fail with an actionable signing/provisioning/entitlement message |
+| activated signed DriverKit POC creates `/dev/cu.wiremux*` | run pyserial baud, DTR, and RTS probes against that node |
+| pyserial sets `460800` on macOS PTY | expected failure is `ENOTTY`/`Inappropriate ioctl for device`; do not mark raw bridge broken |
+| Virtualization.framework serial approach proposed | reject as a seamless host `/dev` backend unless esptool is intentionally moved into a VM guest |
+| symlink is changed after esptool opened the enhanced port | no effect on the existing fd; do not expect ioctl behavior to change |
+| symlink handoff is used before esptool starts | Wiremux must close the physical serial port first and restore ownership after flashing |
+| DYLD shim is used | wrapper must set `DYLD_INSERT_LIBRARIES` before launching Python/esptool |
+| Python/esptool is already running | do not attempt product dynamic injection into the running process |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a signed DriverKit serial dext exposes a macOS serial node, and pyserial
+  calls for `baudrate = 460800`, DTR, and RTS reach DriverKit hooks such as
+  `HwProgramBaudRate()` and `HwProgramMCR()`.
+- Good: an unsigned POC stays under `sources/poc/macos/driverkit-serial-poc/`
+  and documents that it validates build shape only.
+- Base: PTY backend remains available and documents
+  `idf.py flash --baud 115200` as the macOS MVP command.
+- Base: a Wiremux-owned wrapper may use RFC2217, symlink handoff, or
+  `DYLD_INSERT_LIBRARIES` as explicit non-seamless fallback UX.
+- Bad: claiming `VZSerialPortConfiguration` solves host-side
+  `/dev/cu.wiremux` because it can connect VM guest serial bytes to a host file
+  handle.
+- Bad: changing `/tmp/wiremux/tty/tty.wiremux-esp-enhanced` from a PTY symlink
+  to `/dev/cu.usbmodem*` after esptool has already opened it and expecting the
+  open fd's ioctl behavior to change.
+- Bad: injecting an ioctl shim into an already-running Python/esptool process as
+  a product feature.
+
+### 6. Tests Required
+
+- For DriverKit POC changes:
+  - `sh -n sources/poc/macos/driverkit-serial-poc/probes/*.sh`
+  - `plutil -lint` for POC plist and entitlement files
+  - `xmllint --noout` for the shared Xcode scheme
+  - `xcodebuild -list -project sources/poc/macos/driverkit-serial-poc/xcode/WiremuxDriverKitSerialPOC.xcodeproj`
+  - `sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh`
+- For signed local activation attempts:
+  - `sources/poc/macos/driverkit-serial-poc/probes/activate-driverkit-poc.sh`
+  - `systemextensionsctl list`
+  - `ls -l /dev/tty.wiremux* /dev/cu.wiremux*`
+  - pyserial open, baud, DTR, and RTS probes against the generated node
+- For PTY fallback changes:
+  - `sources/poc/macos/driverkit-serial-poc/probes/pyserial-pty-baud.py`
+  - host Rust checks from `sources/host/wiremux` when production Rust code is
+    touched.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Use Virtualization.framework VZSerialPortConfiguration to create the macOS
+host-side enhanced serial port for idf.py.
+```
+
+#### Correct
+
+```text
+Use DriverKit/SerialDriverKit for a seamless host-side macOS serial node.
+Use Virtualization.framework only if the flashing tool intentionally runs
+inside a VM guest.
+```
+
+#### Wrong
+
+```text
+After raw bridge starts, repoint the enhanced PTY symlink to /dev/cu.usbmodem*
+and expect esptool's existing fd to accept IOSSIOSPEED.
+```
+
+#### Correct
+
+```text
+For a handoff fallback, close Wiremux's physical serial handle and repoint the
+symlink before launching esptool, then restore Wiremux ownership after flashing.
+```
+
 ## Testing Requirements
 
 - Host Rust code must pass `cargo test`, `cargo check`, and `cargo fmt --check`.
