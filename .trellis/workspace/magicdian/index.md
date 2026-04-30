@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 37
+- **Total Sessions**: 38
 - **Last Active**: 2026-04-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1514 | Active |
+| `journal-1.md` | ~1566 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 38 | 2026-04-30 | ESP enhanced esptool passthrough MVP | `18eb90b` | `dev` |
 | 37 | 2026-04-30 | Host generic enhanced capability registry | `f4c9d11` | `dev` |
 | 36 | 2026-04-30 | Define generic enhanced host contract | `341e1b5` | `dev` |
 | 35 | 2026-04-29 | Stable virtual serial aliases | `15ae983` | `dev` |

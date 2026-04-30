@@ -166,7 +166,11 @@ Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework:
 
 ### Summary
 
-(Add summary)
+Delivered the ESP vendor enhanced esptool passthrough MVP for TUI. The feature
+adds a session-scoped enhanced tty for Espressif manifests, supports aggregate
+monitor output, detects esptool SYNC to enter raw bridge, handles ESP32-S3
+USB-Serial/JTAG reset and post-flash reconnect, and documents the macOS PTY
+high-baud limitation.
 
 ### Main Changes
 
@@ -193,7 +197,10 @@ Notes:
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Host Cargo checks and tests passed across the required feature matrix.
+- [OK] `tools/wiremux-build check host` passed.
+- [OK] Human hardware acceptance passed with ESP32-S3 flashing through
+  `/tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200`.
 
 ### Status
 
@@ -1500,6 +1507,58 @@ Added Rust host generic-enhanced crate with protobuf catalog decoding and regist
 | Hash | Message |
 |------|---------|
 | `f4c9d11` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 38: ESP enhanced esptool passthrough MVP
+
+**Date**: 2026-04-30
+**Task**: ESP enhanced esptool passthrough MVP
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Feature | Added TUI-only ESP enhanced aggregate endpoint `tty.wiremux-esp-enhanced` for Espressif manifests. |
+| Flashing | Implemented esptool SYNC detection, pending input replay, ESP32 DTR/RTS bootloader entry, raw PTY-to-physical serial bridge, physical baud tracking, and raw bridge exit/reconnect handling. |
+| Validation | Hardware acceptance passed with `idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200`; TUI resumed mux output after firmware reset. |
+| Knowledge | Documented macOS PTY high-baud ioctl limitation and added native virtual serial/DriverKit backend to roadmap. |
+| Release | Bumped project version to `2604.30.2`. |
+
+**Verification**:
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cargo check --features generic`
+- `cargo check --features esp32`
+- `cargo check --features all-vendors`
+- `cargo check --features all-features`
+- `cargo test --features esp32`
+- `tools/wiremux-build check host`
+- `git diff --check`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `18eb90b` | (see git log) |
 
 ### Testing
 
