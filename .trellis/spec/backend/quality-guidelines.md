@@ -1291,6 +1291,10 @@ ioctl on the enhanced tty path.
 ## Testing Requirements
 
 - Host Rust code must pass `cargo test`, `cargo check`, and `cargo fmt --check`.
+- Host CI runners must install `protoc` before running host checks. On Ubuntu,
+  install it with `protobuf-compiler`; `crates/generic-enhanced/build.rs` and
+  `crates/vendor-enhanced/build.rs` use it for host enhanced API codegen and
+  catalog encoding.
 - Portable C core changes must compile and pass the host-side GoogleTest suite:
   `cmake -S sources/core/c -B sources/core/c/build`, `cmake --build
   sources/core/c/build`, and `ctest --test-dir sources/core/c/build
