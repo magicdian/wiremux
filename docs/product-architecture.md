@@ -241,9 +241,11 @@ provider such as the built-in virtual serial broker. Future vendor enhanced
 overlays can declare a dependency on
 `wiremux.generic.enhanced.virtual_serial` and let the host resolver find the
 matching implementation instead of importing private virtual serial internals.
-In the Rust host workspace, this contract is owned by the
-`crates/generic-enhanced` crate; concrete providers such as virtual serial stay
-in their implementation crates and register through that shared boundary.
+In the Rust host workspace, generic enhanced catalog decoding is owned by the
+`crates/generic-enhanced` crate. Shared capability IDs, provider registrations,
+and provider resolution are owned by `crates/enhanced-registry`. Concrete
+providers such as virtual serial stay in their implementation crates and
+register through that shared boundary.
 
 Future overlay package identity, package trust metadata, and TUI contribution
 contracts should be added additively after the overlay package/runtime format is
@@ -251,6 +253,43 @@ designed. The preferred runtime direction for closed-source overlays is an
 out-of-process provider that communicates with the host through a stable local
 protocol. In-process dynamic libraries are a higher-risk optional mode and are
 not part of the stable generic enhanced ABI commitment.
+
+## Vendor Enhanced API Stability
+
+Vendor enhanced services expose host-side API contracts for vendor-specific
+overlays built on top of generic enhanced host capabilities. These APIs are
+separate from the core device/host protocol and from generic enhanced API
+schemas. A core-only or generic-enhanced-only integration can ignore them, while
+vendor enhanced hosts can use them to bind a vendor capability declaration to a
+built-in or installed provider.
+
+Wiremux-maintained Espressif vendor enhanced schemas live under
+`sources/api/host/vendor_enhanced/espressif/versions`. The `current/` directory
+is the latest development schema. Numbered directories are frozen snapshots that
+released providers may target.
+
+Vendor enhanced API names for Espressif use the
+`wiremux.vendor.enhanced.espressif.*` namespace. The first frozen API is
+`wiremux.vendor.enhanced.espressif.esptool_bridge` at `frozen_version = 1`.
+It declares a requirement on `wiremux.generic.enhanced.virtual_serial@1` by
+stable API name and frozen version. This is a resolver-level capability
+requirement, not a proto import or static schema dependency on generic enhanced.
+
+The intended host flow is:
+
+```text
+host core/session state -> generic enhanced API catalog -> enhanced provider registry
+                         -> vendor enhanced API catalog -> enhanced provider registry
+                         -> ESP-IDF/esptool bridge provider
+```
+
+The vendor catalog answers which vendor-specific APIs the host supports and
+which generic enhanced capabilities they require. The host resolver validates
+those requirements and binds them to matching built-in or installed
+implementations. Future private or closed-source overlay plugins should follow
+the same model: declare capability requirements by stable API name and frozen
+version, then let the host resolver perform compatibility and implementation
+selection.
 
 ## Future Overlay Package Identity
 

@@ -104,7 +104,17 @@ Rules:
 - Generic enhanced host API catalog changes must keep
   `sources/api/host/generic_enhanced/versions/current/catalog.textproto`, any
   matching frozen catalog snapshot, and the Rust
-  `crates/generic-enhanced` decode/registry tests in sync.
+  `crates/generic-enhanced` decode and provider-registration tests in sync.
+- Vendor enhanced host API catalog changes must keep the relevant
+  `sources/api/host/vendor_enhanced/<vendor>/versions/current/catalog.textproto`,
+  any matching frozen catalog snapshot, and the Rust `crates/vendor-enhanced`
+  decode and provider-registration tests in sync. Vendor enhanced schemas may
+  declare generic enhanced capability requirements by stable API name and frozen
+  version, but must not import generic enhanced proto files solely for those
+  requirements.
+- Shared enhanced registry changes must keep `crates/enhanced-registry` tests in
+  sync and must not move proto-specific parsing or vendor-specific provider
+  behavior into the shared registry crate.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.

@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use generic_enhanced::{GenericEnhancedRegistry, RegistryError};
+use generic_enhanced::{BuiltInProviderError, GenericEnhancedRegistry};
 use host_session::{
     ChannelDescriptor, DeviceManifest, MuxEnvelope, PassthroughPolicy,
     CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_INPUT, NEWLINE_POLICY_CR, NEWLINE_POLICY_CRLF,
@@ -729,7 +729,7 @@ pub fn is_passthrough_escape_exit_suffix(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
 }
 
-pub fn generic_enhanced_registry() -> Result<GenericEnhancedRegistry, RegistryError> {
+pub fn generic_enhanced_registry() -> Result<GenericEnhancedRegistry, BuiltInProviderError> {
     #[cfg(feature = "generic-enhanced")]
     {
         let mut registry = GenericEnhancedRegistry::new();

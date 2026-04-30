@@ -1,0 +1,6 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify host API layout and Rust workspace dependency rules"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify host-side enhanced API snapshot and registry validation requirements"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify API catalog to Rust registry to TUI support flow"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Verify generic enhanced pattern reuse"}

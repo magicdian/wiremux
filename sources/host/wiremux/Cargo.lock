@@ -214,6 +214,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "enhanced-registry"
+version = "2604.30.2"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -257,6 +261,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 name = "generic-enhanced"
 version = "2604.30.2"
 dependencies = [
+ "enhanced-registry",
  "prost",
  "prost-build",
 ]
@@ -1089,6 +1094,7 @@ dependencies = [
  "host-session",
  "interactive",
  "ratatui",
+ "vendor-enhanced",
 ]
 
 [[package]]
@@ -1134,6 +1140,15 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "vendor-enhanced"
+version = "2604.30.2"
+dependencies = [
+ "enhanced-registry",
+ "prost",
+ "prost-build",
+]
 
 [[package]]
 name = "wasi"
