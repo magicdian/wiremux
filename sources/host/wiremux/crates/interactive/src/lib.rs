@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use generic_enhanced::{GenericEnhancedRegistry, RegistryError};
 use host_session::{
     ChannelDescriptor, DeviceManifest, MuxEnvelope, PassthroughPolicy,
     CHANNEL_INTERACTION_PASSTHROUGH, DIRECTION_INPUT, NEWLINE_POLICY_CR, NEWLINE_POLICY_CRLF,
@@ -22,6 +23,9 @@ pub const DEFAULT_BAUD: u32 = 115_200;
 pub const DEFAULT_DATA_BITS: u8 = 8;
 pub const DEFAULT_STOP_BITS: u8 = 1;
 const VIRTUAL_SERIAL_OUTPUT_QUEUE_LIMIT: usize = 1024 * 1024;
+const ESP32_BOOTLOADER_RESET_HOLD: Duration = Duration::from_millis(100);
+const ESP32_BOOTLOADER_RELEASE_WAIT: Duration = Duration::from_millis(50);
+const ESP32_USB_JTAG_RESET_STEP: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct HostConfig {
@@ -464,6 +468,106 @@ impl ConnectedInteractiveBackend {
             ConnectedInteractiveBackendInner::Mio(backend) => backend.next_event(deadline),
         }
     }
+
+    pub fn write_data_terminal_ready(&mut self, level: bool) -> io::Result<()> {
+        match &mut self.inner {
+            ConnectedInteractiveBackendInner::Compat(backend) => {
+                backend.write_data_terminal_ready(level)
+            }
+            #[cfg(unix)]
+            ConnectedInteractiveBackendInner::Mio(backend) => {
+                backend.write_data_terminal_ready(level)
+            }
+        }
+    }
+
+    pub fn write_request_to_send(&mut self, level: bool) -> io::Result<()> {
+        match &mut self.inner {
+            ConnectedInteractiveBackendInner::Compat(backend) => {
+                backend.write_request_to_send(level)
+            }
+            #[cfg(unix)]
+            ConnectedInteractiveBackendInner::Mio(backend) => backend.write_request_to_send(level),
+        }
+    }
+
+    pub fn set_baud_rate(&mut self, baud: u32) -> io::Result<()> {
+        match &mut self.inner {
+            ConnectedInteractiveBackendInner::Compat(backend) => backend.set_baud_rate(baud),
+            #[cfg(unix)]
+            ConnectedInteractiveBackendInner::Mio(backend) => backend.set_baud_rate(baud),
+        }
+    }
+
+    pub fn enter_esp32_bootloader_with_dtr_rts(&mut self) -> io::Result<()> {
+        self.enter_esp32_bootloader_with_reset_mode(Esp32BootloaderResetMode::UsbToSerialBridge)
+    }
+
+    pub fn enter_esp32_bootloader_with_reset_mode(
+        &mut self,
+        mode: Esp32BootloaderResetMode,
+    ) -> io::Result<()> {
+        match mode {
+            Esp32BootloaderResetMode::UsbToSerialBridge => {
+                self.enter_esp32_bootloader_with_classic_reset()
+            }
+            Esp32BootloaderResetMode::UsbJtagSerial => {
+                self.enter_esp32_bootloader_with_usb_jtag_reset()
+            }
+        }
+    }
+
+    pub fn hard_reset_esp32_with_reset_mode(
+        &mut self,
+        mode: Esp32BootloaderResetMode,
+    ) -> io::Result<()> {
+        self.write_request_to_send(true)?;
+        match mode {
+            Esp32BootloaderResetMode::UsbJtagSerial => {
+                thread::sleep(Duration::from_millis(200));
+                self.write_request_to_send(false)?;
+                thread::sleep(Duration::from_millis(200));
+            }
+            Esp32BootloaderResetMode::UsbToSerialBridge => {
+                thread::sleep(ESP32_BOOTLOADER_RESET_HOLD);
+                self.write_request_to_send(false)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn enter_esp32_bootloader_with_classic_reset(&mut self) -> io::Result<()> {
+        self.write_data_terminal_ready(false)?; // IO0 high
+        self.write_request_to_send(true)?; // EN low, chip in reset
+        thread::sleep(ESP32_BOOTLOADER_RESET_HOLD);
+        self.write_data_terminal_ready(true)?; // IO0 low
+        self.write_request_to_send(false)?; // EN high, chip out of reset
+        thread::sleep(ESP32_BOOTLOADER_RELEASE_WAIT);
+        self.write_data_terminal_ready(false)?; // IO0 high
+        Ok(())
+    }
+
+    fn enter_esp32_bootloader_with_usb_jtag_reset(&mut self) -> io::Result<()> {
+        self.write_request_to_send(false)?;
+        self.write_data_terminal_ready(false)?;
+        thread::sleep(ESP32_USB_JTAG_RESET_STEP);
+        self.write_data_terminal_ready(true)?;
+        self.write_request_to_send(false)?;
+        thread::sleep(ESP32_USB_JTAG_RESET_STEP);
+        self.write_request_to_send(true)?;
+        self.write_data_terminal_ready(false)?;
+        self.write_request_to_send(true)?;
+        thread::sleep(ESP32_USB_JTAG_RESET_STEP);
+        self.write_data_terminal_ready(false)?;
+        self.write_request_to_send(false)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Esp32BootloaderResetMode {
+    UsbToSerialBridge,
+    UsbJtagSerial,
 }
 
 impl Write for ConnectedInteractiveBackend {
@@ -625,6 +729,36 @@ pub fn is_passthrough_escape_exit_suffix(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
 }
 
+pub fn generic_enhanced_registry() -> Result<GenericEnhancedRegistry, RegistryError> {
+    #[cfg(feature = "generic-enhanced")]
+    {
+        let mut registry = GenericEnhancedRegistry::new();
+        generic_enhanced::register_virtual_serial_provider(&mut registry)?;
+        Ok(registry)
+    }
+
+    #[cfg(not(feature = "generic-enhanced"))]
+    {
+        Ok(GenericEnhancedRegistry::new())
+    }
+}
+
+pub fn host_supports_virtual_serial_provider() -> bool {
+    #[cfg(feature = "generic-enhanced")]
+    {
+        let registry =
+            generic_enhanced_registry().expect("built-in generic enhanced registry is valid");
+        let capability_id = generic_enhanced::latest_virtual_serial_capability_id()
+            .expect("built-in virtual serial capability is declared");
+        registry.supports(&capability_id)
+    }
+
+    #[cfg(not(feature = "generic-enhanced"))]
+    {
+        false
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VirtualSerialInputOwner {
     Host,
@@ -683,7 +817,7 @@ struct VirtualSerialEndpoint {
 }
 
 enum VirtualSerialEndpointBackend {
-    Active(Box<dyn VirtualSerialEndpointIo>),
+    Active(VirtualSerialEndpointHandle),
     Unsupported(String),
     Failed(String),
 }
@@ -694,7 +828,47 @@ trait VirtualSerialEndpointIo {
         self.path()
     }
     fn write_output(&mut self, bytes: &[u8]) -> io::Result<usize>;
-    fn read_input(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>>;
+    fn read_input(&mut self, buf: &mut [u8]) -> io::Result<VirtualSerialRead>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VirtualSerialRead {
+    Bytes(usize),
+    NoData,
+    ClientGone,
+}
+
+pub struct VirtualSerialEndpointHandle {
+    inner: Box<dyn VirtualSerialEndpointIo>,
+}
+
+impl VirtualSerialEndpointHandle {
+    pub fn open(name: &str) -> io::Result<Self> {
+        open_virtual_serial_endpoint(name).map(|inner| Self { inner })
+    }
+
+    pub fn path(&self) -> &Path {
+        self.inner.path()
+    }
+
+    pub fn real_path(&self) -> &Path {
+        self.inner.real_path()
+    }
+
+    pub fn write_output(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.inner.write_output(bytes)
+    }
+
+    pub fn read_input(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
+        match self.read_input_event(buf)? {
+            VirtualSerialRead::Bytes(read_len) => Ok(Some(read_len)),
+            VirtualSerialRead::NoData | VirtualSerialRead::ClientGone => Ok(None),
+        }
+    }
+
+    pub fn read_input_event(&mut self, buf: &mut [u8]) -> io::Result<VirtualSerialRead> {
+        self.inner.read_input(buf)
+    }
 }
 
 impl VirtualSerialBroker {
@@ -859,8 +1033,9 @@ impl VirtualSerialBroker {
                 continue;
             };
             loop {
-                let Some(read_len) = backend.read_input(&mut buf)? else {
-                    break;
+                let read_len = match backend.read_input_event(&mut buf)? {
+                    VirtualSerialRead::Bytes(read_len) => read_len,
+                    VirtualSerialRead::NoData | VirtualSerialRead::ClientGone => break,
                 };
                 if read_len == 0 {
                     break;
@@ -921,7 +1096,7 @@ impl VirtualSerialBroker {
     }
 
     fn create_endpoint(&self, spec: VirtualSerialEndpointSpec) -> VirtualSerialEndpoint {
-        let backend = match open_virtual_serial_endpoint(&spec.name) {
+        let backend = match VirtualSerialEndpointHandle::open(&spec.name) {
             Ok(backend) => VirtualSerialEndpointBackend::Active(backend),
             Err(err) if err.kind() == io::ErrorKind::Unsupported => {
                 VirtualSerialEndpointBackend::Unsupported(err.to_string())
@@ -949,7 +1124,7 @@ struct VirtualSerialEndpointSpec {
     output_record_delimited: bool,
 }
 
-fn terminal_text_output_bytes(
+pub fn terminal_text_output_bytes(
     payload: &[u8],
     previous_was_cr: &mut bool,
     record_delimited: bool,
@@ -1252,6 +1427,24 @@ impl CompatBackend {
             }
         }
     }
+
+    fn write_data_terminal_ready(&mut self, level: bool) -> io::Result<()> {
+        self.write_port
+            .write_data_terminal_ready(level)
+            .map_err(|err| io::Error::other(err.to_string()))
+    }
+
+    fn write_request_to_send(&mut self, level: bool) -> io::Result<()> {
+        self.write_port
+            .write_request_to_send(level)
+            .map_err(|err| io::Error::other(err.to_string()))
+    }
+
+    fn set_baud_rate(&mut self, baud: u32) -> io::Result<()> {
+        self.write_port
+            .set_baud_rate(baud)
+            .map_err(|err| io::Error::other(err.to_string()))
+    }
 }
 
 impl Write for CompatBackend {
@@ -1430,12 +1623,18 @@ mod unix_virtual_serial {
             }
         }
 
-        fn read_input(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
+        fn read_input(&mut self, buf: &mut [u8]) -> io::Result<super::VirtualSerialRead> {
             match self.master.read(buf) {
-                Ok(read_len) => Ok(Some(read_len)),
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(None),
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(None),
-                Err(err) if is_pty_client_gone_error(&err) => Ok(None),
+                Ok(read_len) => Ok(super::VirtualSerialRead::Bytes(read_len)),
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    Ok(super::VirtualSerialRead::NoData)
+                }
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                    Ok(super::VirtualSerialRead::NoData)
+                }
+                Err(err) if is_pty_client_gone_error(&err) => {
+                    Ok(super::VirtualSerialRead::ClientGone)
+                }
                 Err(err) => Err(err),
             }
         }
@@ -1672,6 +1871,26 @@ mod unix_mio {
         }
     }
 
+    impl UnixMioBackend {
+        pub(super) fn write_data_terminal_ready(&mut self, level: bool) -> io::Result<()> {
+            self.port
+                .write_data_terminal_ready(level)
+                .map_err(|err| io::Error::other(err.to_string()))
+        }
+
+        pub(super) fn write_request_to_send(&mut self, level: bool) -> io::Result<()> {
+            self.port
+                .write_request_to_send(level)
+                .map_err(|err| io::Error::other(err.to_string()))
+        }
+
+        pub(super) fn set_baud_rate(&mut self, baud: u32) -> io::Result<()> {
+            self.port
+                .set_baud_rate(baud)
+                .map_err(|err| io::Error::other(err.to_string()))
+        }
+    }
+
     fn terminal_fd() -> io::Result<(i32, Option<File>)> {
         let stdin = io::stdin();
         if stdin.is_terminal() {
@@ -1690,13 +1909,14 @@ use unix_mio::UnixMioBackend;
 #[cfg(test)]
 mod tests {
     use super::{
-        is_passthrough_exit_key, is_passthrough_meta_exit_key, paired_tty_cu_path,
-        passthrough_key_payload, port_candidates, requested_file_name_starts_with,
-        retry_interrupted, source_port_virtual_serial_name_part, terminal_text_output_bytes,
-        usbmodem_fragment, virtual_serial_name, virtual_serial_record_delimited_output, HostConfig,
-        SerialConfig, SerialFlowControl, SerialParity, SerialProfileOverrides, VirtualSerialBroker,
-        VirtualSerialConfig, VirtualSerialEndpoint, VirtualSerialEndpointBackend,
-        VirtualSerialEndpointIo, VirtualSerialExport, VirtualSerialInputOwner,
+        host_supports_virtual_serial_provider, is_passthrough_exit_key,
+        is_passthrough_meta_exit_key, paired_tty_cu_path, passthrough_key_payload, port_candidates,
+        requested_file_name_starts_with, retry_interrupted, source_port_virtual_serial_name_part,
+        terminal_text_output_bytes, usbmodem_fragment, virtual_serial_name,
+        virtual_serial_record_delimited_output, HostConfig, SerialConfig, SerialFlowControl,
+        SerialParity, SerialProfileOverrides, VirtualSerialBroker, VirtualSerialConfig,
+        VirtualSerialEndpoint, VirtualSerialEndpointBackend, VirtualSerialEndpointHandle,
+        VirtualSerialEndpointIo, VirtualSerialExport, VirtualSerialInputOwner, VirtualSerialRead,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use host_session::{
@@ -1833,6 +2053,14 @@ name_template = "wiremux-{device}-{channel_id}"
             b"\nfour\r\n"
         );
         assert!(!previous_was_cr);
+    }
+
+    #[test]
+    fn generic_enhanced_registry_matches_virtual_serial_feature_support() {
+        assert_eq!(
+            host_supports_virtual_serial_provider(),
+            cfg!(feature = "generic-enhanced")
+        );
     }
 
     #[test]
@@ -1973,8 +2201,8 @@ name_template = "wiremux-{device}-{channel_id}"
                 Ok(buf.len())
             }
 
-            fn read_input(&mut self, _buf: &mut [u8]) -> io::Result<Option<usize>> {
-                Ok(None)
+            fn read_input(&mut self, _buf: &mut [u8]) -> io::Result<VirtualSerialRead> {
+                Ok(VirtualSerialRead::NoData)
             }
         }
 
@@ -1991,7 +2219,9 @@ name_template = "wiremux-{device}-{channel_id}"
             output_previous_was_cr: false,
             output_pending: b"pending".to_vec(),
             output_dropped_bytes: 0,
-            backend: VirtualSerialEndpointBackend::Active(Box::new(NullEndpoint)),
+            backend: VirtualSerialEndpointBackend::Active(VirtualSerialEndpointHandle {
+                inner: Box::new(NullEndpoint),
+            }),
         });
         let manifest = DeviceManifest {
             device_name: "esp-wiremux".to_string(),
@@ -2051,8 +2281,8 @@ name_template = "wiremux-{device}-{channel_id}"
                 Ok(written)
             }
 
-            fn read_input(&mut self, _buf: &mut [u8]) -> io::Result<Option<usize>> {
-                Ok(None)
+            fn read_input(&mut self, _buf: &mut [u8]) -> io::Result<VirtualSerialRead> {
+                Ok(VirtualSerialRead::NoData)
             }
         }
 
@@ -2067,10 +2297,12 @@ name_template = "wiremux-{device}-{channel_id}"
             output_previous_was_cr: false,
             output_pending: Vec::new(),
             output_dropped_bytes: 0,
-            backend: VirtualSerialEndpointBackend::Active(Box::new(ScriptedEndpoint {
-                writes,
-                output: output.clone(),
-            })),
+            backend: VirtualSerialEndpointBackend::Active(VirtualSerialEndpointHandle {
+                inner: Box::new(ScriptedEndpoint {
+                    writes,
+                    output: output.clone(),
+                }),
+            }),
         };
 
         endpoint.enqueue_output(b"abcdef");

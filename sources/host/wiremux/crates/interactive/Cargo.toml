@@ -1,11 +1,16 @@
 [package]
 name = "interactive"
-version = "2604.30.1"
+version = "2604.30.2"
 edition = "2021"
 license = "Apache-2.0"
 
+[features]
+default = []
+generic-enhanced = []
+
 [dependencies]
 crossterm = "0.29"
+generic-enhanced = { path = "../generic-enhanced" }
 host-session = { path = "../host-session" }
 serde = { version = "1", features = ["derive"] }
 serialport = "4"

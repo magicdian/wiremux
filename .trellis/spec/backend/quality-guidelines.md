@@ -94,9 +94,17 @@ Rules:
 - Portable host session changes must test callback ordering, callback-scope
   event copying, CRC errors, manifest parsing, batch expansion, compression
   decode failures, scratch exhaustion, and API compatibility classification.
-- Protocol API changes update `sources/api/proto/versions/current/`. Freeze a
-  numbered API snapshot when shipped, update `wiremux_version.h` constants, and
-  keep snapshot tests current.
+- Core protocol API changes update `sources/api/proto/versions/current/`. Freeze
+  a numbered API snapshot when shipped, update `wiremux_version.h` constants,
+  and keep snapshot tests current.
+- Host-side enhanced API changes update
+  `sources/api/host/<api-family>/versions/current/`. Freeze a numbered snapshot
+  when shipping a stable host API contract for overlay providers. Do not couple
+  host-side enhanced API versioning to `DeviceManifest.protocol_version`.
+- Generic enhanced host API catalog changes must keep
+  `sources/api/host/generic_enhanced/versions/current/catalog.textproto`, any
+  matching frozen catalog snapshot, and the Rust
+  `crates/generic-enhanced` decode/registry tests in sync.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.
@@ -1048,6 +1056,227 @@ tools/wiremux-build lunch esp32-s3 vendor-enhanced
 ```text
 tools/wiremux-build lunch --vendor esp32-s3 --host vendor-enhanced
 ```
+
+## Scenario: ESP Enhanced Esptool Flash Bridge
+
+### 1. Scope / Trigger
+
+Trigger: any change to ESP vendor enhanced host behavior, enhanced virtual
+serial endpoint lifecycle, interactive DTR/RTS control, esptool SLIP
+classification, physical serial baud switching, or TUI raw bridge ownership.
+
+This is host-only vendor enhanced behavior. It must not change generic channel
+virtual serial ownership and must not introduce an ESP-side esptool protocol
+emulator.
+
+### 2. Signatures
+
+TUI runtime command:
+
+```bash
+cd sources/host/wiremux
+cargo run --features esp32 -- tui --port /dev/tty.usbmodem2101 --baud 115200
+```
+
+User-facing MVP flash command:
+
+```bash
+idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200
+```
+
+Rust host boundaries:
+
+```rust
+pub enum Esp32BootloaderResetMode {
+    UsbToSerialBridge,
+    UsbJtagSerial,
+}
+
+impl ConnectedInteractiveBackend {
+    pub fn write_data_terminal_ready(&mut self, level: bool) -> io::Result<()>;
+    pub fn write_request_to_send(&mut self, level: bool) -> io::Result<()>;
+    pub fn set_baud_rate(&mut self, baud: u32) -> io::Result<()>;
+    pub fn enter_esp32_bootloader_with_reset_mode(
+        &mut self,
+        mode: Esp32BootloaderResetMode,
+    ) -> io::Result<()>;
+    pub fn hard_reset_esp32_with_reset_mode(
+        &mut self,
+        mode: Esp32BootloaderResetMode,
+    ) -> io::Result<()>;
+}
+
+pub struct VirtualSerialEndpointHandle;
+
+impl VirtualSerialEndpointHandle {
+    pub fn open(name: &str) -> io::Result<Self>;
+    pub fn path(&self) -> &Path;
+    pub fn write_output(&mut self, bytes: &[u8]) -> io::Result<usize>;
+    pub fn read_input_event(&mut self, buf: &mut [u8]) -> io::Result<VirtualSerialRead>;
+}
+```
+
+TUI-local ESP enhanced endpoint:
+
+```rust
+const ESP_ENHANCED_ENDPOINT_NAME: &str = "wiremux-esp-enhanced";
+const PENDING_INPUT_LIMIT: usize = 64 * 1024;
+const PENDING_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
+const ESPTOOL_SYNC: u8 = 0x08;
+const ESPTOOL_CHANGE_BAUDRATE: u8 = 0x0f;
+
+pub struct EspressifEnhancedHost;
+
+impl EspressifEnhancedHost {
+    pub fn sync_manifest(&mut self, manifest: &DeviceManifest) -> Vec<String>;
+    pub fn mirror_mux_output(&mut self, envelope: &MuxEnvelope) -> io::Result<()>;
+    pub fn poll_input(
+        &mut self,
+        serial: &mut ConnectedInteractiveBackend,
+        diagnostics: &mut dyn Write,
+    ) -> io::Result<EspressifEnhancedPoll>;
+    pub fn write_raw_serial_output(
+        &mut self,
+        bytes: &[u8],
+        serial: &mut ConnectedInteractiveBackend,
+        diagnostics: &mut dyn Write,
+    ) -> io::Result<bool>;
+}
+```
+
+### 3. Contracts
+
+- ESP enhanced is compiled only for host builds with the `esp32` feature and is
+  wired into TUI only for the MVP.
+- `tty.wiremux-esp-enhanced` is session-scoped and must be created only after a
+  manifest is identified as Espressif by current manifest heuristics such as
+  `sdk_name`, `device_name`, or `esp32` text. Non-Espressif manifests must not
+  expose this endpoint.
+- The enhanced endpoint is aggregate monitor output while idle: every mux
+  envelope mirrored to it must use terminal-safe text normalization through
+  `terminal_text_output_bytes()` for text records.
+- Normal generic virtual serial input ownership remains host-owned by default.
+  The ESP enhanced endpoint is the only automatic raw-bridge exception.
+- Raw bridge may start only after a complete SLIP-framed esptool request with
+  command `0x08` and sync payload prefix `07 07 12 20`.
+- Bytes read before classification are buffered up to 64 KiB and replayed
+  unchanged after bootloader entry when SYNC is accepted. Timed-out or
+  overflowing pending input must be discarded with diagnostics, not forwarded as
+  mux input.
+- Bootloader entry is host-side physical DTR/RTS control. `/dev/cu.usbmodem*`
+  physical ports use the USB-Serial/JTAG sequence; other serial bridges use the
+  classic ESP reset sequence.
+- While raw bridge is active, serial bytes must be written to the enhanced
+  endpoint and must not be fed into `HostSession`.
+- Esptool `CHANGE_BAUDRATE` must be observed from the byte stream. After the
+  ESP response returns, the host must apply the new baud to the physical serial
+  backend and record diagnostics.
+- macOS PTY aliases do not support pyserial's custom `IOSSIOSPEED` ioctl for
+  `460800`; default ESP-IDF `-b 460800` can fail before more bytes are sent. The
+  MVP verified command therefore includes `--baud 115200`.
+- When the flashing client closes the enhanced PTY, both `VirtualSerialRead::ClientGone`
+  and `VirtualSerialRead::Bytes(0)` must end raw bridge, optionally hard-reset
+  the ESP after flash commands were observed, restore monitor baud, reset the
+  host session, and request a fresh manifest.
+- A future macOS virtual serial kernel/DriverKit backend is the roadmap path for
+  preserving the same `/tmp` or `/dev` tty-shaped user flow while allowing
+  esptool's default high baud ioctl to succeed without a Python shim.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| non-Espressif manifest arrives | no ESP enhanced endpoint is created |
+| Espressif manifest arrives | create `tty.wiremux-esp-enhanced` or report a deterministic unavailable marker |
+| monitor client opens endpoint | mirrored mux text uses CRLF-safe terminal normalization |
+| plain terminal input such as `help\r\n` arrives | do not enter raw bridge; discard after timeout with diagnostics |
+| partial esptool SYNC arrives | keep pending bytes until complete frame, timeout, or overflow |
+| complete SYNC arrives | perform DTR/RTS bootloader entry, replay pending bytes, enter raw bridge, and reset host session |
+| physical port is `/dev/cu.usbmodem*` | use `UsbJtagSerial` reset mode |
+| physical port is USB-to-serial bridge | use classic ESP reset mode |
+| esptool sends `CHANGE_BAUDRATE` | after an ESP response frame, set the physical serial baud to the requested rate |
+| pyserial on macOS PTY rejects `460800` | document/use `idf.py flash --baud 115200`; do not try to fake bytes in TUI |
+| raw bridge client closes with `EIO` | finish raw bridge and request a fresh manifest |
+| raw bridge client closes with read length `0` | finish raw bridge and request a fresh manifest |
+| physical USB disconnects during reset | TUI reconnect path clears stale endpoints and recreates ESP enhanced after the next manifest |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200`
+  completes, TUI reconnects after reset, receives a new manifest, and resumes
+  mux output.
+- Good: `screen /tmp/wiremux/tty/tty.wiremux-esp-enhanced` works as an
+  aggregate channel monitor without stealing normal input-channel ownership.
+- Base: default `idf.py flash --port <enhanced>` reaches stub upload but may fail
+  at local PTY baud change on macOS; this is a platform PTY ioctl limitation,
+  not an ESP bridge protocol failure.
+- Bad: entering raw bridge on arbitrary input because it would break
+  `idf.py monitor`, `screen`, or manual terminal sessions.
+- Bad: mocking ESP ROM/stub responses in host TUI because replaying already
+  acknowledged bytes to the real ESP desynchronizes esptool.
+- Bad: using `socket://127.0.0.1:<port>` as the product-facing MVP command
+  shape because the accepted UX is tty-shaped `--port <enhanced-path>`.
+
+### 6. Tests Required
+
+- Run host checks from `sources/host/wiremux`:
+  - `cargo fmt --check`
+  - `cargo check`
+  - `cargo check --features esp32`
+  - `cargo check --features all-features`
+  - `cargo test --features esp32`
+- Unit tests must cover:
+  - complete esptool SYNC classification
+  - plain terminal text rejection
+  - sync command rejection when the magic payload prefix is absent
+  - `CHANGE_BAUDRATE` extraction
+  - SLIP frame splitting across reads
+  - `/dev/cu.usbmodem*` selecting USB-Serial/JTAG reset mode
+- Hardware acceptance for ESP32-S3 USB-Serial/JTAG:
+  - start `wiremux tui` on the physical port
+  - wait for the TUI marker showing the actual enhanced tty path
+  - run `idf.py flash --port <enhanced-path> --baud 115200`
+  - assert esptool reaches `Done`
+  - assert TUI continues showing mux output after firmware reset
+  - diagnostics should include `esptool sync detected`, `raw bridge client closed`
+    or `raw bridge client gone`, and a post-reset `manifest requested`
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+if !bytes.is_empty() {
+    state = RawBridge;
+}
+```
+
+#### Correct
+
+```rust
+if commands.iter().any(|command| command.opcode == ESPTOOL_SYNC) {
+    serial.enter_esp32_bootloader_with_reset_mode(reset_mode)?;
+    serial.write_all(&pending_input)?;
+    state = RawBridge;
+}
+```
+
+#### Wrong
+
+```text
+idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced
+```
+
+on macOS PTY when ESP-IDF defaults to `-b 460800`.
+
+#### Correct
+
+```text
+idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200
+```
+
+until a DriverKit/native virtual serial backend can accept esptool's high-baud
+ioctl on the enhanced tty path.
 
 ## Testing Requirements
 

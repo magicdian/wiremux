@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package wiremux.host.generic_enhanced.v1;
+
+enum GenericEnhancedApiStability {
+  GENERIC_ENHANCED_API_STABILITY_UNSPECIFIED = 0;
+  GENERIC_ENHANCED_API_STABILITY_DEVELOPMENT = 1;
+  GENERIC_ENHANCED_API_STABILITY_STABLE = 2;
+  GENERIC_ENHANCED_API_STABILITY_FROZEN = 3;
+}
+
+message GenericEnhancedApiCatalog {
+  uint32 current_version = 1;
+  repeated GenericEnhancedApiDeclaration apis = 2;
+}
+
+message GenericEnhancedApiDeclaration {
+  string api_name = 1;
+  uint32 frozen_version = 2;
+  GenericEnhancedApiStability stability = 3;
+  string description = 4;
+
+  // Optional typed config extension point. Generic enhanced v1 virtual serial
+  // leaves this unset and derives behavior from core manifest channels.
+  GenericEnhancedTypedConfig typed_config = 10;
+
+  // Field numbers 20-39 are intentionally unused for future overlay package
+  // identity and trust declarations.
+  // Field numbers 40-59 are intentionally unused for future TUI contribution
+  // declarations.
+}
+
+message GenericEnhancedTypedConfig {
+  string type_url = 1;
+  bytes value = 2;
+}

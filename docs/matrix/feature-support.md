@@ -30,7 +30,8 @@ Legend:
 | Output-only channel read-only virtual endpoint | Supported | Supported | Planned | Writes are rejected or discarded without sending device frames. |
 | Vendor enhanced host mode | Partial | Partial | Partial | Build selection exists; device-specific runtime adapters are incremental. |
 | ESP32 OTA enhanced flow | Planned | Planned | Planned | Future vendor enhanced feature. |
-| ESP32 esptool passthrough enhanced flow | Planned | Planned | Planned | Future vendor enhanced feature using a special virtual endpoint. |
+| ESP32 esptool passthrough enhanced flow | Partial | Partial | Planned | Vendor enhanced TUI-only MVP creates `tty.wiremux-esp-enhanced` for Espressif manifests and switches to DTR/RTS raw bridge after a complete esptool SYNC frame. Use the path shown by TUI; Unix hosts may fall back from `/dev/tty.wiremux-esp-enhanced` to `/tmp/wiremux/tty/tty.wiremux-esp-enhanced`. ESP32-S3 USB-Serial/JTAG hardware validation passed with `idf.py flash --port <path> --baud 115200`; default high-baud esptool on macOS PTY needs future native virtual serial work. |
+| Native macOS virtual serial DriverKit backend | Planned | - | - | Roadmap item for a tty-shaped enhanced path that can satisfy pyserial high-baud ioctls such as ESP-IDF's default `460800`, avoiding Python shims or socket URLs. |
 | TCP bridge | Planned | Planned | Planned | Reserved host enhanced capability. |
 | Capture/replay | Planned | Planned | Planned | Reserved host enhanced capability. |
 | Reliable transfer profile | Planned | Planned | Planned | Profile skeleton exists; runtime protocol is future work. |

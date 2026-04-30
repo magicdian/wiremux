@@ -166,7 +166,11 @@ Completed Trellis bootstrap guidelines from the existing ESP-IDF/Rust framework:
 
 ### Summary
 
-(Add summary)
+Delivered the ESP vendor enhanced esptool passthrough MVP for TUI. The feature
+adds a session-scoped enhanced tty for Espressif manifests, supports aggregate
+monitor output, detects esptool SYNC to enter raw bridge, handles ESP32-S3
+USB-Serial/JTAG reset and post-flash reconnect, and documents the macOS PTY
+high-baud limitation.
 
 ### Main Changes
 
@@ -193,7 +197,10 @@ Notes:
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Host Cargo checks and tests passed across the required feature matrix.
+- [OK] `tools/wiremux-build check host` passed.
+- [OK] Human hardware acceptance passed with ESP32-S3 flashing through
+  `/tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200`.
 
 ### Status
 
@@ -350,7 +357,13 @@ Added ratatui host TUI, host-initiated DeviceManifestRequest discovery, core cha
 
 ### Main Changes
 
-(Add details)
+- Added `sources/api/host/generic_enhanced/versions/{current,1}` proto
+  snapshots for the host-side generic enhanced capability catalog.
+- Documented generic enhanced stable/frozen API rules, virtual serial as the
+  first generic enhanced capability, and the future
+  catalog-to-registry-to-provider resolution flow.
+- Updated backend Trellis specs so future API work knows where host-side
+  enhanced snapshots live.
 
 ### Git Commits
 
@@ -1425,6 +1438,127 @@ Validation:
 | Hash | Message |
 |------|---------|
 | `15ae983` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 36: Define generic enhanced host contract
+
+**Date**: 2026-04-30
+**Task**: Define generic enhanced host contract
+**Branch**: `dev`
+
+### Summary
+
+Documented the host-side generic enhanced API stability model, added current and frozen v1 proto snapshots for the generic enhanced capability catalog, and recorded virtual serial as the first generic enhanced capability for future vendor overlay resolution.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `341e1b5` | docs(api): define generic enhanced host contract |
+
+### Testing
+
+- [OK] `protoc` descriptor generation for current generic enhanced proto.
+- [OK] `protoc` descriptor generation for frozen v1 generic enhanced proto.
+- [OK] `git diff --check`.
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/04-30-enhanced-overlay-api-stability`.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 37: Host generic enhanced capability registry
+
+**Date**: 2026-04-30
+**Task**: Host generic enhanced capability registry
+**Branch**: `dev`
+
+### Summary
+
+Added Rust host generic-enhanced crate with protobuf catalog decoding and registry/provider resolution for virtual serial; wired CLI/interactive support checks through registry; updated API catalog docs and backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f4c9d11` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 38: ESP enhanced esptool passthrough MVP
+
+**Date**: 2026-04-30
+**Task**: ESP enhanced esptool passthrough MVP
+**Branch**: `dev`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Summary |
+|------|---------|
+| Feature | Added TUI-only ESP enhanced aggregate endpoint `tty.wiremux-esp-enhanced` for Espressif manifests. |
+| Flashing | Implemented esptool SYNC detection, pending input replay, ESP32 DTR/RTS bootloader entry, raw PTY-to-physical serial bridge, physical baud tracking, and raw bridge exit/reconnect handling. |
+| Validation | Hardware acceptance passed with `idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200`; TUI resumed mux output after firmware reset. |
+| Knowledge | Documented macOS PTY high-baud ioctl limitation and added native virtual serial/DriverKit backend to roadmap. |
+| Release | Bumped project version to `2604.30.2`. |
+
+**Verification**:
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cargo check --features generic`
+- `cargo check --features esp32`
+- `cargo check --features all-vendors`
+- `cargo check --features all-features`
+- `cargo test --features esp32`
+- `tools/wiremux-build check host`
+- `git diff --check`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `18eb90b` | (see git log) |
 
 ### Testing
 

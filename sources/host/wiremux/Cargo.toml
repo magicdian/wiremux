@@ -1,11 +1,13 @@
 [workspace]
 members = [
+    "crates/generic-enhanced",
     "crates/host-session",
     "crates/interactive",
     "crates/tui",
     "crates/cli",
 ]
 default-members = [
+    "crates/generic-enhanced",
     "crates/host-session",
     "crates/interactive",
     "crates/tui",
