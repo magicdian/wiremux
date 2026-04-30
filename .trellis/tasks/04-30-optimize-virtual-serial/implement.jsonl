@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "DriverKit shim to Rust host boundary definition"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host/tooling layout and source tree constraints for macOS DriverKit POC"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Clear local probe failures and deterministic blockers"}

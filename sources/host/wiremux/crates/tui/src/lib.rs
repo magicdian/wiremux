@@ -306,6 +306,23 @@ impl SettingsState {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusNavigationMode {
+    Clamp,
+    Cycle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StatusFieldDefinition {
+    id: &'static str,
+    label: &'static str,
+    priority: u16,
+    summary: bool,
+}
+
+include!(concat!(env!("OUT_DIR"), "/status_fields.rs"));
+
 struct App {
     lines: VecDeque<OutputLine>,
     input: String,
@@ -322,6 +339,7 @@ struct App {
     scroll_target_offset: Option<usize>,
     empty_enter_restore_count: u8,
     dragging_scrollbar: bool,
+    status_page: usize,
     selection: Option<TextSelection>,
     selection_auto_scroll: Option<SelectionAutoScroll>,
     pending_clipboard: Option<String>,
@@ -369,6 +387,7 @@ impl App {
             scroll_target_offset: None,
             empty_enter_restore_count: 0,
             dragging_scrollbar: false,
+            status_page: 0,
             selection: None,
             selection_auto_scroll: None,
             pending_clipboard: None,
@@ -590,20 +609,6 @@ impl App {
         }
     }
 
-    fn manifest_label(&self) -> String {
-        match &self.manifest {
-            Some(manifest) => format!(
-                "{} {} api={} channels={} max_payload={}",
-                empty_as_dash(&manifest.device_name),
-                empty_as_dash(&manifest.firmware_version),
-                manifest.protocol_version,
-                manifest.channels.len(),
-                manifest.max_payload_len
-            ),
-            None => "manifest pending".to_string(),
-        }
-    }
-
     fn channel_prefix(&self, channel_id: u32) -> String {
         let name = self.manifest.as_ref().and_then(|manifest| {
             manifest
@@ -805,7 +810,7 @@ impl App {
                 selected_output_text(selection, &model.rows)
             }
             SelectionPane::Status => {
-                let rows = status_rows(self);
+                let rows = status_rows(self, status_area);
                 selected_status_text(selection, &rows, status_area)
             }
         };
@@ -817,6 +822,37 @@ impl App {
 
         self.status = format!("copy: selected {} chars", selected.chars().count());
         self.pending_clipboard = Some(selected);
+    }
+
+    fn previous_status_page(&mut self, status_area: Rect) {
+        let page_count = status_page_count(self, status_area);
+        let current = self.status_page.min(page_count.saturating_sub(1));
+        let page = match STATUS_NAVIGATION_MODE {
+            StatusNavigationMode::Clamp => current.saturating_sub(1),
+            StatusNavigationMode::Cycle => current.checked_sub(1).unwrap_or(page_count - 1),
+        };
+        self.set_status_page(page);
+    }
+
+    fn next_status_page(&mut self, status_area: Rect) {
+        let page_count = status_page_count(self, status_area);
+        let current = self.status_page.min(page_count.saturating_sub(1));
+        let page = match STATUS_NAVIGATION_MODE {
+            StatusNavigationMode::Clamp => (current + 1).min(page_count - 1),
+            StatusNavigationMode::Cycle => (current + 1) % page_count,
+        };
+        self.set_status_page(page);
+    }
+
+    fn set_status_page(&mut self, page: usize) {
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.pane == SelectionPane::Status)
+        {
+            self.clear_selection();
+        }
+        self.status_page = page;
     }
 
     fn advance_selection_auto_scroll(&mut self, output_area: Rect) -> bool {
@@ -1283,13 +1319,19 @@ fn handle_key_with_areas(
 
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('b') {
         app.prefix_pending = true;
-        app.status = "prefix: press 0 for all or 1..9 for channel".to_string();
+        app.status = "prefix: 0 all, 1..9 channel, Left/Right status, s settings".to_string();
         return Ok(());
     }
 
     if app.prefix_pending {
         app.prefix_pending = false;
         match key.code {
+            KeyCode::Left | KeyCode::Char('[') => {
+                app.previous_status_page(status_area);
+            }
+            KeyCode::Right | KeyCode::Char(']') => {
+                app.next_status_page(status_area);
+            }
             KeyCode::Char('0') => {
                 app.filter = None;
                 app.restore_auto_follow();
@@ -1343,6 +1385,20 @@ fn handle_key_with_areas(
             }
         }
         return Ok(());
+    }
+
+    if key.modifiers.is_empty() && !app.active_input_is_passthrough() {
+        match key.code {
+            KeyCode::Left => {
+                app.previous_status_page(status_area);
+                return Ok(());
+            }
+            KeyCode::Right => {
+                app.next_status_page(status_area);
+                return Ok(());
+            }
+            _ => {}
+        }
     }
 
     if key.code == KeyCode::Esc {
@@ -1932,7 +1988,7 @@ fn start_text_selection(
         return true;
     }
 
-    let status = status_rows(app);
+    let status = status_rows(app, status_area);
     if let Some(position) = status_selection_position(&status, status_area, mouse.column, mouse.row)
     {
         app.selection = Some(TextSelection::new(SelectionPane::Status, position));
@@ -1960,7 +2016,7 @@ fn update_text_selection(app: &mut App, output_area: Rect, status_area: Rect, mo
             }
         }
         SelectionPane::Status => {
-            let rows = status_rows(app);
+            let rows = status_rows(app, status_area);
             if let Some(position) =
                 status_selection_position(&rows, status_area, mouse.column, mouse.row)
             {
@@ -2276,14 +2332,18 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         );
     }
 
-    let status_lines = status_rows(app)
+    let status_area = chunks[1];
+    let status_lines = status_rows(app, status_area)
         .iter()
         .enumerate()
         .map(|(index, row)| render_status_row(row, index, app.selection.as_ref()))
         .collect::<Vec<_>>();
-    let status =
-        Paragraph::new(status_lines).block(Block::default().title("status").borders(Borders::ALL));
-    frame.render_widget(status, chunks[1]);
+    let status = Paragraph::new(status_lines).block(
+        Block::default()
+            .title(status_title(app, status_area))
+            .borders(Borders::ALL),
+    );
+    frame.render_widget(status, status_area);
 
     let input_line = match app.active_input_state() {
         InputState::ReadOnly => Line::from(vec![
@@ -2711,52 +2771,198 @@ fn output_rows(
     rows
 }
 
-fn status_rows(app: &App) -> Vec<StatusRow> {
-    let label = Style::default().fg(Color::Yellow);
+struct StatusFieldRender {
+    id: &'static str,
+    label: &'static str,
+    priority: u16,
+    value: String,
+}
+
+fn status_rows(app: &App, status_area: Rect) -> Vec<StatusRow> {
+    let width = status_content_width(status_area);
+    let mut pages = status_pages(app, width);
+    let page = app.status_page.min(pages.len().saturating_sub(1));
+    pages.swap_remove(page)
+}
+
+fn status_page_count(app: &App, status_area: Rect) -> usize {
+    status_pages(app, status_content_width(status_area)).len()
+}
+
+fn status_pages(app: &App, content_width: usize) -> Vec<Vec<StatusRow>> {
+    let fields = status_fields(app);
+    status_pages_from_fields(fields, content_width)
+}
+
+fn status_fields(app: &App) -> Vec<StatusFieldRender> {
+    let mut fields = STATUS_FIELD_DEFINITIONS
+        .iter()
+        .filter(|field| field.summary)
+        .map(|field| StatusFieldRender {
+            id: field.id,
+            label: field.label,
+            priority: field.priority,
+            value: status_field_value(app, field.id),
+        })
+        .collect::<Vec<_>>();
+    fields.sort_by_key(|field| (field.priority, field.id));
+    fields
+}
+
+fn status_pages_from_fields(
+    fields: Vec<StatusFieldRender>,
+    content_width: usize,
+) -> Vec<Vec<StatusRow>> {
+    let mut pages = vec![empty_status_rows()];
+
+    for field in fields {
+        let rows = pages.last_mut().expect("status pages are non-empty");
+        if try_append_status_field(&mut rows[0], &field, content_width, false)
+            || try_append_status_field(&mut rows[1], &field, content_width, false)
+        {
+            continue;
+        }
+
+        if rows[0].segments.is_empty() && rows[1].segments.is_empty() {
+            append_status_field_to_empty_page(rows, &field, content_width);
+        } else {
+            pages.push(empty_status_rows());
+            let rows = pages.last_mut().expect("new status page exists");
+            append_status_field_to_empty_page(rows, &field, content_width);
+        }
+    }
+
+    pages
+}
+
+fn empty_status_rows() -> Vec<StatusRow> {
     vec![
         StatusRow {
-            segments: vec![
-                segment("filter ", label),
-                segment(app.filter_label(), Style::default()),
-                segment("  ", Style::default()),
-                segment("input ", label),
-                segment(app.input_label(), Style::default()),
-                segment("  ", Style::default()),
-                segment("backend ", label),
-                segment(app.backend_label.as_str(), Style::default()),
-                segment("  ", Style::default()),
-                segment("fps ", label),
-                segment(app.target_fps.to_string(), Style::default()),
-                segment("  ", Style::default()),
-                segment("status ", label),
-                segment(status_label(app), Style::default()),
-            ],
+            segments: Vec::new(),
         },
         StatusRow {
-            segments: vec![
-                segment("conn ", label),
-                segment(
-                    app.connected_port
-                        .as_deref()
-                        .unwrap_or("disconnected")
-                        .to_string(),
-                    Style::default(),
-                ),
-                segment("  ", Style::default()),
-                segment("target ", label),
-                segment(app.serial.port.display().to_string(), Style::default()),
-                segment("  ", Style::default()),
-                segment("device ", label),
-                segment(app.manifest_label(), Style::default()),
-                segment("  ", Style::default()),
-                segment("vtty ", label),
-                segment(app.virtual_serial.summary(), Style::default()),
-                segment("  ", Style::default()),
-                segment("esp ", label),
-                segment(app.esp_enhanced.summary(), Style::default()),
-            ],
+            segments: Vec::new(),
         },
     ]
+}
+
+fn append_status_field_to_empty_page(
+    rows: &mut [StatusRow],
+    field: &StatusFieldRender,
+    content_width: usize,
+) {
+    if rows.len() < 2 {
+        return;
+    }
+    let label = format!("{} ", field.label);
+    let first_value_width = content_width.saturating_sub(display_width_usize(&label));
+    let (first_value, rest_value) = split_chars(&field.value, first_value_width);
+    append_status_parts(&mut rows[0], &label, &first_value);
+    if !rest_value.is_empty() {
+        let (continuation, _) = split_chars(&rest_value, content_width);
+        rows[1]
+            .segments
+            .push(segment(continuation, Style::default()));
+    }
+}
+
+fn try_append_status_field(
+    row: &mut StatusRow,
+    field: &StatusFieldRender,
+    content_width: usize,
+    force_empty: bool,
+) -> bool {
+    let current_width = display_width_usize(&status_row_text(row));
+    let separator_width = if row.segments.is_empty() { 0 } else { 2 };
+    let field_width = display_width_usize(field.label)
+        .saturating_add(1)
+        .saturating_add(display_width_usize(&field.value));
+    let required_width = current_width
+        .saturating_add(separator_width)
+        .saturating_add(field_width);
+    if required_width > content_width && !(force_empty && row.segments.is_empty()) {
+        return false;
+    }
+
+    if !row.segments.is_empty() {
+        row.segments.push(segment("  ", Style::default()));
+    }
+    append_status_parts(row, &format!("{} ", field.label), &field.value);
+    true
+}
+
+fn append_status_parts(row: &mut StatusRow, label: &str, value: &str) {
+    row.segments.push(segment(
+        label.to_string(),
+        Style::default().fg(Color::Yellow),
+    ));
+    if !value.is_empty() {
+        row.segments
+            .push(segment(value.to_string(), Style::default()));
+    }
+}
+
+fn split_chars(input: &str, max_chars: usize) -> (String, String) {
+    if max_chars == 0 {
+        return (String::new(), input.to_string());
+    }
+    let first = input.chars().take(max_chars).collect::<String>();
+    let rest = input.chars().skip(max_chars).collect::<String>();
+    (first, rest)
+}
+
+fn status_field_value(app: &App, id: &str) -> String {
+    match id {
+        "status.current" => status_label(app),
+        "filter.active" => app.filter_label(),
+        "input.mode" => app.input_label(),
+        "connection.connected" => app
+            .connected_port
+            .as_deref()
+            .unwrap_or("disconnected")
+            .to_string(),
+        "connection.target" => app.serial.port.display().to_string(),
+        "device.api" => app
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.protocol_version.to_string())
+            .unwrap_or_else(|| "pending".to_string()),
+        "device.channels" => app
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.channels.len().to_string())
+            .unwrap_or_else(|| "pending".to_string()),
+        "device.firmware" => app
+            .manifest
+            .as_ref()
+            .map(|manifest| empty_as_dash(&manifest.firmware_version).to_string())
+            .unwrap_or_else(|| "pending".to_string()),
+        "device.max_payload" => app
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.max_payload_len.to_string())
+            .unwrap_or_else(|| "pending".to_string()),
+        "device.name" => app
+            .manifest
+            .as_ref()
+            .map(|manifest| empty_as_dash(&manifest.device_name).to_string())
+            .unwrap_or_else(|| "pending".to_string()),
+        "enhanced.esp" => app.esp_enhanced.summary(),
+        "enhanced.vtty" => app.virtual_serial.summary(),
+        "runtime.backend" => app.backend_label.clone(),
+        "runtime.fps" => app.target_fps.to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn status_content_width(status_area: Rect) -> usize {
+    status_area.width.saturating_sub(2) as usize
+}
+
+fn status_title(app: &App, status_area: Rect) -> String {
+    let page_count = status_page_count(app, status_area);
+    let page = app.status_page.min(page_count.saturating_sub(1));
+    format!("status {}/{}", page + 1, page_count)
 }
 
 fn segment(text: impl Into<String>, style: Style) -> StyledSegment {
@@ -3672,7 +3878,7 @@ mod tests {
 
         app.request_copy_selection(output_area, status_area);
 
-        assert_eq!(app.pending_clipboard.as_deref(), Some("filter"));
+        assert_eq!(app.pending_clipboard.as_deref(), Some("status"));
     }
 
     #[test]
@@ -4342,19 +4548,183 @@ mod tests {
         app.backend_label = "mio".to_string();
         app.target_fps = 120;
         app.manifest = Some(line_manifest(1));
-        let area = Rect::new(0, 0, 80, 12);
+        let area = Rect::new(0, 0, 220, 12);
         let status_area = main_layout(area)[1];
         let mut terminal =
             Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
 
         terminal.draw(|frame| render(frame, &app)).expect("draw");
 
-        let runtime_row = buffer_row(terminal.backend().buffer(), status_area.y + 1, area.width);
-        let target_row = buffer_row(terminal.backend().buffer(), status_area.y + 2, area.width);
-        assert!(runtime_row.contains("backend mio"));
-        assert!(runtime_row.contains("fps 120"));
-        assert!(target_row.contains("target /dev/tty.usbmodem2101"));
-        assert!(target_row.contains("conn disconnected"));
+        let status_text = [
+            buffer_row(terminal.backend().buffer(), status_area.y + 1, area.width),
+            buffer_row(terminal.backend().buffer(), status_area.y + 2, area.width),
+        ]
+        .join("\n");
+        assert!(status_text.contains("status connecting"));
+        assert!(status_text.contains("backend mio"));
+        assert!(status_text.contains("fps 120"));
+    }
+
+    #[test]
+    fn render_connection_status_shows_requested_target_and_connected_path() {
+        let mut app = App::new("diag.log".to_string());
+        app.connected_port = Some("/dev/cu.usbmodem2101".to_string());
+        let area = Rect::new(0, 0, 220, 12);
+        let status_area = main_layout(area)[1];
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let status_text = [
+            buffer_row(terminal.backend().buffer(), status_area.y + 1, area.width),
+            buffer_row(terminal.backend().buffer(), status_area.y + 2, area.width),
+        ]
+        .join("\n");
+        assert!(status_text.contains("conn /dev/cu.usbmodem2101"));
+        assert!(status_text.contains("target /dev/tty.usbmodem2101"));
+    }
+
+    #[test]
+    fn status_recomputes_priority_pages_for_current_width() {
+        let mut app = App::new("diag.log".to_string());
+        app.status = "ok".to_string();
+        app.backend_label = "mio".to_string();
+        app.target_fps = 120;
+        app.connected_port = Some("/dev/cu.usbmodem2101".to_string());
+        app.manifest = Some(line_manifest(1));
+
+        let narrow_area = Rect::new(0, 0, 20, 4);
+        let wide_area = Rect::new(0, 0, 220, 4);
+        let narrow = status_rows(&app, narrow_area)
+            .iter()
+            .map(status_row_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let wide = status_rows(&app, wide_area)
+            .iter()
+            .map(status_row_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let narrow_pages = status_pages(&app, status_content_width(narrow_area))
+            .iter()
+            .flat_map(|rows| rows.iter().map(status_row_text))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(narrow.contains("status ok"));
+        assert!(wide.contains("status ok"));
+        assert!(!narrow.contains("backend mio"));
+        assert!(wide.contains("backend mio"));
+        assert!(narrow_pages.contains("backend mio"));
+        assert!(status_page_count(&app, narrow_area) > status_page_count(&app, wide_area));
+        assert_eq!(status_page_count(&app, wide_area), 1);
+        assert!(wide.len() > narrow.len());
+        assert!(
+            wide.find("filter all").expect("filter visible")
+                < wide.find("input read-only").expect("input visible")
+        );
+    }
+
+    #[test]
+    fn status_page_navigation_clamps_and_preserves_passthrough_arrows() {
+        let mut app = App::new("diag.log".to_string());
+        app.status = "ok".to_string();
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Left, KeyModifiers::empty()),
+        )
+        .expect("left at first page");
+        assert_eq!(app.status_page, 0);
+        assert_eq!(app.status, "ok");
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+        )
+        .expect("right to second page");
+        assert_eq!(app.status_page, 1);
+
+        app.status_page = 0;
+        app.filter = Some(1);
+        app.manifest = Some(passthrough_manifest(1));
+        let mut serial = Vec::new();
+        handle_key(
+            &mut app,
+            Some(&mut serial),
+            &tui_args(),
+            KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+        )
+        .expect("passthrough right arrow");
+        assert_eq!(app.status_page, 0);
+        assert!(!serial.is_empty());
+
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        )
+        .expect("prefix");
+        handle_key(
+            &mut app,
+            None,
+            &tui_args(),
+            KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+        )
+        .expect("prefix right");
+        assert_eq!(app.status_page, 1);
+    }
+
+    #[test]
+    fn status_page_count_is_stable_when_navigation_clamps_at_edge() {
+        let mut app = App::new("diag.log".to_string());
+        app.status = "ok".to_string();
+        let status_area = Rect::new(0, 0, 20, 4);
+        let page_count = status_page_count(&app, status_area);
+
+        app.previous_status_page(status_area);
+
+        assert_eq!(app.status_page, 0);
+        assert_eq!(app.status, "ok");
+        assert_eq!(status_page_count(&app, status_area), page_count);
+    }
+
+    #[test]
+    fn status_pages_do_not_create_empty_first_page_for_wide_first_field() {
+        let mut app = App::new("diag.log".to_string());
+        app.status = "status page: 1/7 (first)".to_string();
+        let pages = status_pages(&app, status_content_width(Rect::new(0, 0, 20, 4)));
+
+        assert!(!pages[0][0].segments.is_empty() || !pages[0][1].segments.is_empty());
+        assert!(status_row_text(&pages[0][0]).contains("status "));
+    }
+
+    #[test]
+    fn status_page_wraps_single_wide_field_across_available_rows() {
+        let mut app = App::new("diag.log".to_string());
+        app.status_page = 0;
+        app.manifest = Some(line_manifest(1));
+        app.connected_port = Some("/dev/cu.usbmodem41301".to_string());
+        app.status = "ok".to_string();
+        let area = Rect::new(0, 0, 28, 4);
+        let pages = status_pages(&app, status_content_width(area));
+        let esp_page = pages
+            .iter()
+            .find(|rows| status_row_text(&rows[0]).starts_with("esp "))
+            .expect("esp page");
+
+        assert!(status_row_text(&esp_page[0]).starts_with("esp esp-enhanced"));
+        assert!(!status_row_text(&esp_page[1]).is_empty());
+        assert!(
+            status_row_text(&esp_page[0]).len() + status_row_text(&esp_page[1]).len()
+                > status_content_width(area)
+        );
     }
 
     #[test]

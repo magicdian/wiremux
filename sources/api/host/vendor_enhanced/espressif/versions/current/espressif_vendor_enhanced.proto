@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package wiremux.host.vendor_enhanced.espressif.v1;
+
+enum EspressifVendorEnhancedApiStability {
+  ESPRESSIF_VENDOR_ENHANCED_API_STABILITY_UNSPECIFIED = 0;
+  ESPRESSIF_VENDOR_ENHANCED_API_STABILITY_DEVELOPMENT = 1;
+  ESPRESSIF_VENDOR_ENHANCED_API_STABILITY_STABLE = 2;
+  ESPRESSIF_VENDOR_ENHANCED_API_STABILITY_FROZEN = 3;
+}
+
+message EspressifVendorEnhancedApiCatalog {
+  uint32 current_version = 1;
+  repeated EspressifVendorEnhancedApiDeclaration apis = 2;
+}
+
+message EspressifVendorEnhancedApiDeclaration {
+  string api_name = 1;
+  uint32 frozen_version = 2;
+  EspressifVendorEnhancedApiStability stability = 3;
+  string description = 4;
+
+  // Generic enhanced capabilities required by this vendor enhanced API.
+  // Requirements are expressed by stable API name and frozen version so the
+  // host resolver can bind them to built-in or installed implementations
+  // without creating a static proto dependency on generic enhanced schemas.
+  repeated HostCapabilityRequirement generic_enhanced_requirements = 10;
+
+  // Optional typed config extension point. Espressif vendor enhanced v1 leaves
+  // this unset and derives behavior from the connected manifest plus host
+  // serial profile.
+  EspressifVendorEnhancedTypedConfig typed_config = 20;
+
+  // Field numbers 30-49 are intentionally unused for future overlay package
+  // identity and trust declarations.
+  // Field numbers 50-69 are intentionally unused for future provider runtime
+  // contribution declarations.
+}
+
+message HostCapabilityRequirement {
+  string api_name = 1;
+  uint32 frozen_version = 2;
+  string description = 3;
+}
+
+message EspressifVendorEnhancedTypedConfig {
+  string type_url = 1;
+  bytes value = 2;
+}

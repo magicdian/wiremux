@@ -22,6 +22,8 @@ The current paths are transitional. The target product layout is documented in
 - `sources/core/c` for the platform-neutral C core.
 - `sources/profiles` for profile contracts and reusable profile code.
 - `sources/host/wiremux` for the Rust Wiremux host crate after migration.
+- `sources/poc` for isolated feasibility spikes that must not be wired into
+  production workspaces until promoted by an explicit implementation task.
 - `sources/vendor/espressif/generic/{components,examples}` for the generic
   ESP-IDF integration, with `sources/vendor/espressif/{s3,p4}` reserved for
   platform-specific README placeholders until real code exists.
@@ -73,6 +75,12 @@ sources/
 │   │           ├── current/catalog.textproto
 │   │           ├── 1/generic_enhanced.proto
 │   │           └── 1/catalog.textproto
+│   │   └── vendor_enhanced/espressif/
+│   │       └── versions/
+│   │           ├── current/espressif_vendor_enhanced.proto
+│   │           ├── current/catalog.textproto
+│   │           ├── 1/espressif_vendor_enhanced.proto
+│   │           └── 1/catalog.textproto
 │   └── proto/
 │       └── versions/
 │           ├── current/wiremux.proto
@@ -82,11 +90,16 @@ sources/
 │   └── wiremux/
 │       ├── Cargo.toml
 │       └── crates/
+│           ├── enhanced-registry/
 │           ├── generic-enhanced/
+│           ├── vendor-enhanced/
 │           ├── host-session/
 │           ├── interactive/
 │           ├── tui/
 │           └── cli/
+├── poc/
+│   └── macos/
+│       └── driverkit-serial-poc/
 └── vendor/
     └── espressif/
         ├── README.md
@@ -108,10 +121,20 @@ Path: `sources/host/wiremux`.
 
 The host is a Cargo workspace with these crates:
 
+- `crates/enhanced-registry`: Shared host enhanced capability IDs,
+  declarations, requirements, provider registrations, registry, and resolve
+  errors. This crate must not depend on proto/codegen crates, provider crates,
+  `host-session`, `interactive`, `tui`, or `cli`.
 - `crates/generic-enhanced`: Rust protobuf codegen for host-side generic
   enhanced API schemas, decoded built-in capability catalogs, registry/resolver
-  types, and capability/provider matching tests. This crate owns generic
-  enhanced contracts; it must not depend on concrete provider crates.
+  setup helpers, and capability/provider matching tests. This crate owns generic
+  enhanced contracts and translates them into `enhanced-registry` declarations;
+  it must not depend on concrete provider crates.
+- `crates/vendor-enhanced`: Rust protobuf codegen for Wiremux-maintained
+  vendor enhanced API schemas, currently Espressif vendor enhanced catalogs,
+  setup helpers, and capability/provider matching tests. Vendor enhanced APIs
+  may declare required generic enhanced capabilities by stable API name and
+  frozen version, but must not import generic enhanced proto files.
 - `crates/host-session`: Rust wrapper around the portable C
   `wiremux_host_session_*` API, host event/data models, host-to-device frame
   builders, C core static linking through `build.rs`, and focused unit tests.
@@ -147,7 +170,9 @@ Signatures:
 ```toml
 [workspace]
 members = [
+    "crates/enhanced-registry",
     "crates/generic-enhanced",
+    "crates/vendor-enhanced",
     "crates/host-session",
     "crates/interactive",
     "crates/tui",
@@ -162,6 +187,9 @@ path = "src/main.rs"
 Dependency direction:
 
 ```text
+generic-enhanced -> enhanced-registry
+vendor-enhanced -> enhanced-registry
+vendor-enhanced -> generic-enhanced capability names only, no proto import
 interactive -> generic-enhanced
 cli -> tui -> interactive -> host-session
 cli -> interactive
@@ -171,9 +199,17 @@ tui -> host-session
 
 Contracts:
 
+- `enhanced-registry` must not depend on any proto/codegen crate, provider
+  implementation crate, `host-session`, `interactive`, `tui`, or `cli`; it owns
+  shared host enhanced registry and provider resolution primitives.
 - `generic-enhanced` must not depend on `host-session`, `interactive`, `tui`, or
-  `cli`; it owns host-side generic enhanced contracts and provider-neutral
-  registry types.
+  `cli`; it owns host-side generic enhanced contracts and translates catalog
+  declarations into provider-neutral `enhanced-registry` types.
+- `vendor-enhanced` must not depend on `host-session`, `interactive`, `tui`, or
+  `cli`; it owns host-side vendor enhanced contracts and translates catalog
+  declarations into provider-neutral `enhanced-registry` types. Vendor enhanced
+  schemas express generic enhanced requirements by stable API name and frozen
+  version, not by importing generic enhanced proto definitions.
 - `host-session` must not depend on `cli`, `tui`, or `interactive`.
 - `interactive` may depend on `host-session` only for shared input policy types
   such as `PassthroughPolicy`, and on `generic-enhanced` for capability
@@ -188,8 +224,10 @@ Validation matrix:
 | Case | Required behavior |
 |------|-------------------|
 | `cargo run -- listen ...` | still resolves the `wiremux` binary from `crates/cli` |
+| shared enhanced registry change | `crates/enhanced-registry` tests cover provider registration, duplicate rejection, and missing-provider resolution |
 | host-session frame builder change | `crates/host-session` tests cover round-trip through `HostSession` |
 | generic enhanced catalog change | `crates/generic-enhanced` tests cover catalog decode and registry resolution |
+| vendor enhanced catalog change | `crates/vendor-enhanced` tests cover catalog decode, generic enhanced capability requirements, and registry resolution |
 | interactive backend change | `crates/interactive` tests cover retry, serial candidate, and passthrough key behavior |
 | TUI behavior change | `crates/tui` tests cover app/render/input behavior |
 | CLI parse or display change | `crates/cli` tests cover argument and listen display behavior |
@@ -203,6 +241,227 @@ Good/Base/Bad cases:
 - Bad: `tui` imports `cli` helpers for diagnostics or argument parsing; move the
   reusable behavior to `host-session`, `interactive`, or a TUI-local module
   instead.
+
+#### Scenario: Host Enhanced Capability Registry Boundary
+
+##### 1. Scope / Trigger
+
+Trigger: any change that adds, removes, or moves host enhanced capability
+catalogs, provider registration, provider resolution, or capability requirements
+for generic enhanced, vendor enhanced, or future overlay plugins.
+
+This scenario is cross-layer because the flow spans:
+
+```text
+sources/api/host/<api-family>/versions/current/*.proto
+  -> sources/api/host/<api-family>/versions/current/catalog.textproto
+  -> crates/<api-family>/build.rs codegen/catalog encode
+  -> crates/<api-family>/src/lib.rs catalog decode
+  -> crates/enhanced-registry provider registry
+  -> implementation crate such as interactive or tui
+```
+
+##### 2. Signatures
+
+Shared registry crate:
+
+```rust
+// sources/host/wiremux/crates/enhanced-registry/src/lib.rs
+pub enum ApiStability {
+    Development,
+    Stable,
+    Frozen,
+}
+
+pub struct CapabilityId;
+impl CapabilityId {
+    pub fn new(api_name: impl Into<String>, frozen_version: u32) -> Self;
+    pub fn api_name(&self) -> &str;
+    pub fn frozen_version(&self) -> u32;
+}
+
+pub struct CapabilityRequirement;
+impl CapabilityRequirement {
+    pub fn new(id: CapabilityId, description: impl Into<String>) -> Self;
+    pub fn id(&self) -> &CapabilityId;
+    pub fn description(&self) -> &str;
+}
+
+pub struct CapabilityDeclaration;
+impl CapabilityDeclaration {
+    pub fn new(
+        id: CapabilityId,
+        stability: ApiStability,
+        description: impl Into<String>,
+        requirements: Vec<CapabilityRequirement>,
+    ) -> Self;
+    pub fn id(&self) -> &CapabilityId;
+    pub fn stability(&self) -> ApiStability;
+    pub fn description(&self) -> &str;
+    pub fn requirements(&self) -> &[CapabilityRequirement];
+}
+
+pub struct ProviderRegistry;
+impl ProviderRegistry {
+    pub fn new() -> Self;
+    pub fn register(
+        &mut self,
+        capability: CapabilityDeclaration,
+        provider_key: impl Into<String>,
+    ) -> Result<(), RegistryError>;
+    pub fn resolve(&self, id: &CapabilityId)
+        -> Result<&ProviderRegistration, ResolveError>;
+    pub fn supports(&self, id: &CapabilityId) -> bool;
+}
+```
+
+API-family crates translate proto-specific values into shared registry types:
+
+```rust
+// crates/generic-enhanced/src/lib.rs
+pub type GenericEnhancedRegistry = enhanced_registry::ProviderRegistry;
+pub fn latest_virtual_serial_declaration()
+    -> Result<enhanced_registry::CapabilityDeclaration, CatalogError>;
+pub fn latest_virtual_serial_capability_id()
+    -> Result<enhanced_registry::CapabilityId, CatalogError>;
+pub fn register_virtual_serial_provider(
+    registry: &mut GenericEnhancedRegistry,
+) -> Result<(), BuiltInProviderError>;
+
+// crates/vendor-enhanced/src/lib.rs
+pub type VendorEnhancedRegistry = enhanced_registry::ProviderRegistry;
+pub fn latest_esptool_bridge_declaration()
+    -> Result<enhanced_registry::CapabilityDeclaration, CatalogError>;
+pub fn latest_esptool_bridge_capability_id()
+    -> Result<enhanced_registry::CapabilityId, CatalogError>;
+pub fn register_esptool_bridge_provider(
+    registry: &mut VendorEnhancedRegistry,
+) -> Result<(), BuiltInProviderError>;
+pub fn host_supports_esptool_bridge_provider() -> bool;
+```
+
+##### 3. Contracts
+
+- `crates/enhanced-registry` owns only provider-neutral types and registry
+  behavior. It must not parse protobuf, run `protoc`, know vendor namespaces, or
+  import implementation crates.
+- API-family crates own proto/codegen/catalog decoding for one API family and
+  convert decoded entries into `enhanced-registry` declarations.
+- Generic enhanced capability names use `wiremux.generic.enhanced.*`.
+- Wiremux-maintained Espressif vendor enhanced capability names use
+  `wiremux.vendor.enhanced.espressif.*`.
+- Vendor enhanced requirements on generic enhanced capabilities are declared as
+  stable `api_name` plus `frozen_version` references. Vendor enhanced proto
+  files must not import generic enhanced proto files solely to express these
+  requirements.
+- Built-in provider helper functions register declarations into a
+  `ProviderRegistry`; implementation crates may check `supports()` or
+  `resolve()` but must not duplicate catalog constants.
+
+##### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|-----------|-------------------|
+| catalog entry has empty `api_name` | API-family decode returns `CatalogError::EmptyApiName` |
+| catalog entry has `frozen_version = 0` | API-family decode returns `CatalogError::MissingFrozenVersion` |
+| catalog entry uses unknown/unspecified stability | API-family decode returns `CatalogError::UnknownStability` |
+| catalog declares duplicate `(api_name, frozen_version)` | API-family decode returns `CatalogError::DuplicateCapability` |
+| vendor requirement has empty `api_name` | `vendor-enhanced` returns `CatalogError::EmptyGenericEnhancedRequirement` |
+| vendor requirement has `frozen_version = 0` | `vendor-enhanced` returns `CatalogError::MissingGenericEnhancedRequirementVersion` |
+| vendor requirement duplicates `(api_name, frozen_version)` | `vendor-enhanced` returns `CatalogError::DuplicateGenericEnhancedRequirement` |
+| provider registered twice for same capability | `enhanced-registry` returns `RegistryError::DuplicateProvider` |
+| provider resolve misses capability | `enhanced-registry` returns `ResolveError::ProviderNotRegistered` |
+| ESP esptool bridge lacks virtual serial requirement | `vendor-enhanced` rejects it with `CatalogError::EsptoolBridgeMissingVirtualSerialRequirement` |
+
+##### 5. Good/Base/Bad Cases
+
+- Good: `vendor-enhanced` decodes
+  `wiremux.vendor.enhanced.espressif.esptool_bridge@1`, converts the
+  `wiremux.generic.enhanced.virtual_serial@1` requirement into a shared
+  `CapabilityRequirement`, and registers the provider through
+  `enhanced_registry::ProviderRegistry`.
+- Base: `generic-enhanced` decodes
+  `wiremux.generic.enhanced.virtual_serial@1` and registers the virtual serial
+  provider through the same shared registry type.
+- Bad: `vendor-enhanced` defines its own private `ProviderRegistry` or imports
+  `generic_enhanced.proto` only to express a virtual serial requirement.
+
+##### 6. Tests Required
+
+Required commands after touching this boundary:
+
+```bash
+cd sources/host/wiremux
+cargo test -p enhanced-registry
+cargo test -p generic-enhanced
+cargo test -p vendor-enhanced
+cargo test -p tui --features esp32 esp_enhanced
+cargo check --features generic-enhanced
+cargo check --features esp32
+cargo check --features all-vendors
+cargo check --features all-features
+```
+
+Assertion points:
+
+- `enhanced-registry` tests cover provider registration, duplicate rejection,
+  and missing-provider resolution.
+- `generic-enhanced` tests cover catalog decode, namespace lookup, duplicate
+  catalog rejection, and shared-registry provider registration.
+- `vendor-enhanced` tests cover catalog decode, namespace lookup, generic
+  capability requirement conversion, duplicate requirement rejection, missing
+  virtual serial requirement rejection, and shared-registry provider
+  registration.
+- TUI ESP enhanced tests cover that ESP enhanced support is backed by
+  `vendor_enhanced::host_supports_esptool_bridge_provider()`.
+
+##### 7. Wrong vs Correct
+
+Wrong:
+
+```rust
+// crates/vendor-enhanced/src/lib.rs
+struct VendorEnhancedRegistry {
+    providers: HashMap<CapabilityId, ProviderRegistration>,
+}
+```
+
+This makes registry semantics vendor-specific and forces future generic,
+vendor, or private overlay catalogs to duplicate resolve behavior.
+
+Correct:
+
+```rust
+// crates/vendor-enhanced/src/lib.rs
+pub type VendorEnhancedRegistry = enhanced_registry::ProviderRegistry;
+
+pub fn register_esptool_bridge_provider(
+    registry: &mut VendorEnhancedRegistry,
+) -> Result<(), BuiltInProviderError> {
+    registry.register(
+        latest_esptool_bridge_declaration()?,
+        "esptool_bridge",
+    )?;
+    Ok(())
+}
+```
+
+Wrong:
+
+```proto
+// Do not import generic enhanced proto just to declare a requirement.
+import "generic_enhanced.proto";
+```
+
+Correct:
+
+```proto
+message HostCapabilityRequirement {
+  string api_name = 1;
+  uint32 frozen_version = 2;
+  string description = 3;
+}
+```
 
 Tests required:
 

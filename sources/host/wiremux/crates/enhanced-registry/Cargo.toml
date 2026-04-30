@@ -1,0 +1,9 @@
+[package]
+name = "enhanced-registry"
+version = "2604.30.3"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "enhanced_registry"
+path = "src/lib.rs"

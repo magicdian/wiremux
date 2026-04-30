@@ -1,16 +1,20 @@
 [workspace]
 members = [
+    "crates/enhanced-registry",
     "crates/generic-enhanced",
     "crates/host-session",
     "crates/interactive",
     "crates/tui",
     "crates/cli",
+    "crates/vendor-enhanced",
 ]
 default-members = [
+    "crates/enhanced-registry",
     "crates/generic-enhanced",
     "crates/host-session",
     "crates/interactive",
     "crates/tui",
     "crates/cli",
+    "crates/vendor-enhanced",
 ]
 resolver = "2"

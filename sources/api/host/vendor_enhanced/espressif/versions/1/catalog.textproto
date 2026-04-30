@@ -1,0 +1,12 @@
+current_version: 1
+apis {
+  api_name: "wiremux.vendor.enhanced.espressif.esptool_bridge"
+  frozen_version: 1
+  stability: ESPRESSIF_VENDOR_ENHANCED_API_STABILITY_FROZEN
+  description: "Espressif ESP-IDF/esptool compatibility bridge over a host-managed enhanced virtual serial endpoint."
+  generic_enhanced_requirements {
+    api_name: "wiremux.generic.enhanced.virtual_serial"
+    frozen_version: 1
+    description: "Host-managed virtual serial endpoint used as the esptool-facing bridge port."
+  }
+}

@@ -58,7 +58,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "cli"
-version = "2604.30.2"
+version = "2604.30.3"
 dependencies = [
  "crossterm",
  "host-session",
@@ -214,6 +214,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "enhanced-registry"
+version = "2604.30.3"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,8 +259,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "generic-enhanced"
-version = "2604.30.2"
+version = "2604.30.3"
 dependencies = [
+ "enhanced-registry",
  "prost",
  "prost-build",
 ]
@@ -308,7 +313,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "host-session"
-version = "2604.30.2"
+version = "2604.30.3"
 
 [[package]]
 name = "id-arena"
@@ -358,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "interactive"
-version = "2604.30.2"
+version = "2604.30.3"
 dependencies = [
  "crossterm",
  "generic-enhanced",
@@ -1083,12 +1088,15 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tui"
-version = "2604.30.2"
+version = "2604.30.3"
 dependencies = [
  "crossterm",
  "host-session",
  "interactive",
  "ratatui",
+ "serde",
+ "toml",
+ "vendor-enhanced",
 ]
 
 [[package]]
@@ -1134,6 +1142,15 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "vendor-enhanced"
+version = "2604.30.3"
+dependencies = [
+ "enhanced-registry",
+ "prost",
+ "prost-build",
+]
 
 [[package]]
 name = "wasi"

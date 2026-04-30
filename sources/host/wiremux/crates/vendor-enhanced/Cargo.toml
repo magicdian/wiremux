@@ -1,0 +1,16 @@
+[package]
+name = "vendor-enhanced"
+version = "2604.30.3"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "vendor_enhanced"
+path = "src/lib.rs"
+
+[dependencies]
+enhanced-registry = { path = "../enhanced-registry" }
+prost = "0.13"
+
+[build-dependencies]
+prost-build = "0.13"

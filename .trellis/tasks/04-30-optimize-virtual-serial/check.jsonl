@@ -1,0 +1,6 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Review POC placement against host layout"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Review backend quality gates and tests"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Review probe error behavior"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review DriverKit/Rust boundary contract"}

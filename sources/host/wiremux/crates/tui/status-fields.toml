@@ -1,0 +1,86 @@
+version = 1
+navigation = "clamp"
+
+[[field]]
+id = "status.current"
+label = "status"
+priority = 0
+summary = true
+
+[[field]]
+id = "filter.active"
+label = "filter"
+priority = 1
+summary = true
+
+[[field]]
+id = "input.mode"
+label = "input"
+priority = 1
+summary = true
+
+[[field]]
+id = "connection.connected"
+label = "conn"
+priority = 2
+summary = true
+
+[[field]]
+id = "connection.target"
+label = "target"
+priority = 2
+summary = true
+
+[[field]]
+id = "device.api"
+label = "api"
+priority = 3
+summary = true
+
+[[field]]
+id = "enhanced.esp"
+label = "esp"
+priority = 4
+summary = true
+
+[[field]]
+id = "enhanced.vtty"
+label = "vtty"
+priority = 4
+summary = true
+
+[[field]]
+id = "runtime.backend"
+label = "backend"
+priority = 5
+summary = true
+
+[[field]]
+id = "runtime.fps"
+label = "fps"
+priority = 5
+summary = true
+
+[[field]]
+id = "device.channels"
+label = "channels"
+priority = 6
+summary = true
+
+[[field]]
+id = "device.firmware"
+label = "firmware"
+priority = 6
+summary = true
+
+[[field]]
+id = "device.max_payload"
+label = "max_payload"
+priority = 6
+summary = true
+
+[[field]]
+id = "device.name"
+label = "device"
+priority = 6
+summary = true

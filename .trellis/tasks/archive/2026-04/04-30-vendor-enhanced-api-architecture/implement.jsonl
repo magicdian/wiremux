@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Host API layout and Rust workspace dependency rules"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Host-side enhanced API snapshot and registry validation requirements"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "API catalog to Rust registry to TUI support flow"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Mirror existing generic enhanced pattern without ad hoc duplication"}

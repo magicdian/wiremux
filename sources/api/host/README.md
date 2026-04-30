@@ -11,3 +11,7 @@ Current host API families:
 
 - `generic_enhanced`: vendor-neutral enhanced host services that vendor
   overlays can depend on.
+- `vendor_enhanced/espressif`: Wiremux-maintained Espressif vendor enhanced
+  services, including the ESP-IDF/esptool bridge. Vendor enhanced APIs may
+  declare required generic enhanced capabilities by stable API name and frozen
+  version, but they do not import generic enhanced proto files.

@@ -104,7 +104,17 @@ Rules:
 - Generic enhanced host API catalog changes must keep
   `sources/api/host/generic_enhanced/versions/current/catalog.textproto`, any
   matching frozen catalog snapshot, and the Rust
-  `crates/generic-enhanced` decode/registry tests in sync.
+  `crates/generic-enhanced` decode and provider-registration tests in sync.
+- Vendor enhanced host API catalog changes must keep the relevant
+  `sources/api/host/vendor_enhanced/<vendor>/versions/current/catalog.textproto`,
+  any matching frozen catalog snapshot, and the Rust `crates/vendor-enhanced`
+  decode and provider-registration tests in sync. Vendor enhanced schemas may
+  declare generic enhanced capability requirements by stable API name and frozen
+  version, but must not import generic enhanced proto files solely for those
+  requirements.
+- Shared enhanced registry changes must keep `crates/enhanced-registry` tests in
+  sync and must not move proto-specific parsing or vendor-specific provider
+  behavior into the shared registry crate.
 - Do not add production-only abstractions solely to demonstrate GoogleMock.
   Link `GTest::gmock_main` so real future collaboration boundaries can use
   gmock when they exist.
@@ -286,6 +296,28 @@ the demo, and host verification commands in the same task.
   FPS status belong in the existing status area, not a separate debug panel.
   TUI status must also distinguish the requested physical target from the
   resolved connected path.
+- TUI status field priority is a compile-time contract owned by
+  `sources/host/wiremux/crates/tui/status-fields.toml`. The `tui` crate
+  `build.rs` must parse and validate this TOML at build time, then generate the
+  in-binary `STATUS_FIELD_DEFINITIONS` constants. Runtime TUI rendering must not
+  read a mutable user status-priority file for the built-in defaults.
+- TUI status pages are dynamic, not fixed semantic tabs. In
+  `sources/host/wiremux/crates/tui/src/lib.rs`, status fields must sort by
+  `(priority, id)` where priority `0` is highest and same-priority fields use
+  stable field-id alphabetical order. Rendering must pack sorted fields into the
+  two status content rows using the current status panel width; fields that do
+  not fit on the active page must remain reachable on later pages. Resizing the
+  terminal wider or narrower must recompute both page count and visible fields
+  during render.
+- TUI status page navigation must not mutate `App::status`. The `status.current`
+  field is itself an input to dynamic pagination; writing page-boundary messages
+  such as `status page: 1/7` into `App::status` changes the field width and can
+  make page counts oscillate while the user presses left/right. Page position
+  belongs in the status block title.
+- TUI status pagination must not create empty pages. If the current page is
+  empty and a single status field is wider than one status row, force that field
+  onto the page and use the second status row as a continuation before accepting
+  terminal clipping.
 - TUI settings panels must follow `docs/wiremux-tui-menuconfig-style.md` for
   row grammar, popup behavior, dirty tracking, `Esc` behavior, and the `80x24`
   minimum viewport overlay.
@@ -354,6 +386,10 @@ the demo, and host verification commands in the same task.
 | TUI/passthrough waits for serial data while the user types | keyboard handling is not gated by a long passive-listener read timeout |
 | window resize occurs while `wiremux tui` is running | TUI redraws/resizes and does not exit with `Interrupted system call` |
 | TUI receives manifest with protocol API version | status displays the device API version from `DeviceManifest.protocol_version` |
+| TUI status width changes | status pages are recomputed from current width; wide terminals can collapse fields into fewer pages and narrow terminals move overflow fields to later pages |
+| user navigates status pages at the first/last page with clamp mode | active page remains clamped and `App::status` is not mutated by page navigation |
+| a single status field is wider than one status row | first row shows the field label and leading value, second row continues the value, and no blank page is inserted before the field |
+| passthrough mode is active and user presses bare left/right | key bytes are forwarded to the device; status navigation remains available through `Ctrl-B Left/Right` and `Ctrl-B [` / `Ctrl-B ]` |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
 | passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
 | passthrough command output wraps inside a narrow output pane | scrollbar and cursor row/column follow visual wrapped rows, not the logical `OutputLine` index |
@@ -384,6 +420,14 @@ the demo, and host verification commands in the same task.
   compat`.
 - Good: TUI status shows `api=<version>` from the received device manifest so
   users can see which proto API the device is using.
+- Good: an 80-column TUI status panel shows the highest-priority fields first
+  and moves lower-priority fields to later dynamic pages instead of permanently
+  hiding them.
+- Good: a very narrow TUI status panel showing
+  `esp esp-enhanced monitor /tmp/wiremux/tty/...` uses both status rows for that
+  single oversized field before terminal clipping.
+- Good: pressing left on status page 1 in clamp mode leaves the page at 1 and
+  does not write a page-boundary message into `App::status`.
 - Good: `wiremux tui` can start without `--port` when the global config contains
   `[serial].port`; passing `--port` or `--baud` overrides the config only for
   the current run.
@@ -415,6 +459,16 @@ the demo, and host verification commands in the same task.
   boundary.
 - Bad: placing backend/FPS information in a separate TUI panel that hides or
   displaces the existing device manifest/version status.
+- Bad: modeling status pages as fixed `summary`/`runtime`/`connection` tabs;
+  status pages must be derived from current terminal width so no field is lost
+  when the window narrows.
+- Bad: dropping lower-priority status fields when they do not fit on page 1;
+  move them to later pages.
+- Bad: updating `App::status` during status page navigation; it changes the
+  `status.current` field and can make page counts change from `1/7` to `1/8`
+  during navigation.
+- Bad: creating an empty first status page when the first field is wider than a
+  row.
 - Bad: storing virtual channel baud in the physical serial profile. Virtual TTY
   termios compatibility metadata, broker behavior, and channel QoS are separate
   future concerns.
@@ -454,6 +508,12 @@ the demo, and host verification commands in the same task.
   overlay, and status display for requested target vs connected path.
 - Host TUI render tests must assert that the status area includes backend, FPS,
   and device proto API version from `DeviceManifest.protocol_version`.
+- Host TUI status pagination tests must cover dynamic page count recomputation
+  from current status width, `(priority, id)` ordering, passthrough preserving
+  bare arrow keys, prefix-based status navigation, clamp-mode first/last page
+  behavior, no `App::status` mutation during page navigation, no empty first page
+  for oversized first fields, and two-row continuation for a single oversized
+  status field.
 - Host interactive event-loop tests must cover retry behavior for
   `std::io::ErrorKind::Interrupted`, because unit tests cannot reliably deliver
   real terminal resize signals in CI.
@@ -1278,9 +1338,184 @@ idf.py flash --port /tmp/wiremux/tty/tty.wiremux-esp-enhanced --baud 115200
 until a DriverKit/native virtual serial backend can accept esptool's high-baud
 ioctl on the enhanced tty path.
 
+## Scenario: macOS Native Virtual Serial Backend
+
+### 1. Scope / Trigger
+
+Trigger: any change to macOS virtual serial endpoint creation, ESP enhanced
+flash UX, pyserial/esptool compatibility, DriverKit POCs, virtual serial
+distribution, or fallback transports such as PTY, RFC2217, symlink handoff,
+Virtualization.framework, or process injection.
+
+This is a platform boundary. macOS has materially different serial semantics
+from Linux PTYs because pyserial uses `IOSSIOSPEED` for custom baud rates and
+ESP-IDF/esptool expects modem-control behavior on the opened serial file
+descriptor.
+
+### 2. Signatures
+
+POC location:
+
+```text
+sources/poc/macos/driverkit-serial-poc/
+sources/poc/macos/driverkit-serial-poc/probes/driverkit-env.sh
+sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh
+sources/poc/macos/driverkit-serial-poc/probes/activate-driverkit-poc.sh
+sources/poc/macos/driverkit-serial-poc/xcode/WiremuxDriverKitSerialPOC.xcodeproj
+```
+
+DriverKit serial hook surface:
+
+```cpp
+class WiremuxSerialDriver : public IOUserSerial {
+public:
+    kern_return_t HwProgramBaudRate(uint32_t baudRate) override;
+    kern_return_t HwProgramMCR(bool dtr, bool rts) override;
+    kern_return_t HwGetModemStatus(
+        bool *cts,
+        bool *dsr,
+        bool *ri,
+        bool *dcd) override;
+    kern_return_t HwProgramUART(
+        uint32_t baudRate,
+        uint8_t nDataBits,
+        uint8_t nHalfStopBits,
+        uint8_t parity) override;
+};
+```
+
+Build probes:
+
+```bash
+./sources/poc/macos/driverkit-serial-poc/probes/driverkit-env.sh
+./sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh
+CODE_SIGNING_ALLOWED=YES \
+DEVELOPMENT_TEAM=<team-id> \
+PROVISIONING_PROFILE_SPECIFIER=<profile-name> \
+./sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh
+```
+
+### 3. Contracts
+
+- POCs and platform feasibility spikes belong under `sources/poc/`, not under
+  `sources/host/wiremux`, until they are promoted into a production backend.
+- A seamless macOS ESP enhanced flash experience means external tools can use a
+  normal tty-shaped port and default esptool behavior such as high baud changes
+  and DTR/RTS control without a Wiremux-specific wrapper.
+- For that seamless macOS experience, DriverKit/SerialDriverKit is the only
+  accepted roadmap backend discovered so far. It is the API surface that can
+  expose an OS serial service and receive baud/modem-control callbacks from the
+  kernel serial stack.
+- macOS PTY aliases remain a compatibility backend only. They can carry bytes,
+  but must not be treated as high-baud-compatible serial devices because
+  pyserial's `IOSSIOSPEED` ioctl can fail with `ENOTTY`.
+- `VZSerialPortConfiguration`, `VZConsolePortConfiguration`, and related
+  Virtualization.framework APIs configure serial/console devices for a VM
+  guest. They do not create a host macOS `/dev/cu.*` or `/dev/tty.*` serial node
+  for host-side `idf.py` / pyserial.
+- Symlink handoff to a physical `/dev/cu.*` device can avoid the PTY ioctl only
+  if Wiremux releases the physical serial port before esptool opens the
+  symlink. Changing a symlink after esptool has opened the PTY does not change
+  the already-open file descriptor.
+- `DYLD_INSERT_LIBRARIES` shims may be used only as an explicit wrapper/debug
+  workaround for non-platform Python processes. They must be injected before
+  Python/esptool starts and must not be represented as seamless serial-device
+  support.
+- DriverKit loading/distribution requires code signing, provisioning, and
+  Apple-granted DriverKit serial entitlements. Unsigned builds prove source,
+  IIG, link, and bundle shape only; they do not prove activation or `/dev`
+  creation.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|------|-------------------|
+| unsigned DriverKit POC build requested | run `build-driverkit-poc.sh` with `CODE_SIGNING_ALLOWED=NO` and validate IIG/link/embed only |
+| signed DriverKit POC requested without provisioning | fail with an actionable signing/provisioning/entitlement message |
+| activated signed DriverKit POC creates `/dev/cu.wiremux*` | run pyserial baud, DTR, and RTS probes against that node |
+| pyserial sets `460800` on macOS PTY | expected failure is `ENOTTY`/`Inappropriate ioctl for device`; do not mark raw bridge broken |
+| Virtualization.framework serial approach proposed | reject as a seamless host `/dev` backend unless esptool is intentionally moved into a VM guest |
+| symlink is changed after esptool opened the enhanced port | no effect on the existing fd; do not expect ioctl behavior to change |
+| symlink handoff is used before esptool starts | Wiremux must close the physical serial port first and restore ownership after flashing |
+| DYLD shim is used | wrapper must set `DYLD_INSERT_LIBRARIES` before launching Python/esptool |
+| Python/esptool is already running | do not attempt product dynamic injection into the running process |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a signed DriverKit serial dext exposes a macOS serial node, and pyserial
+  calls for `baudrate = 460800`, DTR, and RTS reach DriverKit hooks such as
+  `HwProgramBaudRate()` and `HwProgramMCR()`.
+- Good: an unsigned POC stays under `sources/poc/macos/driverkit-serial-poc/`
+  and documents that it validates build shape only.
+- Base: PTY backend remains available and documents
+  `idf.py flash --baud 115200` as the macOS MVP command.
+- Base: a Wiremux-owned wrapper may use RFC2217, symlink handoff, or
+  `DYLD_INSERT_LIBRARIES` as explicit non-seamless fallback UX.
+- Bad: claiming `VZSerialPortConfiguration` solves host-side
+  `/dev/cu.wiremux` because it can connect VM guest serial bytes to a host file
+  handle.
+- Bad: changing `/tmp/wiremux/tty/tty.wiremux-esp-enhanced` from a PTY symlink
+  to `/dev/cu.usbmodem*` after esptool has already opened it and expecting the
+  open fd's ioctl behavior to change.
+- Bad: injecting an ioctl shim into an already-running Python/esptool process as
+  a product feature.
+
+### 6. Tests Required
+
+- For DriverKit POC changes:
+  - `sh -n sources/poc/macos/driverkit-serial-poc/probes/*.sh`
+  - `plutil -lint` for POC plist and entitlement files
+  - `xmllint --noout` for the shared Xcode scheme
+  - `xcodebuild -list -project sources/poc/macos/driverkit-serial-poc/xcode/WiremuxDriverKitSerialPOC.xcodeproj`
+  - `sources/poc/macos/driverkit-serial-poc/probes/build-driverkit-poc.sh`
+- For signed local activation attempts:
+  - `sources/poc/macos/driverkit-serial-poc/probes/activate-driverkit-poc.sh`
+  - `systemextensionsctl list`
+  - `ls -l /dev/tty.wiremux* /dev/cu.wiremux*`
+  - pyserial open, baud, DTR, and RTS probes against the generated node
+- For PTY fallback changes:
+  - `sources/poc/macos/driverkit-serial-poc/probes/pyserial-pty-baud.py`
+  - host Rust checks from `sources/host/wiremux` when production Rust code is
+    touched.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Use Virtualization.framework VZSerialPortConfiguration to create the macOS
+host-side enhanced serial port for idf.py.
+```
+
+#### Correct
+
+```text
+Use DriverKit/SerialDriverKit for a seamless host-side macOS serial node.
+Use Virtualization.framework only if the flashing tool intentionally runs
+inside a VM guest.
+```
+
+#### Wrong
+
+```text
+After raw bridge starts, repoint the enhanced PTY symlink to /dev/cu.usbmodem*
+and expect esptool's existing fd to accept IOSSIOSPEED.
+```
+
+#### Correct
+
+```text
+For a handoff fallback, close Wiremux's physical serial handle and repoint the
+symlink before launching esptool, then restore Wiremux ownership after flashing.
+```
+
 ## Testing Requirements
 
 - Host Rust code must pass `cargo test`, `cargo check`, and `cargo fmt --check`.
+- Host CI runners must install `protoc` before running host checks. On Ubuntu,
+  install it with `protobuf-compiler`; `crates/generic-enhanced/build.rs` and
+  `crates/vendor-enhanced/build.rs` use it for host enhanced API codegen and
+  catalog encoding.
 - Portable C core changes must compile and pass the host-side GoogleTest suite:
   `cmake -S sources/core/c -B sources/core/c/build`, `cmake --build
   sources/core/c/build`, and `ctest --test-dir sources/core/c/build

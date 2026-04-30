@@ -83,6 +83,10 @@ impl EspressifEnhancedHost {
     }
 
     pub fn sync_manifest(&mut self, manifest: &DeviceManifest) -> Vec<String> {
+        if !host_supports_espressif_enhanced_provider() {
+            self.clear();
+            return Vec::new();
+        }
         if !is_espressif_manifest(manifest) {
             self.clear();
             return Vec::new();
@@ -389,6 +393,10 @@ impl EspressifEnhancedHost {
     }
 }
 
+fn host_supports_espressif_enhanced_provider() -> bool {
+    vendor_enhanced::host_supports_esptool_bridge_provider()
+}
+
 fn is_espressif_manifest(manifest: &DeviceManifest) -> bool {
     let sdk = manifest.sdk_name.to_ascii_lowercase();
     let device = manifest.device_name.to_ascii_lowercase();
@@ -615,6 +623,11 @@ mod tests {
 
         assert_eq!(commands.len(), 1);
         assert_eq!(change_baud_rate(&commands[0]), Some(460_800));
+    }
+
+    #[test]
+    fn esp_enhanced_support_is_backed_by_vendor_registry() {
+        assert!(host_supports_espressif_enhanced_provider());
     }
 
     #[test]

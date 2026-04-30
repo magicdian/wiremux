@@ -1,0 +1,49 @@
+#ifndef WiremuxSerialDriver_h
+#define WiremuxSerialDriver_h
+
+#include <SerialDriverKit/IOUserSerial.iig>
+
+class WiremuxSerialDriver : public IOUserSerial
+{
+public:
+    virtual kern_return_t Start(IOService *provider) override;
+    virtual kern_return_t Stop(IOService *provider) override;
+
+    virtual kern_return_t ConnectQueues(
+        IOBufferMemoryDescriptor **ifmd,
+        IOMemoryDescriptor **rxqmd,
+        IOMemoryDescriptor **txqmd,
+        IOMemoryDescriptor *in_rxqmd,
+        IOMemoryDescriptor *in_txqmd,
+        uint32_t in_rxqoffset,
+        uint32_t in_txqoffset,
+        uint8_t in_rxqlogsz,
+        uint8_t in_txqlogsz) override;
+    virtual kern_return_t DisconnectQueues() override;
+    virtual void RxFreeSpaceAvailable() override;
+    virtual void TxDataAvailable() override;
+
+    virtual kern_return_t HwActivate() override;
+    virtual kern_return_t HwDeactivate() override;
+    virtual kern_return_t HwResetFIFO(bool tx, bool rx) override;
+    virtual kern_return_t HwSendBreak(bool sendBreak) override;
+    virtual kern_return_t HwProgramUART(
+        uint32_t baudRate,
+        uint8_t nDataBits,
+        uint8_t nHalfStopBits,
+        uint8_t parity) override;
+    virtual kern_return_t HwProgramBaudRate(uint32_t baudRate) override;
+    virtual kern_return_t HwProgramMCR(bool dtr, bool rts) override;
+    virtual kern_return_t HwGetModemStatus(
+        bool *cts,
+        bool *dsr,
+        bool *ri,
+        bool *dcd) override;
+    virtual kern_return_t HwProgramLatencyTimer(uint32_t latency) override;
+    virtual kern_return_t HwProgramFlowControl(
+        uint32_t arg,
+        uint8_t xon,
+        uint8_t xoff) override;
+};
+
+#endif /* WiremuxSerialDriver_h */
