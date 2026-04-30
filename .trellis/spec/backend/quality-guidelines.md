@@ -296,6 +296,28 @@ the demo, and host verification commands in the same task.
   FPS status belong in the existing status area, not a separate debug panel.
   TUI status must also distinguish the requested physical target from the
   resolved connected path.
+- TUI status field priority is a compile-time contract owned by
+  `sources/host/wiremux/crates/tui/status-fields.toml`. The `tui` crate
+  `build.rs` must parse and validate this TOML at build time, then generate the
+  in-binary `STATUS_FIELD_DEFINITIONS` constants. Runtime TUI rendering must not
+  read a mutable user status-priority file for the built-in defaults.
+- TUI status pages are dynamic, not fixed semantic tabs. In
+  `sources/host/wiremux/crates/tui/src/lib.rs`, status fields must sort by
+  `(priority, id)` where priority `0` is highest and same-priority fields use
+  stable field-id alphabetical order. Rendering must pack sorted fields into the
+  two status content rows using the current status panel width; fields that do
+  not fit on the active page must remain reachable on later pages. Resizing the
+  terminal wider or narrower must recompute both page count and visible fields
+  during render.
+- TUI status page navigation must not mutate `App::status`. The `status.current`
+  field is itself an input to dynamic pagination; writing page-boundary messages
+  such as `status page: 1/7` into `App::status` changes the field width and can
+  make page counts oscillate while the user presses left/right. Page position
+  belongs in the status block title.
+- TUI status pagination must not create empty pages. If the current page is
+  empty and a single status field is wider than one status row, force that field
+  onto the page and use the second status row as a continuation before accepting
+  terminal clipping.
 - TUI settings panels must follow `docs/wiremux-tui-menuconfig-style.md` for
   row grammar, popup behavior, dirty tracking, `Esc` behavior, and the `80x24`
   minimum viewport overlay.
@@ -364,6 +386,10 @@ the demo, and host verification commands in the same task.
 | TUI/passthrough waits for serial data while the user types | keyboard handling is not gated by a long passive-listener read timeout |
 | window resize occurs while `wiremux tui` is running | TUI redraws/resizes and does not exit with `Interrupted system call` |
 | TUI receives manifest with protocol API version | status displays the device API version from `DeviceManifest.protocol_version` |
+| TUI status width changes | status pages are recomputed from current width; wide terminals can collapse fields into fewer pages and narrow terminals move overflow fields to later pages |
+| user navigates status pages at the first/last page with clamp mode | active page remains clamped and `App::status` is not mutated by page navigation |
+| a single status field is wider than one status row | first row shows the field label and leading value, second row continues the value, and no blank page is inserted before the field |
+| passthrough mode is active and user presses bare left/right | key bytes are forwarded to the device; status navigation remains available through `Ctrl-B Left/Right` and `Ctrl-B [` / `Ctrl-B ]` |
 | passthrough ch1 echo is interrupted by ch2/ch3/ch4 output before CR/LF | TUI appends later ch1 bytes/backspace edits to the existing incomplete ch1 stream line |
 | passthrough command output ends with non-empty line | live-tail render shows the next `chN(name)> ` prompt row and cursor without storing that row in history |
 | passthrough command output wraps inside a narrow output pane | scrollbar and cursor row/column follow visual wrapped rows, not the logical `OutputLine` index |
@@ -394,6 +420,14 @@ the demo, and host verification commands in the same task.
   compat`.
 - Good: TUI status shows `api=<version>` from the received device manifest so
   users can see which proto API the device is using.
+- Good: an 80-column TUI status panel shows the highest-priority fields first
+  and moves lower-priority fields to later dynamic pages instead of permanently
+  hiding them.
+- Good: a very narrow TUI status panel showing
+  `esp esp-enhanced monitor /tmp/wiremux/tty/...` uses both status rows for that
+  single oversized field before terminal clipping.
+- Good: pressing left on status page 1 in clamp mode leaves the page at 1 and
+  does not write a page-boundary message into `App::status`.
 - Good: `wiremux tui` can start without `--port` when the global config contains
   `[serial].port`; passing `--port` or `--baud` overrides the config only for
   the current run.
@@ -425,6 +459,16 @@ the demo, and host verification commands in the same task.
   boundary.
 - Bad: placing backend/FPS information in a separate TUI panel that hides or
   displaces the existing device manifest/version status.
+- Bad: modeling status pages as fixed `summary`/`runtime`/`connection` tabs;
+  status pages must be derived from current terminal width so no field is lost
+  when the window narrows.
+- Bad: dropping lower-priority status fields when they do not fit on page 1;
+  move them to later pages.
+- Bad: updating `App::status` during status page navigation; it changes the
+  `status.current` field and can make page counts change from `1/7` to `1/8`
+  during navigation.
+- Bad: creating an empty first status page when the first field is wider than a
+  row.
 - Bad: storing virtual channel baud in the physical serial profile. Virtual TTY
   termios compatibility metadata, broker behavior, and channel QoS are separate
   future concerns.
@@ -464,6 +508,12 @@ the demo, and host verification commands in the same task.
   overlay, and status display for requested target vs connected path.
 - Host TUI render tests must assert that the status area includes backend, FPS,
   and device proto API version from `DeviceManifest.protocol_version`.
+- Host TUI status pagination tests must cover dynamic page count recomputation
+  from current status width, `(priority, id)` ordering, passthrough preserving
+  bare arrow keys, prefix-based status navigation, clamp-mode first/last page
+  behavior, no `App::status` mutation during page navigation, no empty first page
+  for oversized first fields, and two-row continuation for a single oversized
+  status field.
 - Host interactive event-loop tests must cover retry behavior for
   `std::io::ErrorKind::Interrupted`, because unit tests cannot reliably deliver
   real terminal resize signals in CI.
