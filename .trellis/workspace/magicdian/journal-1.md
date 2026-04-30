@@ -1479,3 +1479,36 @@ Documented the host-side generic enhanced API stability model, added current and
 ### Next Steps
 
 - None - task complete
+
+
+## Session 37: Host generic enhanced capability registry
+
+**Date**: 2026-04-30
+**Task**: Host generic enhanced capability registry
+**Branch**: `dev`
+
+### Summary
+
+Added Rust host generic-enhanced crate with protobuf catalog decoding and registry/provider resolution for virtual serial; wired CLI/interactive support checks through registry; updated API catalog docs and backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f4c9d11` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
