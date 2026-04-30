@@ -3,7 +3,7 @@
   "name": "enhanced-overlay-api-stability",
   "title": "brainstorm: enhanced overlay api stability",
   "description": "",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "backend",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "magicdian",
   "assignee": "magicdian",
   "createdAt": "2026-04-30",
-  "completedAt": null,
+  "completedAt": "2026-04-30",
   "branch": null,
   "base_branch": "dev",
   "worktree_path": null,
@@ -42,7 +42,7 @@
       "action": "record-session"
     }
   ],
-  "commit": null,
+  "commit": "341e1b5",
   "pr_url": null,
   "subtasks": [],
   "children": [],

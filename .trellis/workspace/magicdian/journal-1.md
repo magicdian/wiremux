@@ -350,7 +350,13 @@ Added ratatui host TUI, host-initiated DeviceManifestRequest discovery, core cha
 
 ### Main Changes
 
-(Add details)
+- Added `sources/api/host/generic_enhanced/versions/{current,1}` proto
+  snapshots for the host-side generic enhanced capability catalog.
+- Documented generic enhanced stable/frozen API rules, virtual serial as the
+  first generic enhanced capability, and the future
+  catalog-to-registry-to-provider resolution flow.
+- Updated backend Trellis specs so future API work knows where host-side
+  enhanced snapshots live.
 
 ### Git Commits
 
@@ -1429,6 +1435,42 @@ Validation:
 ### Testing
 
 - [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 36: Define generic enhanced host contract
+
+**Date**: 2026-04-30
+**Task**: Define generic enhanced host contract
+**Branch**: `dev`
+
+### Summary
+
+Documented the host-side generic enhanced API stability model, added current and frozen v1 proto snapshots for the generic enhanced capability catalog, and recorded virtual serial as the first generic enhanced capability for future vendor overlay resolution.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `341e1b5` | docs(api): define generic enhanced host contract |
+
+### Testing
+
+- [OK] `protoc` descriptor generation for current generic enhanced proto.
+- [OK] `protoc` descriptor generation for frozen v1 generic enhanced proto.
+- [OK] `git diff --check`.
+- [OK] `python3 ./.trellis/scripts/task.py validate .trellis/tasks/04-30-enhanced-overlay-api-stability`.
 
 ### Status
 
