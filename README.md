@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-[![Version](https://img.shields.io/badge/version-2604.30.3-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2605.3.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux is a lightweight channel multiplexer for serial-style byte streams. It lets one UART, USB CDC, USB Serial/JTAG, TCP bridge, or other ordered byte transport carry multiple logical channels at the same time, so logs, console commands, telemetry, and structured diagnostics do not have to fight over one raw stream.

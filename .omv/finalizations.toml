@@ -1,0 +1,14 @@
+schema_version = 1
+
+[[entries]]
+task_id = "integrate-omv-versioning"
+fingerprint = "finalize-boundary:integrate-omv-versioning:trellis-finish-work:5b384c8ab4b88089"
+change_type = "chore"
+task_status = "done"
+tests_status = "passed"
+source = "trellis-finish-work"
+outcome = "no-op"
+reason = "non-semantic-change"
+version_before = "2605.3.1"
+version_after = "2605.3.1"
+recorded_at = "1777785555"
