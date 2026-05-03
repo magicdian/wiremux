@@ -59,9 +59,9 @@ wiremux tui --port /dev/tty.usbmodem2101 --baud 115200
 
 ## Example
 
-This component includes `esp_wiremux_console_demo` as a Registry example. It
-shows line-mode console input on channel 1, ESP log output on channel 2,
-telemetry on channel 3, and UTF-8 text output on channel 4.
+This component includes beginner, advanced, and professional Registry examples.
+The professional example shows line-mode console input on channel 1, ESP log
+output on channel 2, telemetry on channel 3, and UTF-8 text output on channel 4.
 
 ## Channels
 

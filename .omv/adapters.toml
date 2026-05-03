@@ -1,0 +1,38 @@
+schema_version = 1
+
+[[installations]]
+kind = "agent"
+name = "codex"
+install_mode = "materialize"
+source_contract_version = 1
+
+[[installations.targets]]
+path = "AGENTS.md"
+source_path = ".omv/ai/adapters/codex/AGENTS.md"
+mode = "managed-block"
+
+[[installations.targets]]
+path = ".codex/skills/omv-versioning/SKILL.md"
+source_path = ".omv/ai/adapters/codex/SKILL.md"
+mode = "materialize"
+
+[[installations]]
+kind = "spec"
+name = "trellis"
+install_mode = "materialize"
+source_contract_version = 1
+
+[[installations.targets]]
+path = ".trellis/spec/guides/omv-versioning-guide.md"
+source_path = ".omv/ai/adapters/trellis/guide.md"
+mode = "materialize"
+
+[[installations.targets]]
+path = ".trellis/spec/guides/index.md"
+source_path = ".omv/ai/adapters/trellis/index-snippet.md"
+mode = "managed-block"
+
+[[installations.targets]]
+path = ".agents/skills/finish-work/SKILL.md"
+source_path = ".omv/ai/contract.json"
+mode = "managed-block"

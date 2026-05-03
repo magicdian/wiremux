@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[![Version](https://img.shields.io/badge/version-2604.30.3-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2605.3.2-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以在一个 UART、USB CDC、USB Serial/JTAG、TCP bridge 或其他有序字节 transport 上同时承载多个逻辑 channel，让日志、console 命令、telemetry 和诊断数据不再挤在同一个原始字节流里。
@@ -13,7 +13,8 @@ Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以
 
 - `sources/core/c`：平台无关的 C 协议核心。
 - `sources/vendor/espressif/generic/components/esp-wiremux`：ESP-IDF adapter component。
-- `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo`：ESP-IDF console 示例。
+- `sources/vendor/espressif/generic/examples`：ESP-IDF beginner、advanced 和
+  professional API 示例。
 - `sources/host/wiremux`：Rust host 工具，提供 `listen`、`send` 和 TUI 模式。
 
 ## 适用场景
@@ -168,10 +169,14 @@ Windows 暂时只保留虚拟串口接口占位，后续再接入 native virtual
 
 ## ESP-IDF 示例
 
+使用 `esp_wiremux_beginner_demo` 体验全局 `wmux_*` quick-start API，
+使用 `esp_wiremux_advanced_demo` 体验显式 `wmux_channel_*` handle，
+使用 `esp_wiremux_professional_demo` 体验完整 `esp_wiremux_*` console demo。
+
 使用 ESP-IDF v5.4 或更新版本：
 
 ```bash
-cd sources/vendor/espressif/generic/examples/esp_wiremux_console_demo
+cd sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo
 idf.py set-target esp32s3
 idf.py build flash monitor
 ```

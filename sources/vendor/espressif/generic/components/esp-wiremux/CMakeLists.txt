@@ -10,6 +10,7 @@ idf_component_register(
         "src/esp_wiremux_console.c"
         "src/esp_wiremux_frame.c"
         "src/esp_wiremux_log.c"
+        "src/wmux.c"
     INCLUDE_DIRS
         "include"
         "../../../../../core/c/include"

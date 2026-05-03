@@ -1,0 +1,66 @@
+schema_version = 1
+
+[[targets]]
+id = "root-version-file"
+kind = "text-scalar"
+adapter = "text"
+path = "VERSION"
+selector = "whole-file"
+template = "{version}\n"
+mode = "write"
+
+[[targets]]
+id = "readme-badge-en"
+kind = "regex-replace"
+adapter = "markdown"
+path = "README.md"
+pattern = "version-[0-9]+\\.[0-9]+\\.[0-9]+-blue"
+template = "version-{version}-blue"
+mode = "write"
+
+[[targets]]
+id = "readme-badge-zh"
+kind = "regex-replace"
+adapter = "markdown"
+path = "README_CN.md"
+pattern = "version-[0-9]+\\.[0-9]+\\.[0-9]+-blue"
+template = "version-{version}-blue"
+mode = "write"
+
+[[targets]]
+id = "esp-component-version"
+kind = "yaml-scalar"
+adapter = "yaml"
+path = "sources/vendor/espressif/generic/components/esp-wiremux/idf_component.yml"
+key = "version"
+template = "\"{version}\""
+mode = "write"
+
+[[targets]]
+id = "esp-public-header-version"
+kind = "c-header-macro"
+adapter = "c-header"
+path = "sources/vendor/espressif/generic/components/esp-wiremux/include/esp_wiremux.h"
+macro = "ESP_WIREMUX_VERSION"
+template = "\"{version}\""
+mode = "write"
+
+[[targets]]
+id = "host-rust-workspace"
+kind = "cargo-workspace"
+adapter = "cargo"
+root = "sources/host/wiremux"
+members = "all"
+version_policy = "same"
+version_location = "member-packages"
+lockfile = "update"
+mode = "write"
+
+[[targets]]
+id = "release-doc-current-version"
+kind = "regex-replace"
+adapter = "markdown"
+path = "docs/esp-registry-release.md"
+pattern = "Current release: `[^`]+`\\."
+template = "Current release: `{version}`."
+mode = "write"

@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "ESP-IDF component and examples live under sources/vendor/espressif/generic"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "ESP inbound dispatch, queue, and API error mapping contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Protocol/API stability and bidirectional console boundary"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Avoid recursive ESP logging while touching mux/log integration"}

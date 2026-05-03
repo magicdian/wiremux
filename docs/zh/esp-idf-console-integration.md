@@ -2,7 +2,7 @@
 
 如果现有项目参考 ESP-IDF v5.4 `examples/system/console/advanced`，接入改动应集中在 console 初始化和 REPL 主循环附近。
 
-`esp_wiremux_console_demo` 已引入官方 console REPL 形态，并注册了几个演示命令：
+`esp_wiremux_professional_demo` 已引入官方 console REPL 形态，并注册了几个演示命令：
 
 ```text
 help
@@ -47,7 +47,7 @@ ESP_ERROR_CHECK(esp_wiremux_bind_console(&console_config));
 // wiremux listen --port /dev/tty.usbmodem2101 --channel 1 --line help
 ```
 
-`esp_wiremux_console_demo` 中 channel 1 已注册为 console input/output。`help` 和 `hello` 命令会把输出写回 channel 1。`mux_manifest` 会在 channel 1 返回回执并在 system channel 0 输出 `wiremux.v1.DeviceManifest` protobuf manifest，`mux_hello` 会在 channel 1 返回回执并在 telemetry channel 3 输出示例数据，`mux_log` 会在 channel 1 返回回执并触发 log channel 2 输出。
+`esp_wiremux_professional_demo` 中 channel 1 已注册为 console input/output。`help` 和 `hello` 命令会把输出写回 channel 1。`mux_manifest` 会在 channel 1 返回回执并在 system channel 0 输出 `wiremux.v1.DeviceManifest` protobuf manifest，`mux_hello` 会在 channel 1 返回回执并在 telemetry channel 3 输出示例数据，`mux_log` 会在 channel 1 返回回执并触发 log channel 2 输出。
 
 Demo 还提供运行时切换命令，不需要重启设备：
 

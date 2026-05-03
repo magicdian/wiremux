@@ -10,7 +10,7 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
-static const char *TAG = "esp_wiremux_console_demo";
+static const char *TAG = "esp_wiremux_professional_demo";
 static const size_t STRESS_SAMPLE_COUNT = 96;
 
 static esp_err_t bind_demo_console(esp_wiremux_console_mode_t mode)

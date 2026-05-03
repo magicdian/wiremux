@@ -77,7 +77,7 @@ The current repository still uses the pre-migration paths:
 | --- | --- | --- |
 | `sources/core/proto` | `sources/api/proto` | PR2 |
 | `sources/esp32/components/esp-wiremux` | `sources/vendor/espressif/generic/components/esp-wiremux` | PR3 |
-| `sources/esp32/examples/esp_wiremux_console_demo` | `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` | PR3 |
+| `sources/esp32/examples/esp_wiremux_professional_demo` | `sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo` | PR3 |
 | `sources/host` | `sources/host/wiremux` | PR4 |
 | host workspace skeleton | `sources/host/wiremux` workspace root with member crates under `sources/host/wiremux/crates/{host-session,interactive,tui,cli}` | PR5 + follow-up host crate split |
 | profile skeleton docs | `sources/profiles` | PR6 |

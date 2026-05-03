@@ -1,4 +1,4 @@
-# ESP Wiremux Console Demo
+# ESP Wiremux Professional Demo
 
 This ESP-IDF example demonstrates the first integration shape for `esp_wiremux`:
 
@@ -92,7 +92,7 @@ idf.py build flash monitor
 ```
 
 If VS Code reports that this is not a complete ESP-IDF project, open the folder
-`sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` directly and make sure the ESP-IDF
+`sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo` directly and make sure the ESP-IDF
 extension has a configured `IDF_PATH`. The root `CMakeLists.txt`,
 `sdkconfig.defaults`, and `main/CMakeLists.txt` are all project-local.
 

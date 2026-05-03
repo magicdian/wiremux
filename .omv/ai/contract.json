@@ -1,0 +1,177 @@
+{
+  "adapter_command": {
+    "compatibility_mapping": {
+      "install": "omv integrate apply for selected integration capabilities, including project-instructions, host-skill, spec-guide, spec-index-snippet, and finalize-boundary",
+      "list": "omv integrate status",
+      "refresh": "omv integrate apply for already selected projection capabilities",
+      "status": "omv integrate status"
+    },
+    "install": "omv adapter install --agent <name> --spec <name>",
+    "list": "omv adapter list",
+    "refresh": "omv adapter refresh",
+    "status": "omv adapter status",
+    "transition_policy": "temporary MVP compatibility surface; prefer omv integrate status/apply for new automation where available"
+  },
+  "commands": {
+    "bump": {
+      "syncs_targets": true,
+      "write": [
+        "omv bump --json",
+        "omv bump --output json"
+      ]
+    },
+    "current": {
+      "read": [
+        "omv current --json",
+        "omv current --output json"
+      ]
+    },
+    "finalize_boundary": {
+      "change_type_values": [
+        "bugfix",
+        "feature",
+        "refactor",
+        "docs",
+        "chore"
+      ],
+      "delegates_to": "omv event finalize-task",
+      "derived_fields": {
+        "status": "done",
+        "tests": "passed"
+      },
+      "does_not_infer_change_type": true,
+      "fingerprint_inputs": [
+        "task_id",
+        "provider",
+        "boundary",
+        "workspace_snapshot_hash"
+      ],
+      "identity_fields": [
+        "provider",
+        "boundary"
+      ],
+      "missing_change_type": "pending/manual-action without finalize-task",
+      "requires_change_type": true,
+      "snapshot_normalization": {
+        "fixed_core_files": [
+          ".omv/state.toml",
+          ".omv/finalizations.toml",
+          ".omv/skills/README.md"
+        ],
+        "managed_target_metadata": true
+      },
+      "source_mapping": "<provider>-<boundary>",
+      "task_identity": {
+        "override": "--task-id <task-id>",
+        "trellis_default": ".trellis/.current-task"
+      },
+      "write": [
+        "omv event finalize-boundary --provider <provider> --boundary <name> --change-type <type> --json"
+      ]
+    },
+    "integrate_apply": {
+      "re_detects_workspace": true,
+      "state_file": ".omv/integrations.toml",
+      "uses_targeted_worktree_safety": true,
+      "write": [
+        "omv integrate apply --json",
+        "omv integrate apply --output json"
+      ]
+    },
+    "integrate_status": {
+      "mutates": false,
+      "read": [
+        "omv integrate status --json",
+        "omv integrate status --output json"
+      ],
+      "state_file": ".omv/integrations.toml"
+    },
+    "plan": {
+      "mutates": false,
+      "read": [
+        "omv plan --json",
+        "omv plan --output json"
+      ]
+    },
+    "sync": {
+      "syncs_targets": true,
+      "write": [
+        "omv sync --json",
+        "omv sync --output json"
+      ]
+    },
+    "sync_check": {
+      "mutates": false,
+      "read": [
+        "omv sync --check --json",
+        "omv sync --check --output json"
+      ]
+    }
+  },
+  "contract_version": 1,
+  "integration_model": {
+    "capability_statuses": [
+      "selected",
+      "pending",
+      "installed",
+      "failed"
+    ],
+    "failure_contract": {
+      "message": "human-readable diagnostic",
+      "reason_code": "stable machine-readable string"
+    },
+    "host_files_are_authoritative": false,
+    "providers": {
+      "claude": {
+        "hidden_from_init": true,
+        "mvp_supported": false,
+        "provider_type": "agent"
+      },
+      "codex": {
+        "bootstrap_policy": "may create lightweight instruction host files",
+        "capabilities": [
+          "project-instructions",
+          "host-skill"
+        ],
+        "mvp_supported": true,
+        "provider_type": "agent"
+      },
+      "openspec": {
+        "hidden_from_init": true,
+        "mvp_supported": false,
+        "provider_type": "spec"
+      },
+      "trellis": {
+        "bootstrap_policy": "requires existing Trellis installation before mutation",
+        "capabilities": [
+          "spec-guide",
+          "spec-index-snippet",
+          "finalize-boundary"
+        ],
+        "mvp_supported": true,
+        "provider_type": "spec"
+      }
+    },
+    "truth_source": ".omv/integrations.toml"
+  },
+  "plugin_runtime": {
+    "policy": "providers are internal registry entries in MVP; third-party plugin runtime is future work",
+    "public_runtime_in_mvp": false
+  },
+  "rules": {
+    "do_not_edit_native_manifest_versions_directly": true,
+    "do_not_treat_host_files_as_authority": true,
+    "generalized_target_kinds": [
+      "text-scalar",
+      "regex-replace",
+      "markdown-managed-block",
+      "yaml-scalar",
+      "c-header-macro",
+      "cargo-workspace"
+    ],
+    "host_adapter_files_are_derived_outputs": true,
+    "native_manifests_are_derived_outputs": true,
+    "runtime_exports_are_read_only_views": true
+  },
+  "truth_source": ".omv/state.toml"
+}
