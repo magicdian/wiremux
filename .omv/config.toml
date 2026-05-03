@@ -1,0 +1,7 @@
+schema_version = 1
+locale = "zh-CN"
+timezone = "UTC+8"
+project_profile = "personal"
+version_output = "date-triplet"
+build_policy = "daily-reset"
+ntp_enabled = true

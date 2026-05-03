@@ -1,0 +1,42 @@
+schema_version = 1
+
+[[providers]]
+provider = "codex"
+selected = true
+
+[providers.detection]
+detected = true
+recommended = true
+
+[[providers.capabilities]]
+capability = "project-instructions"
+selected = true
+status = "installed"
+
+[[providers.capabilities]]
+capability = "host-skill"
+selected = true
+status = "installed"
+
+[[providers]]
+provider = "trellis"
+selected = true
+
+[providers.detection]
+detected = true
+recommended = true
+
+[[providers.capabilities]]
+capability = "spec-guide"
+selected = true
+status = "installed"
+
+[[providers.capabilities]]
+capability = "spec-index-snippet"
+selected = true
+status = "installed"
+
+[[providers.capabilities]]
+capability = "finalize-boundary"
+selected = true
+status = "installed"

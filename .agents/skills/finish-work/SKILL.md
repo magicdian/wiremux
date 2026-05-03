@@ -93,6 +93,14 @@ If the change spans multiple layers:
 
 ---
 
+<!-- OMV-MANAGED-BEGIN:spec-trellis-finalize-boundary-finish-work -->
+## OMV Finalize Boundary
+
+- [ ] Choose exactly one OMV `change_type`: `bugfix`, `feature`, `refactor`, `docs`, or `chore`.
+- [ ] After the required finish-work checks pass, run `omv event finalize-boundary --provider trellis --boundary finish-work --change-type <change_type> --json`.
+- [ ] If `change_type` is unresolved, leave OMV in pending/manual-action state; do not infer a value or call `finalize-task` directly with guessed fields.
+<!-- OMV-MANAGED-END:spec-trellis-finalize-boundary-finish-work -->
+
 ## Quick Check Flow
 
 ```bash

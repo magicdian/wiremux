@@ -1,0 +1,5 @@
+{"file": ".opencode/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".opencode/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/guides/omv-versioning-guide.md", "reason": "Verify OMV target configuration follows project versioning rules"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Check configured target paths against current source layout"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Review changed config against backend quality expectations"}

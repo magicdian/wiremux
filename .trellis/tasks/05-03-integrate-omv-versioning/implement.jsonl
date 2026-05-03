@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/guides/omv-versioning-guide.md", "reason": "OMV is the version source of truth and defines plan/sync-check behavior"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Target paths must match current wiremux source layout"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Respect project quality checks and avoid unrelated source changes"}

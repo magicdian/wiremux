@@ -77,3 +77,9 @@ Found a new "didn't think of that" moment? Add it to the relevant guide.
 ---
 
 **Core Principle**: 30 minutes of thinking saves 3 hours of debugging.
+
+<!-- OMV-MANAGED-BEGIN:integration-trellis-spec-index-snippet -->
+## OMV
+
+- [OMV Versioning Guide](./omv-versioning-guide.md) | Managed version and integration source rules
+<!-- OMV-MANAGED-END:integration-trellis-spec-index-snippet -->
