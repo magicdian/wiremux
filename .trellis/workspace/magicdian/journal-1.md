@@ -1660,3 +1660,37 @@ Implemented compile-time TOML-driven TUI status priorities, dynamic width-based 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: Endpoint stream API and wmux simple API
+
+**Date**: 2026-05-03
+**Task**: Endpoint stream API and wmux simple API
+**Branch**: `dev`
+
+### Summary
+
+Added esp-wiremux per-channel queue consumer support and portable wmux simple API, split examples into beginner/advanced/professional demos, updated packaging/docs, finalized OMV feature version 2605.3.2, and archived the endpoint stream API optimization task after user validation.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `431cad6` | (see git log) |
+| `fa03f3a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
