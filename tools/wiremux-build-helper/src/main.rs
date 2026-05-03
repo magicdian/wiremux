@@ -1222,7 +1222,7 @@ mod tests {
                     family: Some("espressif".to_string()),
                     idf_target: Some("esp32s3".to_string()),
                     example_path: Some(
-                        "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+                        "sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo"
                             .to_string(),
                     ),
                     host_feature: Some("esp32".to_string()),
@@ -1236,7 +1236,7 @@ mod tests {
                     family: Some("espressif".to_string()),
                     idf_target: Some("esp32p4".to_string()),
                     example_path: Some(
-                        "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+                        "sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo"
                             .to_string(),
                     ),
                     host_feature: Some("esp32".to_string()),

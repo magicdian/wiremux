@@ -6,7 +6,7 @@ This project uses one release version for host and SDK artifacts.
 
 Version format: `YYMM.DD.BuildNumber`.
 
-Current release: `2605.3.1`.
+Current release: `2605.3.2`.
 
 When publishing another release on the same date, increment `BuildNumber`. When
 publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
@@ -50,11 +50,12 @@ ESP Registry packages are generated under `dist/esp-registry/`:
 The generated `esp-wiremux` package depends on the generated registry package
 `<namespace>/wiremux-core` at the same version.
 
-The generated `esp-wiremux` package also includes the console demo under
-`examples/esp_wiremux_console_demo`. The source-tree demo uses
-`EXTRA_COMPONENT_DIRS` for local development, but the generated registry example
-has a registry-friendly project `CMakeLists.txt` and a `main/idf_component.yml`
-dependency on `<namespace>/esp-wiremux` with `override_path: "../../../"`.
+The generated `esp-wiremux` package also includes beginner, advanced, and
+professional examples under `examples/`. The source-tree examples use
+`EXTRA_COMPONENT_DIRS` for local development, but the generated registry
+examples have registry-friendly project `CMakeLists.txt` files and
+`main/idf_component.yml` dependencies on `<namespace>/esp-wiremux` with
+`override_path: "../../../"`.
 The registry strips `override_path` from downloaded examples.
 
 ## Generate Packages Locally
@@ -114,7 +115,7 @@ cargo test
 Build the ESP-IDF example from the source tree:
 
 ```bash
-cd sources/vendor/espressif/generic/examples/esp_wiremux_console_demo
+cd sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo
 idf.py set-target esp32s3
 idf.py build
 ```

@@ -24,26 +24,29 @@ case "${OUTPUT_DIR}" in
         ;;
 esac
 
-if ! printf '%s\n' "${VERSION}" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]+$'; then
-    echo "Version must use YYMM.DD.BuildNumber format, got: ${VERSION}" >&2
+if ! printf '%s\n' "${VERSION}" | grep -Eq '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
+    echo "Version must use YYMM.D.BuildNumber format, got: ${VERSION}" >&2
     exit 1
 fi
 
 CORE_SRC="${ROOT_DIR}/sources/core/c"
 ESP_SRC="${ROOT_DIR}/sources/vendor/espressif/generic/components/esp-wiremux"
-ESP_EXAMPLE_SRC="${ROOT_DIR}/sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+ESP_EXAMPLE_ROOT="${ROOT_DIR}/sources/vendor/espressif/generic/examples"
 README_TEMPLATE_DIR="${ROOT_DIR}/docs/esp-registry"
 CORE_PKG="${OUTPUT_DIR}/wiremux-core"
 ESP_PKG="${OUTPUT_DIR}/esp-wiremux"
-ESP_EXAMPLE_PKG="${ESP_PKG}/examples/esp_wiremux_console_demo"
+ESP_EXAMPLES=(
+    "esp_wiremux_beginner_demo"
+    "esp_wiremux_advanced_demo"
+    "esp_wiremux_professional_demo"
+)
 
 rm -rf "${OUTPUT_DIR}"
 mkdir -p \
     "${CORE_PKG}/include" \
     "${CORE_PKG}/src" \
     "${ESP_PKG}/include" \
-    "${ESP_PKG}/src" \
-    "${ESP_EXAMPLE_PKG}/main"
+    "${ESP_PKG}/src"
 
 cp "${ROOT_DIR}/LICENSE" "${CORE_PKG}/LICENSE"
 cp "${ROOT_DIR}/LICENSE" "${ESP_PKG}/LICENSE"
@@ -52,10 +55,22 @@ cp "${CORE_SRC}"/src/*.c "${CORE_PKG}/src/"
 cp "${CORE_SRC}"/src/*.h "${CORE_PKG}/src/"
 cp "${ESP_SRC}"/include/*.h "${ESP_PKG}/include/"
 cp "${ESP_SRC}"/src/*.c "${ESP_PKG}/src/"
-cp "${ESP_EXAMPLE_SRC}/README.md" "${ESP_EXAMPLE_PKG}/README.md"
-cp "${ESP_EXAMPLE_SRC}/sdkconfig.defaults" "${ESP_EXAMPLE_PKG}/sdkconfig.defaults"
-cp "${ESP_EXAMPLE_SRC}/main/CMakeLists.txt" "${ESP_EXAMPLE_PKG}/main/CMakeLists.txt"
-cp "${ESP_EXAMPLE_SRC}/main/esp_wiremux_console_demo_main.c" "${ESP_EXAMPLE_PKG}/main/esp_wiremux_console_demo_main.c"
+for example in "${ESP_EXAMPLES[@]}"; do
+    ESP_EXAMPLE_SRC="${ESP_EXAMPLE_ROOT}/${example}"
+    ESP_EXAMPLE_PKG="${ESP_PKG}/examples/${example}"
+    mkdir -p "${ESP_EXAMPLE_PKG}/main"
+    cp "${ESP_EXAMPLE_SRC}/README.md" "${ESP_EXAMPLE_PKG}/README.md"
+    cp "${ESP_EXAMPLE_SRC}/sdkconfig.defaults" "${ESP_EXAMPLE_PKG}/sdkconfig.defaults"
+    cp "${ESP_EXAMPLE_SRC}/CMakeLists.txt" "${ESP_EXAMPLE_PKG}/CMakeLists.txt"
+    cp "${ESP_EXAMPLE_SRC}/main/CMakeLists.txt" "${ESP_EXAMPLE_PKG}/main/CMakeLists.txt"
+    cp "${ESP_EXAMPLE_SRC}/main/"*.c "${ESP_EXAMPLE_PKG}/main/"
+    cat > "${ESP_EXAMPLE_PKG}/CMakeLists.txt" <<EOF
+cmake_minimum_required(VERSION 3.16)
+
+include(\$ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(${example})
+EOF
+done
 
 render_readme() {
     local template="$1"
@@ -95,17 +110,11 @@ idf_component_register(
         "src/esp_wiremux_console.c"
         "src/esp_wiremux_frame.c"
         "src/esp_wiremux_log.c"
+        "src/wmux.c"
     INCLUDE_DIRS
         "include"
     REQUIRES console esp_driver_usb_serial_jtag esp_system esp_timer log freertos
 )
-EOF
-
-cat > "${ESP_EXAMPLE_PKG}/CMakeLists.txt" <<'EOF'
-cmake_minimum_required(VERSION 3.16)
-
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp_wiremux_console_demo)
 EOF
 
 cat > "${CORE_PKG}/idf_component.yml" <<EOF
@@ -139,7 +148,9 @@ tags:
   - serial
   - console
 examples:
-  - path: examples/esp_wiremux_console_demo
+  - path: examples/esp_wiremux_beginner_demo
+  - path: examples/esp_wiremux_advanced_demo
+  - path: examples/esp_wiremux_professional_demo
 dependencies:
   idf: ">=5.4"
   ${NAMESPACE}/wiremux-core:
@@ -153,7 +164,9 @@ if [ -n "${REGISTRY_URL}" ]; then
 EOF
 fi
 
-cat > "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
+for example in "${ESP_EXAMPLES[@]}"; do
+    ESP_EXAMPLE_PKG="${ESP_PKG}/examples/${example}"
+    cat > "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
 dependencies:
   idf: ">=5.4"
   ${NAMESPACE}/esp-wiremux:
@@ -161,24 +174,25 @@ dependencies:
     override_path: "../../../"
 EOF
 
-if [ -n "${REGISTRY_URL}" ]; then
-    cat >> "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
+    if [ -n "${REGISTRY_URL}" ]; then
+        cat >> "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
     registry_url: "${REGISTRY_URL}"
 EOF
-fi
+    fi
 
-cat >> "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
+    cat >> "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
   ${NAMESPACE}/wiremux-core:
     version: "${VERSION}"
     override_path: "../../../../wiremux-core"
 EOF
 
-if [ -n "${REGISTRY_URL}" ]; then
-    cat >> "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
+    if [ -n "${REGISTRY_URL}" ]; then
+        cat >> "${ESP_EXAMPLE_PKG}/main/idf_component.yml" <<EOF
     registry_url: "${REGISTRY_URL}"
 EOF
-fi
+    fi
+done
 
 echo "Generated ESP Registry packages in ${OUTPUT_DIR}"
 echo "  - wiremux-core ${VERSION}"
-echo "  - esp-wiremux ${VERSION} (depends on ${NAMESPACE}/wiremux-core; includes esp_wiremux_console_demo example)"
+echo "  - esp-wiremux ${VERSION} (depends on ${NAMESPACE}/wiremux-core; includes beginner, advanced, and professional examples)"

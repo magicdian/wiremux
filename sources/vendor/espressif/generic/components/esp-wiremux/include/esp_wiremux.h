@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 #define ESP_WIREMUX_CHANNEL_SYSTEM 0
-#define ESP_WIREMUX_VERSION "2605.3.1"
+#define ESP_WIREMUX_VERSION "2605.3.2"
 
 /*
  * ESP-facing aliases keep applications on the esp_wiremux public API while
@@ -166,6 +166,12 @@ typedef esp_err_t (*esp_wiremux_input_handler_t)(uint8_t channel_id,
                                                  size_t payload_len,
                                                  void *user_ctx);
 
+typedef enum {
+    ESP_WIREMUX_INPUT_CONSUMER_NONE = 0,
+    ESP_WIREMUX_INPUT_CONSUMER_QUEUE = 1,
+    ESP_WIREMUX_INPUT_CONSUMER_CALLBACK = 2,
+} esp_wiremux_input_consumer_t;
+
 void esp_wiremux_config_init(esp_wiremux_config_t *config);
 
 esp_err_t esp_wiremux_init(const esp_wiremux_config_t *config);
@@ -174,9 +180,22 @@ esp_err_t esp_wiremux_stop(void);
 
 esp_err_t esp_wiremux_register_channel(const esp_wiremux_channel_config_t *config);
 
+esp_err_t esp_wiremux_is_channel_registered(uint8_t channel_id, bool *registered);
+
 esp_err_t esp_wiremux_register_input_handler(uint8_t channel_id,
                                              esp_wiremux_input_handler_t handler,
                                              void *user_ctx);
+
+esp_err_t esp_wiremux_register_rx_queue(uint8_t channel_id, size_t queue_depth);
+
+esp_err_t esp_wiremux_channel_read(uint8_t channel_id,
+                                   uint8_t *buffer,
+                                   size_t capacity,
+                                   size_t *read_len,
+                                   uint32_t timeout_ms);
+
+esp_err_t esp_wiremux_get_input_consumer(uint8_t channel_id,
+                                         esp_wiremux_input_consumer_t *consumer);
 
 esp_err_t esp_wiremux_receive_bytes(const uint8_t *data, size_t len);
 

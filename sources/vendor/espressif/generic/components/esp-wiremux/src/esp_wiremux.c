@@ -38,11 +38,20 @@ typedef struct pending_item {
     uint8_t payload[];
 } pending_item_t;
 
+typedef struct inbound_item {
+    uint32_t kind;
+    uint32_t flags;
+    size_t payload_len;
+    uint8_t payload[];
+} inbound_item_t;
+
 typedef struct {
     bool registered;
     esp_wiremux_channel_config_t config;
+    esp_wiremux_input_consumer_t input_consumer;
     esp_wiremux_input_handler_t input_handler;
     void *input_handler_ctx;
+    QueueHandle_t rx_queue;
     uint32_t next_sequence;
     uint32_t dropped_count;
 } channel_state_t;
@@ -78,6 +87,8 @@ static void mux_task(void *arg);
 static void mux_input_task(void *arg);
 static void free_pending_item(pending_item_t *item);
 static void free_pending_list(pending_item_t *item);
+static void clear_rx_queue(channel_state_t *channel);
+static void free_inbound_item(inbound_item_t *item);
 static esp_err_t wiremux_status_to_esp(wiremux_status_t status);
 static void item_to_envelope(const pending_item_t *item, wiremux_envelope_t *envelope);
 static void item_to_record(const pending_item_t *item, wiremux_record_t *record);
@@ -98,6 +109,8 @@ static esp_err_t enqueue_item(pending_item_t *item,
 static void parse_rx_buffer_locked(void);
 static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelope);
 static esp_err_t dispatch_input_record_locked(const wiremux_record_t *record);
+static esp_err_t queue_input_envelope_locked(channel_state_t *channel,
+                                             const wiremux_envelope_t *envelope);
 static bool is_manifest_request(const wiremux_envelope_t *envelope);
 static esp_err_t handle_manifest_request_locked(const wiremux_envelope_t *envelope);
 static uint32_t native_endianness(void);
@@ -247,14 +260,30 @@ esp_err_t esp_wiremux_register_channel(const esp_wiremux_channel_config_t *confi
     }
 
     xSemaphoreTake(s_mux.lock, portMAX_DELAY);
-    s_mux.channels[config->channel_id].registered = true;
-    s_mux.channels[config->channel_id].config = *config;
-    s_mux.channels[config->channel_id].config.input_policy.compression =
-        normalize_compression(s_mux.channels[config->channel_id].config.input_policy.compression);
-    s_mux.channels[config->channel_id].config.output_policy.compression =
-        normalize_compression(s_mux.channels[config->channel_id].config.output_policy.compression);
+    channel_state_t *channel = &s_mux.channels[config->channel_id];
+    channel->registered = true;
+    channel->config = *config;
+    channel->config.input_policy.compression =
+        normalize_compression(channel->config.input_policy.compression);
+    channel->config.output_policy.compression =
+        normalize_compression(channel->config.output_policy.compression);
     xSemaphoreGive(s_mux.lock);
 
+    return ESP_OK;
+}
+
+esp_err_t esp_wiremux_is_channel_registered(uint8_t channel_id, bool *registered)
+{
+    if (!s_mux.initialized || registered == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (channel_id >= ESP_WIREMUX_MAX_CHANNELS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    *registered = s_mux.channels[channel_id].registered;
+    xSemaphoreGive(s_mux.lock);
     return ESP_OK;
 }
 
@@ -279,6 +308,109 @@ esp_err_t esp_wiremux_register_input_handler(uint8_t channel_id,
 
     channel->input_handler = handler;
     channel->input_handler_ctx = user_ctx;
+    channel->input_consumer = ESP_WIREMUX_INPUT_CONSUMER_CALLBACK;
+    clear_rx_queue(channel);
+    xSemaphoreGive(s_mux.lock);
+    return ESP_OK;
+}
+
+esp_err_t esp_wiremux_register_rx_queue(uint8_t channel_id, size_t queue_depth)
+{
+    if (!s_mux.initialized || queue_depth == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (channel_id >= ESP_WIREMUX_MAX_CHANNELS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    QueueHandle_t queue = xQueueCreate(queue_depth, sizeof(inbound_item_t *));
+    if (queue == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    channel_state_t *channel = &s_mux.channels[channel_id];
+    if (!channel->registered ||
+        (channel->config.directions & ESP_WIREMUX_DIRECTION_INPUT) == 0) {
+        xSemaphoreGive(s_mux.lock);
+        vQueueDelete(queue);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    clear_rx_queue(channel);
+    channel->rx_queue = queue;
+    channel->input_handler = NULL;
+    channel->input_handler_ctx = NULL;
+    channel->input_consumer = ESP_WIREMUX_INPUT_CONSUMER_QUEUE;
+    xSemaphoreGive(s_mux.lock);
+    return ESP_OK;
+}
+
+esp_err_t esp_wiremux_channel_read(uint8_t channel_id,
+                                   uint8_t *buffer,
+                                   size_t capacity,
+                                   size_t *read_len,
+                                   uint32_t timeout_ms)
+{
+    if (!s_mux.initialized || buffer == NULL || read_len == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (channel_id >= ESP_WIREMUX_MAX_CHANNELS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    channel_state_t *channel = &s_mux.channels[channel_id];
+    if (!channel->registered ||
+        (channel->config.directions & ESP_WIREMUX_DIRECTION_INPUT) == 0 ||
+        channel->input_consumer != ESP_WIREMUX_INPUT_CONSUMER_QUEUE ||
+        channel->rx_queue == NULL) {
+        xSemaphoreGive(s_mux.lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+    QueueHandle_t queue = channel->rx_queue;
+    xSemaphoreGive(s_mux.lock);
+
+    inbound_item_t *item = NULL;
+    if (xQueueReceive(queue, &item, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        *read_len = 0;
+        return ESP_ERR_TIMEOUT;
+    }
+    if (item == NULL) {
+        *read_len = 0;
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (item->payload_len > capacity) {
+        free_inbound_item(item);
+        *read_len = 0;
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (item->payload_len > 0) {
+        memcpy(buffer, item->payload, item->payload_len);
+    }
+    *read_len = item->payload_len;
+    free_inbound_item(item);
+    return ESP_OK;
+}
+
+esp_err_t esp_wiremux_get_input_consumer(uint8_t channel_id,
+                                         esp_wiremux_input_consumer_t *consumer)
+{
+    if (!s_mux.initialized || consumer == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (channel_id >= ESP_WIREMUX_MAX_CHANNELS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_mux.lock, portMAX_DELAY);
+    const channel_state_t *channel = &s_mux.channels[channel_id];
+    if (!channel->registered) {
+        xSemaphoreGive(s_mux.lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+    *consumer = channel->input_consumer;
     xSemaphoreGive(s_mux.lock);
     return ESP_OK;
 }
@@ -765,7 +897,12 @@ static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelo
         return handle_manifest_request_locked(envelope);
     }
 
-    if (channel->input_handler == NULL) {
+    if (channel->input_consumer == ESP_WIREMUX_INPUT_CONSUMER_QUEUE) {
+        return queue_input_envelope_locked(channel, envelope);
+    }
+
+    if (channel->input_consumer != ESP_WIREMUX_INPUT_CONSUMER_CALLBACK ||
+        channel->input_handler == NULL) {
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -787,6 +924,33 @@ static esp_err_t dispatch_input_envelope_locked(const wiremux_envelope_t *envelo
     xSemaphoreTake(s_mux.lock, portMAX_DELAY);
     free(payload);
     return err;
+}
+
+static esp_err_t queue_input_envelope_locked(channel_state_t *channel,
+                                             const wiremux_envelope_t *envelope)
+{
+    if (channel == NULL || envelope == NULL || channel->rx_queue == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    inbound_item_t *item = calloc(1, sizeof(*item) + envelope->payload_len);
+    if (item == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    item->kind = envelope->kind;
+    item->flags = envelope->flags;
+    item->payload_len = envelope->payload_len;
+    if (envelope->payload_len > 0) {
+        memcpy(item->payload, envelope->payload, envelope->payload_len);
+    }
+
+    if (xQueueSend(channel->rx_queue, &item, 0) == pdTRUE) {
+        return ESP_OK;
+    }
+
+    channel->dropped_count++;
+    free_inbound_item(item);
+    return ESP_ERR_TIMEOUT;
 }
 
 static bool is_manifest_request(const wiremux_envelope_t *envelope)
@@ -844,6 +1008,26 @@ static void free_pending_list(pending_item_t *item)
         free_pending_item(item);
         item = next;
     }
+}
+
+static void clear_rx_queue(channel_state_t *channel)
+{
+    if (channel == NULL || channel->rx_queue == NULL) {
+        return;
+    }
+
+    inbound_item_t *item = NULL;
+    while (xQueueReceive(channel->rx_queue, &item, 0) == pdTRUE) {
+        free_inbound_item(item);
+        item = NULL;
+    }
+    vQueueDelete(channel->rx_queue);
+    channel->rx_queue = NULL;
+}
+
+static void free_inbound_item(inbound_item_t *item)
+{
+    free(item);
 }
 
 static void item_to_envelope(const pending_item_t *item, wiremux_envelope_t *envelope)

@@ -5,4 +5,4 @@ set(EXTRA_COMPONENT_DIRS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp_wiremux_console_demo)
+project(esp_wiremux_professional_demo)
