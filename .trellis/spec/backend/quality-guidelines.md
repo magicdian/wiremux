@@ -818,9 +818,16 @@ CI:
   `README_CN.md`, and `LICENSE`.
 - `esp-wiremux` registry manifest depends on
   `<namespace>/wiremux-core` at the same version with `require: public`.
-- `esp-wiremux` package includes `examples/esp_wiremux_console_demo` with a
-  registry-friendly project `CMakeLists.txt`; do not copy the source-tree
-  example's `EXTRA_COMPONENT_DIRS` into the generated package.
+- `tools/esp-registry/generate-packages.sh` owns the shipped registry example
+  list. It currently packages `esp_wiremux_beginner_demo`,
+  `esp_wiremux_advanced_demo`, and `esp_wiremux_professional_demo`.
+- `esp-wiremux` package includes those examples with registry-friendly project
+  `CMakeLists.txt` files; do not copy source-tree `EXTRA_COMPONENT_DIRS` into
+  generated packages.
+- `build/wiremux-vendors.toml` owns the example used for vendor build
+  validation. If examples are renamed, removed, or split, update this selector
+  in the same change. ESP32-S3 validation currently builds
+  `sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo`.
 - Generated example `main/idf_component.yml` depends on
   `<namespace>/esp-wiremux` at the same version and includes
   `override_path: "../../../"` so local packaged-example builds use the package
@@ -842,8 +849,11 @@ CI:
 | source-tree ESP component references `../../../core/c` for local dev | allowed only in source tree |
 | generated `esp-wiremux` package references parent-relative core paths | fail review; package must depend on registry `wiremux-core` |
 | generated package missing README or LICENSE | fail package validation |
-| generated `esp-wiremux` package missing `examples/esp_wiremux_console_demo` | fail package validation |
+| generated `esp-wiremux` package missing `examples/esp_wiremux_beginner_demo` | fail package validation |
+| generated `esp-wiremux` package missing `examples/esp_wiremux_advanced_demo` | fail package validation |
+| generated `esp-wiremux` package missing `examples/esp_wiremux_professional_demo` | fail package validation |
 | generated example keeps source-tree `EXTRA_COMPONENT_DIRS` | fail review; downloaded examples must use registry dependencies |
+| `build/wiremux-vendors.toml` references a removed example directory | `tools/wiremux-build check vendor` must fail before spawning `idf.py` with a clear `example_path does not exist` error |
 | Trusted Uploader Branch is `main` for the release workflow | registry OIDC auth fails because release events use tag refs |
 | release workflow runs from a non-main commit | workflow must fail before upload |
 | release tag version differs from `VERSION` after stripping leading `v` | workflow must fail before upload |
@@ -854,10 +864,15 @@ CI:
 - Good: `VERSION` is `2604.27.2`, Cargo and ESP declarations match, generated
   packages pack with `compote component pack`, and both tarballs include README,
   README_CN, LICENSE, and `idf_component.yml`.
-- Good: `magicdian/esp-wiremux` Registry page shows one example after the patch
-  upload because the generated package includes `examples/esp_wiremux_console_demo`.
+- Good: `magicdian/esp-wiremux` Registry page shows beginner, advanced, and
+  professional examples after upload because the generated package includes all
+  three example directories.
 - Base: local ESP example still builds from `sources/vendor/espressif/generic/examples/...` using
   the source-tree component and parent-relative local core reference.
+- Bad: splitting or renaming source-tree examples but leaving
+  `build/wiremux-vendors.toml` pointed at the removed directory. In Rust this can
+  surface as a misleading `spawn idf.py: No such file or directory` because the
+  command's `current_dir` does not exist.
 - Bad: editing `sources/core/c/CMakeLists.txt` to use
   `idf_component_register()` makes future maintainers think the portable core is
   ESP-only.
@@ -878,11 +893,16 @@ CI:
 - `tar -tzf` check that each package archive includes README, README_CN,
   LICENSE, and `idf_component.yml`.
 - `tar -tzf` check that the `esp-wiremux` archive includes
-  `examples/esp_wiremux_console_demo/CMakeLists.txt`,
-  `examples/esp_wiremux_console_demo/main/idf_component.yml`, and demo source.
+  `examples/esp_wiremux_beginner_demo/CMakeLists.txt`,
+  `examples/esp_wiremux_advanced_demo/CMakeLists.txt`,
+  `examples/esp_wiremux_professional_demo/CMakeLists.txt`,
+  `examples/esp_wiremux_professional_demo/main/idf_component.yml`, and demo source.
 - Build the generated registry example under
-  `dist/esp-registry/esp-wiremux/examples/esp_wiremux_console_demo` after
+  `dist/esp-registry/esp-wiremux/examples/esp_wiremux_professional_demo` after
   package generation.
+- Build selector tests must cover a missing vendor `example_path` and assert the
+  helper reports `example_path does not exist` before attempting to spawn
+  `idf.py`.
 - Host checks: `cargo fmt --check`, `cargo check`, and `cargo test` in
   `sources/host/wiremux`.
 - Portable core checks when core files changed: configure, build, and run
@@ -962,7 +982,7 @@ vendor_label = "Espressif ESP32-S3"
 host_profile = "vendor-enhanced"
 vendor_family = "espressif"
 vendor_idf_target = "esp32s3"
-vendor_example_path = "sources/vendor/espressif/generic/examples/esp_wiremux_console_demo"
+vendor_example_path = "sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo"
 selected_at_unix = 1777448133
 ```
 
@@ -1005,7 +1025,7 @@ WIREMUX_VENDOR_EXAMPLE
 - Initial vendor build/check dispatch supports ESP32-S3. Other listed models may
   remain placeholders but must fail clearly if execution is requested.
 - ESP32-S3 vendor dispatch runs in
-  `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo` and must
+  `sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo` and must
   call `idf.py set-target esp32s3` before `idf.py build`.
 - The Python bootstrap must not print the internal `cargo run` helper command
   during normal operation.
@@ -1523,7 +1543,7 @@ symlink before launching esptool, then restore Wiremux ownership after flashing.
 - New portable C core functionality must include related GoogleTest coverage in
   `sources/core/c/tests/wiremux_core_test.cpp` before the change is considered
   complete.
-- ESP-IDF code must be built with `idf.py build` in `sources/vendor/espressif/generic/examples/esp_wiremux_console_demo`.
+- ESP-IDF code must be built with `idf.py build` in `sources/vendor/espressif/generic/examples/esp_wiremux_professional_demo`.
   In CI release validation, `idf.py` presence/version is strict and must not be
   skipped.
 - For release validation and packaging, run orchestrator entrypoints (`doctor`,

@@ -1,0 +1,3 @@
+{"observation": "Release workflow doctor found idf.py, but check vendor failed with spawn idf.py: No such file or directory."}
+{"root_cause": "build/wiremux-vendors.toml referenced removed esp_wiremux_console_demo; Command::current_dir on a missing directory surfaced as an idf.py spawn error."}
+{"fix": "Point vendor dispatch at esp_wiremux_professional_demo and preflight that example_path exists before invoking idf.py."}

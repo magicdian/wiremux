@@ -1,0 +1,8 @@
+{"command": "cargo fmt --check --manifest-path tools/wiremux-build-helper/Cargo.toml", "status": "passed"}
+{"command": "cargo check --manifest-path tools/wiremux-build-helper/Cargo.toml", "status": "passed"}
+{"command": "cargo test --manifest-path tools/wiremux-build-helper/Cargo.toml", "status": "passed", "details": "11 tests passed"}
+{"command": "tools/wiremux-build package esp-registry", "status": "passed", "details": "Generated wiremux-core 2605.7.1 and esp-wiremux 2605.7.1 with beginner, advanced, and professional examples"}
+{"command": "tools/wiremux-build check vendor", "status": "skipped-local", "details": "Local shell lacks idf.py; command skipped vendor check outside CI"}
+{"command": "omv plan --json", "status": "passed", "details": "0 drift, 0 missing, 0 unsupported, 0 errors before finalize boundary"}
+{"command": "omv sync --check --json", "status": "passed", "details": "0 drift after OMV bugfix finalize bumped managed version to 2605.7.1"}
+{"command": "omv event finalize-boundary --provider trellis --boundary finish-work --change-type bugfix --task-id fix-esp-registry-vendor-example-path --json", "status": "passed", "details": "OMV finalized bugfix and synced 7 managed version targets"}
