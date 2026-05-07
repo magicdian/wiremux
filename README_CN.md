@@ -5,6 +5,11 @@
 [![Version](https://img.shields.io/badge/version-2605.7.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
+## 支持 Wiremux
+
+Wiremux 目前需要支持来扩展更多平台适配。项目当前还没有 macOS 平台开发所需的 Apple Developer Program 订阅；赞助将帮助订阅该账户，并让基于 DriverKit 的 macOS 方案开发成为可能。如果这个项目对你的工作有帮助，可以通过
+[Buy Me a Coffee](https://buymeacoffee.com/magicdian) 支持后续开发。
+
 Wiremux 是一个面向串口类字节流的轻量多路复用协议。它可以在一个 UART、USB CDC、USB Serial/JTAG、TCP bridge 或其他有序字节 transport 上同时承载多个逻辑 channel，让日志、console 命令、telemetry 和诊断数据不再挤在同一个原始字节流里。
 
 当前仓库提供的参考设备侧接入是 ESP32/ESP-IDF component 和 demo，但协议核心刻意抽离为平台无关的 C 代码。

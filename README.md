@@ -5,6 +5,14 @@
 [![Version](https://img.shields.io/badge/version-2605.7.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
+## Support Wiremux
+
+Wiremux needs support to expand platform coverage. The project does not
+currently have the Apple Developer Program subscription required for some macOS
+platform work; sponsorship would help fund that subscription and make a
+DriverKit-based macOS solution possible. If this project helps your work, you
+can sponsor development through [Buy Me a Coffee](https://buymeacoffee.com/magicdian).
+
 Wiremux is a lightweight channel multiplexer for serial-style byte streams. It lets one UART, USB CDC, USB Serial/JTAG, TCP bridge, or other ordered byte transport carry multiple logical channels at the same time, so logs, console commands, telemetry, and structured diagnostics do not have to fight over one raw stream.
 
 The current reference device integration is an ESP32/ESP-IDF component and demo, but the protocol core is intentionally platform-neutral C code.
