@@ -1,0 +1,46 @@
+{
+  "id": "fix-esp-registry-vendor-example-path",
+  "name": "fix-esp-registry-vendor-example-path",
+  "title": "bugfix: fix ESP registry vendor example path",
+  "description": "Fix ESP registry release validation failure caused by a stale vendor example path in the build selector config.",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "magicdian",
+  "assignee": "magicdian",
+  "createdAt": "2026-05-07",
+  "completedAt": "2026-05-07",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "current_phase": 3,
+  "next_action": [
+    {
+      "phase": 4,
+      "action": "check"
+    },
+    {
+      "phase": 5,
+      "action": "update-spec"
+    },
+    {
+      "phase": 6,
+      "action": "record-session"
+    }
+  ],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "build/wiremux-vendors.toml",
+    "tools/wiremux-build-helper/src/main.rs",
+    ".trellis/spec/backend/quality-guidelines.md",
+    "tools/esp-registry/generate-packages.sh"
+  ],
+  "notes": "Release 2605.3.2 ESP validation failed because the selected vendor example path referenced removed esp_wiremux_console_demo. The package generator includes beginner, advanced, and professional examples.",
+  "meta": {}
+}

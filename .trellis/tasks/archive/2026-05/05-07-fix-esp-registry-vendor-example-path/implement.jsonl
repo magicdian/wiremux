@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guidelines index"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Current source-tree layout and target ESP vendor paths"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Build selector and release validation contracts"}
+{"file": "build/wiremux-vendors.toml", "reason": "Stale vendor example_path caused release validation failure"}
+{"file": "tools/wiremux-build-helper/src/main.rs", "reason": "Vendor build dispatch and error reporting"}
+{"file": "tools/esp-registry/generate-packages.sh", "reason": "Confirm generated registry examples"}

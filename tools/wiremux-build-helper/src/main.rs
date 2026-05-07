@@ -1029,6 +1029,13 @@ fn run_vendor_model(repo_root: &Path, vendor: &VendorDef) -> Result<(), String> 
         .as_deref()
         .ok_or_else(|| format!("vendor target {} does not define example_path", vendor.id))?;
     let vendor_dir = repo_root.join(example_path);
+    if !vendor_dir.is_dir() {
+        return Err(format!(
+            "vendor target {} example_path does not exist or is not a directory: {}",
+            vendor.id,
+            vendor_dir.display()
+        ));
+    }
     run_native(&vendor_dir, "idf.py", &["set-target", idf_target], None)?;
     run_native(&vendor_dir, "idf.py", &["build"], None)?;
     Ok(())
@@ -1397,5 +1404,24 @@ mod tests {
         let targets = implemented_vendor_targets(&vendors);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id, "esp32-s3");
+    }
+
+    #[test]
+    fn vendor_dispatch_reports_missing_example_path_before_idf_spawn() {
+        let vendor = VendorDef {
+            id: "esp32-s3".to_string(),
+            label: "Espressif ESP32-S3".to_string(),
+            kind: VENDOR_KIND_MODEL.to_string(),
+            family: Some("espressif".to_string()),
+            idf_target: Some("esp32s3".to_string()),
+            example_path: Some("does/not/exist".to_string()),
+            host_feature: Some("esp32".to_string()),
+            implemented: true,
+            include_in_all: true,
+        };
+
+        let err = run_vendor_model(Path::new("."), &vendor).unwrap_err();
+        assert!(err.contains("example_path does not exist"));
+        assert!(err.contains("does/not/exist"));
     }
 }
