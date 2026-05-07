@@ -1694,3 +1694,37 @@ Added esp-wiremux per-channel queue consumer support and portable wmux simple AP
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: Fix ESP registry vendor example path
+
+**Date**: 2026-05-07
+**Task**: Fix ESP registry vendor example path
+**Branch**: `dev`
+
+### Summary
+
+Fixed ESP Registry release validation by updating vendor build dispatch to esp_wiremux_professional_demo, adding a missing example_path preflight before idf.py spawn, documenting the example split gotcha in backend quality specs, finalizing OMV bugfix version 2605.7.1, and archiving the bugfix task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `05508ca` | (see git log) |
+| `8974922` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

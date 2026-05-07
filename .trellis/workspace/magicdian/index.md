@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 41
-- **Last Active**: 2026-05-03
+- **Total Sessions**: 42
+- **Last Active**: 2026-05-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1696 | Active |
+| `journal-1.md` | ~1730 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 42 | 2026-05-07 | Fix ESP registry vendor example path | `05508ca`, `8974922` | `dev` |
 | 41 | 2026-05-03 | Endpoint stream API and wmux simple API | `431cad6`, `fa03f3a` | `dev` |
 | 40 | 2026-04-30 | TUI dynamic status pagination | `d596985` | `dev` |
 | 39 | 2026-04-30 | Vendor enhanced capability registry | `d33bd10` | `dev` |
