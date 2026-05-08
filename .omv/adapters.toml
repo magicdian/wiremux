@@ -36,3 +36,8 @@ mode = "managed-block"
 path = ".agents/skills/finish-work/SKILL.md"
 source_path = ".omv/ai/contract.json"
 mode = "managed-block"
+
+[[installations.targets]]
+path = ".agents/skills/trellis-finish-work/SKILL.md"
+source_path = ".omv/ai/contract.json"
+mode = "managed-block"
