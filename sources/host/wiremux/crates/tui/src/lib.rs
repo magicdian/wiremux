@@ -744,7 +744,7 @@ impl App {
         }
 
         let distance = self.scroll_offset.abs_diff(target);
-        let step = ((distance + 4) / 5).clamp(1, 12);
+        let step = distance.div_ceil(5).clamp(1, 12);
         if self.scroll_offset < target {
             self.scroll_offset = self.scroll_offset.saturating_add(step).min(target);
         } else {
@@ -952,10 +952,7 @@ fn run_loop(
 
     let mut backend: Option<ConnectedInteractiveBackend> = None;
     let mut host_session = HostSession::new(args.max_payload_len).map_err(|status| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("host session init failed: {status}"),
-        )
+        io::Error::other(format!("host session init failed: {status}"))
     })?;
     let mut last_connect_attempt = Instant::now() - reconnect_delay;
     let mut dirty = true;
@@ -987,10 +984,7 @@ fn run_loop(
                     connected_backend.flush()?;
                     backend = Some(connected_backend);
                     host_session = HostSession::new(args.max_payload_len).map_err(|status| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("host session init failed: {status}"),
-                        )
+                        io::Error::other(format!("host session init failed: {status}"))
                     })?;
                     app.push_marker("manifest requested");
                     dirty = true;
@@ -1020,10 +1014,7 @@ fn run_loop(
             let poll = app.esp_enhanced.poll_input(serial, &mut diagnostics)?;
             if poll.reset_host_session {
                 host_session = HostSession::new(args.max_payload_len).map_err(|status| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("host session init failed: {status}"),
-                    )
+                    io::Error::other(format!("host session init failed: {status}"))
                 })?;
                 app.manifest = None;
                 app.virtual_serial.clear_endpoints();
@@ -1098,10 +1089,7 @@ fn run_loop(
                 };
                 if !handled_by_esp_enhanced {
                     for event in host_session.feed(&bytes).map_err(|status| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("host session feed failed: {status}"),
-                        )
+                        io::Error::other(format!("host session feed failed: {status}"))
                     })? {
                         handle_stream_event(&mut app, &mut diagnostics, event)?;
                     }
@@ -1173,10 +1161,7 @@ fn run_loop(
                     app.esp_enhanced.clear();
                     backend = None;
                     host_session = HostSession::new(args.max_payload_len).map_err(|status| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("host session init failed: {status}"),
-                        )
+                        io::Error::other(format!("host session init failed: {status}"))
                     })?;
                     last_connect_attempt = Instant::now() - reconnect_delay;
                     app.push_marker(format!("target changed: {}", app.serial.summary()));
@@ -3001,8 +2986,13 @@ fn selected_output_text(selection: &TextSelection, rows: &[RenderOutputRow]) -> 
     let last_row = end.row.min(rows.len().saturating_sub(1));
     let mut previous_logical_index = None;
     let mut has_selected_row = false;
-    for row_index in start.row..=last_row {
-        let text = row_text(&rows[row_index]);
+    for (row_index, row) in rows
+        .iter()
+        .enumerate()
+        .take(last_row + 1)
+        .skip(start.row)
+    {
+        let text = row_text(row);
         let len = char_len(&text);
         let start_col = if row_index == start.row {
             start.col.min(len)
@@ -3018,7 +3008,7 @@ fn selected_output_text(selection: &TextSelection, rows: &[RenderOutputRow]) -> 
             continue;
         }
 
-        let logical_index = rows[row_index].logical_index;
+        let logical_index = row.logical_index;
         if has_selected_row && previous_logical_index != Some(logical_index) {
             selected.push('\n');
         }

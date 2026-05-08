@@ -7,10 +7,39 @@
 
 ## Status
 
-- [ ] Review migration guide
-- [ ] Update custom files
-- [ ] Run `trellis update --migrate`
-- [ ] Test workflows
+- [x] Review migration guide
+- [x] Update custom files
+- [x] Run `trellis update --migrate`
+- [x] Test workflows
+
+## Migration Results
+
+- `trellis --version` reports `0.5.7`.
+- Pre-migration grep found no retired command references:
+  `/record-session`, `/check-cross-layer`, `/parallel`, `/onboard`,
+  `/create-command`, or `/integrate-skill`.
+- Pre-migration grep found no bare `implement`, `check`, or `research`
+  sub-agent spawn references.
+- No `.iflow/`, `worktree.yaml`, old `.trellis/scripts/multi_agent/`, or Ralph
+  loop files were present.
+- `trellis update --migrate` completed for project `0.5.7 -> 0.5.7`.
+- The only Trellis update prompt was
+  `.agents/skills/trellis-finish-work/SKILL.md`; it was skipped intentionally
+  because OMV manages its finalize-boundary block.
+- A second `trellis update` also completes, with the same intentional skip for
+  the OMV-managed `trellis-finish-work` file instead of "Already up to date!".
+- `omv integrate apply --json` completed successfully after elevated execution,
+  and `omv integrate status --json` reports all selected capabilities installed.
+- `omv sync --check --json` reports 7 ok targets and 0 drift.
+- OMV version was intentionally advanced to `2605.8.1` to mark the Trellis and
+  OMV framework integration update.
+- Existing task context files did not reference old skill paths; this task has
+  no `*.jsonl` context files to regenerate.
+
+## Follow-up
+
+- User-level `~/.codex/config.toml` now contains `features.codex_hooks = true`;
+  project hooks are installed and trusted.
 
 ---
 
@@ -143,4 +172,3 @@ When helping a user migrate to 0.5.0-beta.5:
 4. **Run migrate**: `trellis update --migrate`. Hash-verified renames — pristine files renamed silently, customized files land on the confirm prompt (Enter = backup-rename is safe).
 
 5. **Verify clean second run**: after migrate, running `trellis update` again should report "Already up to date!". Any diff indicates a rename that didn't complete (user chose skip on a modified file).
-

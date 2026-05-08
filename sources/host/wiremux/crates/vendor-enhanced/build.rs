@@ -13,7 +13,7 @@ fn main() {
     let catalog_bin = out_dir.join("espressif_vendor_enhanced_catalog.pb");
 
     prost_build::Config::new()
-        .compile_protos(&[proto.clone()], &[api_dir.clone()])
+        .compile_protos(std::slice::from_ref(&proto), std::slice::from_ref(&api_dir))
         .expect("failed to compile Espressif vendor enhanced proto");
 
     let input = File::open(&catalog).expect("failed to open Espressif vendor enhanced catalog");

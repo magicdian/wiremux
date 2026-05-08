@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[![Version](https://img.shields.io/badge/version-2605.7.1-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-2605.8.1-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 ## 支持 Wiremux
