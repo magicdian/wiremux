@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 43
+- **Total Sessions**: 44
 - **Last Active**: 2026-05-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1767 | Active |
+| `journal-1.md` | ~1800 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 44 | 2026-05-08 | Migrate Trellis to v0.5.7 | `d9e3302` | `dev` |
 | 43 | 2026-05-08 | Archive completed virtual serial and OMV tasks | `f7a7ba2`, `33a347d`, `b1c8727`, `92059d9`, `5d4326c` | `dev` |
 | 42 | 2026-05-07 | Fix ESP registry vendor example path | `05508ca`, `8974922` | `dev` |
 | 41 | 2026-05-03 | Endpoint stream API and wmux simple API | `431cad6`, `fa03f3a` | `dev` |

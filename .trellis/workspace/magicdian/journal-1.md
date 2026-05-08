@@ -402,7 +402,16 @@ Added host TUI mouse-wheel log scrollback with frozen historical views, right-si
 
 ### Main Changes
 
-(Add details)
+- Completed the Trellis 0.4.x to 0.5.7 migration task and recorded migration
+  results in the archived task PRD.
+- Verified retired Trellis command references, bare legacy sub-agent names,
+  `.iflow`, `worktree.yaml`, and old multi-agent paths are absent from active
+  project state.
+- Applied the intended OMV version update to `2605.8.1` and verified all OMV
+  version targets are synchronized.
+- Confirmed Codex hooks are installed, trusted, and enabled through
+  `features.codex_hooks = true`.
+- Applied final Clippy mechanical fixes found during the migration check.
 
 ### Git Commits
 
@@ -412,7 +421,11 @@ Added host TUI mouse-wheel log scrollback with frozen historical views, right-si
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `cargo clippy --all-targets --all-features -- -D warnings`
+- [OK] `cargo check`
+- [OK] `cargo test`
+- [OK] `omv sync --check --json`
+- [OK] `omv integrate status --json`
 
 ### Status
 
@@ -1753,6 +1766,39 @@ Fixed ESP Registry release validation by updating vendor build dispatch to esp_w
 | `b1c8727` | (see git log) |
 | `92059d9` | (see git log) |
 | `5d4326c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 44: Migrate Trellis to v0.5.7
+
+**Date**: 2026-05-08
+**Task**: Migrate Trellis to v0.5.7
+**Branch**: `dev`
+
+### Summary
+
+Completed Trellis 0.5.7 migration validation, refreshed OMV integration/version state to 2605.8.1, enabled Codex hooks, and applied clippy fixes found during final checks.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d9e3302` | (see git log) |
 
 ### Testing
 
