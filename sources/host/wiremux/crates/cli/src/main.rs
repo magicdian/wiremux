@@ -94,10 +94,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
         }
 
         let mut session = HostSession::new(args.max_payload_len).map_err(|status| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("host session init failed: {status}"),
-            )
+            io::Error::other(format!("host session init failed: {status}"))
         })?;
         let mut buf = [0u8; 4096];
 
@@ -109,10 +106,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
                 }
                 Ok(read_len) => {
                     for event in session.feed(&buf[..read_len]).map_err(|status| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("host session feed failed: {status}"),
-                        )
+                        io::Error::other(format!("host session feed failed: {status}"))
                     })? {
                         write_event(&mut display, &mut diagnostics, event)?;
                     }
@@ -132,10 +126,7 @@ fn listen(args: ListenArgs) -> io::Result<()> {
         }
 
         for event in session.finish().map_err(|status| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("host session finish failed: {status}"),
-            )
+            io::Error::other(format!("host session finish failed: {status}"))
         })? {
             write_event(&mut display, &mut diagnostics, event)?;
         }
@@ -207,10 +198,7 @@ fn passthrough_loop(
     diagnostics: &mut File,
 ) -> io::Result<()> {
     let mut session = HostSession::new(args.max_payload_len).map_err(|status| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("host session init failed: {status}"),
-        )
+        io::Error::other(format!("host session init failed: {status}"))
     })?;
     let mut manifest = None;
     let mut stdout = io::stdout().lock();
@@ -223,10 +211,7 @@ fn passthrough_loop(
         match backend.next_event(deadline)? {
             interactive::InteractiveEvent::SerialBytes(bytes) => {
                 for event in session.feed(&bytes).map_err(|status| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("host session feed failed: {status}"),
-                    )
+                    io::Error::other(format!("host session feed failed: {status}"))
                 })? {
                     handle_passthrough_event(
                         &mut stdout,
@@ -1098,7 +1083,7 @@ enabled = true
 
     #[test]
     fn batch_event_writes_payloads_to_display_and_summary_to_diagnostics() {
-        let records = vec![
+        let records = [
             output_envelope(3, b"alpha\n"),
             output_envelope(2, b"beta\n"),
         ];

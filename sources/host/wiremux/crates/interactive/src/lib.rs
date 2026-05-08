@@ -257,18 +257,13 @@ impl SerialProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SerialParity {
+    #[default]
     None,
     Odd,
     Even,
-}
-
-impl Default for SerialParity {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl SerialParity {
@@ -312,18 +307,13 @@ impl From<SerialParity> for Parity {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SerialFlowControl {
+    #[default]
     None,
     Software,
     Hardware,
-}
-
-impl Default for SerialFlowControl {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl SerialFlowControl {
@@ -1032,11 +1022,7 @@ impl VirtualSerialBroker {
             let VirtualSerialEndpointBackend::Active(backend) = &mut endpoint.backend else {
                 continue;
             };
-            loop {
-                let read_len = match backend.read_input_event(&mut buf)? {
-                    VirtualSerialRead::Bytes(read_len) => read_len,
-                    VirtualSerialRead::NoData | VirtualSerialRead::ClientGone => break,
-                };
+            while let VirtualSerialRead::Bytes(read_len) = backend.read_input_event(&mut buf)? {
                 if read_len == 0 {
                     break;
                 }
@@ -1319,18 +1305,16 @@ fn open_auto_backend(
     #[cfg(unix)]
     {
         match open_mio_backend(path, profile, read_timeout) {
-            Ok(backend) => return Ok(backend),
+            Ok(backend) => Ok(backend),
             Err(mio_err) => match open_compat_backend(path, profile, read_timeout) {
                 Ok(mut backend) => {
                     backend.label = format!("compat (mio fallback: {mio_err})");
-                    return Ok(backend);
+                    Ok(backend)
                 }
-                Err(compat_err) => {
-                    return Err(io::Error::new(
-                        compat_err.kind(),
-                        format!("mio failed: {mio_err}; compat failed: {compat_err}"),
-                    ));
-                }
+                Err(compat_err) => Err(io::Error::new(
+                    compat_err.kind(),
+                    format!("mio failed: {mio_err}; compat failed: {compat_err}"),
+                )),
             },
         }
     }
@@ -1740,7 +1724,7 @@ mod unix_virtual_serial {
     }
 
     fn nix_error_to_io(err: nix::Error) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, err.to_string())
+        io::Error::other(err.to_string())
     }
 }
 
