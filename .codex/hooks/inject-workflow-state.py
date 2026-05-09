@@ -227,20 +227,49 @@ def _read_trellis_config(root: Path) -> dict:
         return {}
 
 
+def _codex_mode_banner(config: dict) -> str:
+    """Emit a `<codex-mode>` banner for the additionalContext payload.
+
+    Reads `codex.dispatch_mode` from .trellis/config.yaml; defaults to
+    `inline` when missing or invalid because Codex sub-agents run with
+    `fork_turns="none"` isolation and can't inherit the parent session's
+    task context. The banner makes the active mode explicit to Codex AI
+    per turn, complementing the workflow-state body which is per-status.
+    Mode tells AI which dispatch protocol to follow; workflow-state tells
+    AI what step it's at.
+    """
+    mode = "inline"
+    if isinstance(config, dict):
+        codex_cfg = config.get("codex")
+        if isinstance(codex_cfg, dict):
+            cfg_mode = codex_cfg.get("dispatch_mode")
+            if cfg_mode in ("inline", "sub-agent"):
+                mode = cfg_mode
+    return f"<codex-mode>{mode}</codex-mode>"
+
+
 def resolve_breadcrumb_key(
     status: str, platform: str | None, config: dict
 ) -> str:
     """Pick the breadcrumb tag key based on Codex dispatch_mode.
 
-    Codex users may opt into ``codex.dispatch_mode: inline`` to have the main
-    agent edit code directly. When the opt-in is set, route to the parallel
-    ``<status>-inline`` tag block so the breadcrumb body matches the inline
-    workflow. Other platforms / modes return the plain status unchanged.
+    Codex defaults to ``inline`` because sub-agents run with ``fork_turns="none"``
+    isolation and can't inherit the parent session's task context. Users can
+    opt into ``codex.dispatch_mode: sub-agent`` in ``.trellis/config.yaml``
+    to use the parallel ``<status>-inline`` tag → ``<status>`` flip. Invalid
+    or missing values fall back to inline.
+
+    Non-codex platforms return the plain status unchanged.
     """
-    if platform == "codex" and isinstance(config, dict):
-        codex_cfg = config.get("codex")
-        if isinstance(codex_cfg, dict) and codex_cfg.get("dispatch_mode") == "inline":
-            return f"{status}-inline"
+    if platform == "codex":
+        mode = "inline"
+        if isinstance(config, dict):
+            codex_cfg = config.get("codex")
+            if isinstance(codex_cfg, dict):
+                cfg_mode = codex_cfg.get("dispatch_mode")
+                if cfg_mode in ("inline", "sub-agent"):
+                    mode = cfg_mode
+        return f"{status}-inline" if mode == "inline" else status
     return status
 
 
@@ -311,6 +340,7 @@ def main() -> int:
         parts: list[str] = [CODEX_SUB_AGENT_NOTICE]
         if task is None:
             parts.append(CODEX_NO_TASK_BOOTSTRAP_NOTICE)
+        parts.append(_codex_mode_banner(config))
         parts.append(breadcrumb)
         breadcrumb = "\n\n".join(parts)
 
