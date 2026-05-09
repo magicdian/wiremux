@@ -6,7 +6,7 @@ This project uses one release version for host and SDK artifacts.
 
 Version format: `YYMM.DD.BuildNumber`.
 
-Current release: `2605.8.1`.
+Current release: `2605.9.1`.
 
 When publishing another release on the same date, increment `BuildNumber`. When
 publishing on a different date, update `YYMM.DD` and reset `BuildNumber` to `1`.
