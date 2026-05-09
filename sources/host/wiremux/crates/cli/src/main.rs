@@ -93,9 +93,8 @@ fn listen(args: ListenArgs) -> io::Result<()> {
             diagnostics.flush()?;
         }
 
-        let mut session = HostSession::new(args.max_payload_len).map_err(|status| {
-            io::Error::other(format!("host session init failed: {status}"))
-        })?;
+        let mut session = HostSession::new(args.max_payload_len)
+            .map_err(|status| io::Error::other(format!("host session init failed: {status}")))?;
         let mut buf = [0u8; 4096];
 
         loop {
@@ -125,9 +124,10 @@ fn listen(args: ListenArgs) -> io::Result<()> {
             }
         }
 
-        for event in session.finish().map_err(|status| {
-            io::Error::other(format!("host session finish failed: {status}"))
-        })? {
+        for event in session
+            .finish()
+            .map_err(|status| io::Error::other(format!("host session finish failed: {status}")))?
+        {
             write_event(&mut display, &mut diagnostics, event)?;
         }
         display.flush()?;
@@ -197,9 +197,8 @@ fn passthrough_loop(
     backend: &mut interactive::ConnectedInteractiveBackend,
     diagnostics: &mut File,
 ) -> io::Result<()> {
-    let mut session = HostSession::new(args.max_payload_len).map_err(|status| {
-        io::Error::other(format!("host session init failed: {status}"))
-    })?;
+    let mut session = HostSession::new(args.max_payload_len)
+        .map_err(|status| io::Error::other(format!("host session init failed: {status}")))?;
     let mut manifest = None;
     let mut stdout = io::stdout().lock();
     let mut exit_escape_started_at = None;
