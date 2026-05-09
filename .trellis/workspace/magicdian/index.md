@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 44
-- **Last Active**: 2026-05-08
+- **Total Sessions**: 45
+- **Last Active**: 2026-05-09
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1800 | Active |
+| `journal-1.md` | ~1846 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 45 | 2026-05-09 | Fix ESP registry release formatting failure | `ecf9ea1` | `dev` |
 | 44 | 2026-05-08 | Migrate Trellis to v0.5.7 | `d9e3302` | `dev` |
 | 43 | 2026-05-08 | Archive completed virtual serial and OMV tasks | `f7a7ba2`, `33a347d`, `b1c8727`, `92059d9`, `5d4326c` | `dev` |
 | 42 | 2026-05-07 | Fix ESP registry vendor example path | `05508ca`, `8974922` | `dev` |
