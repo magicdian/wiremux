@@ -1811,3 +1811,36 @@ Completed Trellis 0.5.7 migration validation, refreshed OMV integration/version 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 45: Fix ESP registry release formatting failure
+
+**Date**: 2026-05-09
+**Task**: Fix ESP registry release formatting failure
+**Branch**: `dev`
+
+### Summary
+
+Fixed the 2605.8.1 ESP registry release validation failure by applying rustfmt to host CLI and TUI sources; verified cargo fmt, host checks, and OMV drift.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ecf9ea1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

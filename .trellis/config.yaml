@@ -68,3 +68,5 @@ max_journal_lines: 2000
 #
 # codex:
 #   dispatch_mode: sub-agent  # or "inline" to let the main agent edit code directly
+codex:
+  dispatch_mode: inline  # or "inline" to let the main agent edit code directly

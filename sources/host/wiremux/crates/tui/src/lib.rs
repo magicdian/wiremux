@@ -951,9 +951,8 @@ fn run_loop(
     ));
 
     let mut backend: Option<ConnectedInteractiveBackend> = None;
-    let mut host_session = HostSession::new(args.max_payload_len).map_err(|status| {
-        io::Error::other(format!("host session init failed: {status}"))
-    })?;
+    let mut host_session = HostSession::new(args.max_payload_len)
+        .map_err(|status| io::Error::other(format!("host session init failed: {status}")))?;
     let mut last_connect_attempt = Instant::now() - reconnect_delay;
     let mut dirty = true;
     let mut next_render_at = Instant::now();
@@ -2986,12 +2985,7 @@ fn selected_output_text(selection: &TextSelection, rows: &[RenderOutputRow]) -> 
     let last_row = end.row.min(rows.len().saturating_sub(1));
     let mut previous_logical_index = None;
     let mut has_selected_row = false;
-    for (row_index, row) in rows
-        .iter()
-        .enumerate()
-        .take(last_row + 1)
-        .skip(start.row)
-    {
+    for (row_index, row) in rows.iter().enumerate().take(last_row + 1).skip(start.row) {
         let text = row_text(row);
         let len = char_len(&text);
         let start_col = if row_index == start.row {
